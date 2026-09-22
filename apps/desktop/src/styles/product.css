@@ -159,7 +159,11 @@
 .project-table-time { color: var(--ui-text-tertiary); font-size: 11px; white-space: nowrap; }
 .project-column-branch { width: 19%; }.project-column-activity { width: 16%; }.project-column-updated { width: 15%; }.project-column-action { width: 72px; text-align: right; }
 .project-open-button { min-width: 0; padding-inline: 6px; font-weight: 620; }
-.dashboard-activity-list { display: grid; }
+/* Recent-session titles have a large min-content size. An implicit auto grid
+   track lets them escape the narrow activity column (including in WKWebView). */
+.dashboard-activity-list { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.dashboard-activity-link { min-width: 0; }
+.dashboard-activity-link .mantine-NavLink-label { display: block; }
 .dashboard-activity-link { border-bottom: 1px solid var(--ui-border-subtle); border-radius: 0; }
 .dashboard-activity-link:hover { background: var(--ui-surface-secondary); }
 .dashboard-activity-link .mantine-NavLink-label { overflow: hidden; font-size: 12px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
