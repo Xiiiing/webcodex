@@ -1,11 +1,6 @@
 <p align="right"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a></p>
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/webcodex-mark-dark.svg">
-    <img src="docs/assets/brand/webcodex-mark.svg" alt="WebCodex mark" width="76" height="76">
-  </picture>
-</p>
+<p align="center"><img src="docs/assets/brand/webcodex-app-icon.png" alt="WebCodex" width="96" height="96"></p>
 
 <h1 align="center">WebCodex</h1>
 
