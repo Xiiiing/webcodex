@@ -14,9 +14,9 @@
 <p align="center"><a href="#just-trying-it-for-a-few-minutes-temporary-share">Quick Trial</a> · <a href="#download-a-release">Downloads</a> · <a href="docs/PERSONAL_SETUP.md">Full Setup</a> · <a href="#documentation">Documentation</a> · <a href="SECURITY.md">Security</a></p>
 
 <p align="center">
-  <a href="docs/MCP.md"><img src="https://img.shields.io/badge/protocol-MCP-334155" alt="MCP protocol"></a>
-  <a href="docs/QUICK_START.md#prerequisites"><img src="https://img.shields.io/badge/Node.js-18%2B-334155" alt="Node.js 18 or newer"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-334155" alt="Apache 2.0 license"></a>
+  <a href="docs/MCP.md"><img src="https://img.shields.io/badge/protocol-MCP-2563EB?labelColor=1E40AF&amp;style=flat-square" alt="MCP protocol"></a>
+  <a href="docs/QUICK_START.md#prerequisites"><img src="https://img.shields.io/badge/Node.js-18%2B-0D9488?labelColor=0F766E&amp;style=flat-square" alt="Node.js 18 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2563EB?labelColor=1E40AF&amp;style=flat-square" alt="Apache 2.0 license"></a>
 </p>
 
 Ask your assistant to inspect a repository, modify code, run tests, use Git, or investigate a failure. Your repository stays on the machine where it already lives; you do not need to move the project into a hosted workspace just to use an AI coding agent.
