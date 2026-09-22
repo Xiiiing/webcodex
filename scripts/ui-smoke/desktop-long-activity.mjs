@@ -37,6 +37,21 @@ try {
   assert(metrics.documentWidth<=width+1,JSON.stringify(metrics));
   assert(metrics.links.every(link=>link.right<=metrics.sectionRight+1),JSON.stringify(metrics));
  }
+ for(const width of [390,1180]) {
+  await page.setViewportSize({width,height:900});
+  await page.goto(fixture.url+'/desktop/');
+  await page.getByRole('button',{name:/^Extensions/}).click();
+  await page.getByRole('button',{name:'Add Coding Agent',exact:true}).click();
+  const dialog=page.getByRole('dialog');await dialog.waitFor();
+  const bounds=await dialog.evaluate(element=>{
+   const rect=element.getBoundingClientRect();const header=element.querySelector('.mantine-Modal-header').getBoundingClientRect();
+   return {left:rect.left,right:rect.right,headerLeft:header.left,headerRight:header.right,clientWidth:element.clientWidth,scrollWidth:element.scrollWidth};
+  });
+  results.push({width,dialog:bounds});
+  assert(bounds.headerLeft>=bounds.left && bounds.headerRight<=bounds.right,JSON.stringify(bounds));
+  assert(bounds.scrollWidth<=bounds.clientWidth+1,JSON.stringify(bounds));
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+ }
  console.log(JSON.stringify({fixture:true,nativeBackend:false,passed:true,results},null,2));
 } finally {
  if(browser)await browser.close();await new Promise(resolve=>fixture.server.close(resolve));
