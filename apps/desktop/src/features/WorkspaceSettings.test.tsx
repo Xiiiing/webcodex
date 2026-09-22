@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MantineProvider } from "@mantine/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceProvider } from "./workspace/WorkspaceContext";
 import { LocaleProvider } from "../i18n/locale";
@@ -23,7 +24,7 @@ const state: DesktopState = {
 const target = { config_path: "/fixture/runner.toml", client_id: "fixture-runner", server_url: "http://127.0.0.1:1" };
 let settings: RunnerSettings;
 const onState = vi.fn();
-const wrap = (element: React.ReactNode) => <LocaleProvider><WorkspaceProvider state={state}>{element}</WorkspaceProvider></LocaleProvider>;
+const wrap = (element: React.ReactNode) => <MantineProvider><LocaleProvider><WorkspaceProvider state={state}>{element}</WorkspaceProvider></LocaleProvider></MantineProvider>;
 
 beforeEach(() => {
   vi.clearAllMocks(); localStorage.clear(); localStorage.setItem("webcodex.desktop.locale", "en-US");

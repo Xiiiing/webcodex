@@ -7,6 +7,16 @@ window.__fixtureCalls=[];let callbackId=1;const callbacks=new Map();
 window.__TAURI_INTERNALS__={transformCallback(fn){const id=callbackId++;callbacks.set(id,fn);return id},unregisterCallback(id){callbacks.delete(id)},convertFileSrc(){throw Error('Unexpected file access')},async invoke(cmd,args={}){
  window.__fixtureCalls.push({cmd,args:structuredClone(args)});
  switch(cmd){
+ case 'workspace_query':{
+  const request=args.request||{};
+  const projectRows=state.saved_projects.map(project=>({id:project.runtime_project_id,name:project.path.split('/').pop(),path:project.path,connected:true,sessions:{active_sessions:1,running_sessions:0,latest_updated_at:Math.floor(Date.now()/1000)}}));
+  if(request.kind==='overview')return {client_id:'fixture-runner',connected:true,status:'online',visible_project_count:projectRows.length,projects:projectRows,projects_truncated:false,recent_sessions:{sessions:[],truncated:false,scan_truncated:false}};
+  if(request.kind==='windows')return {windows:[]};
+  if(request.kind==='extensions')return {project:request.project,runner:'fixture-runner',can_reload_plugins:true,instructions:{files:[],scan_complete:true,truncated:false},skills:{available:true,catalog:{skills:[],truncated:false}},plugins:{available:true,catalog:{plugins:[],truncated:false}}};
+  if(request.kind==='project_git')return {branch:'codex/fixture-ui',clean:true,git_available:true,non_git_project:false,files:[],files_total:0,files_truncated:false};
+  if(request.kind==='sessions')return {sessions:[],truncated:false};
+  throw Error('Unimplemented workspace fixture '+request.kind);
+ }
  case 'plugin:event|listen':return callbackId++;
  case 'plugin:event|unlisten':return null;
  case 'get_desktop_state':case 'refresh_runtime_status':case 'observe_chatgpt_activity':case 'resume_saved_runtime':case 'restart_owned_runner':return structuredClone(state);
@@ -19,6 +29,11 @@ window.__TAURI_INTERNALS__={transformCallback(fn){const id=callbackId++;callback
  case 'get_computer_permissions':return {...permissions};
  case 'request_computer_permission':if(args.action==='accessibility')permissions.desktop_accessibility=true;if(args.action==='screen_recording')permissions.desktop_screen_recording=true;return {...permissions};
  case 'update_tunnel_config':if(args.request.action==='save'){state.openai_tunnel_config.saved_tunnel_id=args.request.tunnelId;state.openai_tunnel_config.effective_tunnel_id=args.request.tunnelId;}return structuredClone(state);
+ case 'save_tunnel_profile':{
+  const request=args.request;
+  state.connections={profiles:[{id:'fixture-connection',name:request.name,tunnel_id:request.tunnel_id,credential_present:Boolean(request.api_key),enabled:false,autostart:request.autostart,revision:1,source:'file',lifecycle:'stopped',pid:null,health:'unknown',last_error:null,ready:false,runtime_directory:null,health_url:null,log_file:null,tunnel_client_pid:null,local_mcp_url:null,logs:[]}],running:0,needs_attention:0,config_error:false};
+  return structuredClone(state);
+ }
  case 'activate_local_project':{let project=state.saved_projects.find(p=>p.path===args.request.projectPath);if(!project){project={path:args.request.projectPath,allowed_root:args.request.projectPath,is_git_repository:true,runtime_project_id:'agent:fixture-runner:gamma'};state.saved_projects.push(project);}state.project=project;return structuredClone(state);}
  case 'plugin:dialog|open':return '/fixture/gamma';
  case 'inspect_project':return {path:args.request.projectPath,allowed_root:args.request.projectPath,is_git_repository:true,runtime_project_id:'agent:fixture-runner:gamma'};

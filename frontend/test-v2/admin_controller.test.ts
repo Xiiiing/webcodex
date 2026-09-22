@@ -1,9 +1,9 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   AdminHttpError,
   AdminRefreshController,
-} from "../dist/admin_controller.js";
+} from "../src/admin_controller.js";
 
 function deferred() {
   let resolve;
