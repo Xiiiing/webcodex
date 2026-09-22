@@ -16,6 +16,12 @@
 
 你可以直接让 AI 理解项目、修改代码、运行测试、检查 Git 或排查问题。仓库仍然留在原来的机器上，不需要为了使用 WebCodex 把整个项目搬到托管环境里。
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/121867">
+    <img src="https://trendshift.io/api/badge/repositories/121867" alt="yyjeqhc/webcodex on GitHub Trending" width="250" height="55">
+  </a>
+</p>
+
 ## 开始使用
 
 ### 只想先试几分钟：临时分享
@@ -83,6 +89,17 @@ WebCodex
 ```
 
 如果需要了解内部的 Server/Runner 架构、协议接口和权限边界，再阅读[架构说明](docs/ARCHITECTURE.md)、[MCP](docs/MCP.zh-CN.md)和[认证模型](docs/AUTH_MODEL.zh-CN.md)。
+
+## Star History
+
+下图展示上游仓库 [yyjeqhc/webcodex](https://github.com/yyjeqhc/webcodex) 的 Star 历史。
+
+<a href="https://www.star-history.com/yyjeqhc/webcodex">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=yyjeqhc/webcodex&amp;type=Date&amp;theme=dark">
+    <img alt="yyjeqhc/webcodex 的 Star 历史" src="https://api.star-history.com/svg?repos=yyjeqhc/webcodex&amp;type=Date">
+  </picture>
+</a>
 
 ## 平台支持
 

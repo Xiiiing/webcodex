@@ -16,6 +16,12 @@
 
 Ask your assistant to inspect a repository, modify code, run tests, use Git, or investigate a failure. Your repository stays on the machine where it already lives; you do not need to move the project into a hosted workspace just to use an AI coding agent.
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/121867">
+    <img src="https://trendshift.io/api/badge/repositories/121867" alt="yyjeqhc/webcodex on GitHub Trending" width="250" height="55">
+  </a>
+</p>
+
 ## Start using WebCodex
 
 ### Just trying it for a few minutes: temporary share
@@ -83,6 +89,17 @@ your machine
 ```
 
 For the internal Server/Runner architecture, protocol surfaces, and authority boundaries, see [Architecture](docs/ARCHITECTURE.md), [MCP](docs/MCP.md), and [Authentication](docs/AUTH_MODEL.md).
+
+## Star History
+
+This chart tracks the upstream [yyjeqhc/webcodex](https://github.com/yyjeqhc/webcodex) repository.
+
+<a href="https://www.star-history.com/yyjeqhc/webcodex">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=yyjeqhc/webcodex&amp;type=Date&amp;theme=dark">
+    <img alt="Star history of yyjeqhc/webcodex" src="https://api.star-history.com/svg?repos=yyjeqhc/webcodex&amp;type=Date">
+  </picture>
+</a>
 
 ## Platforms
 
