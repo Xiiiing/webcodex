@@ -1,109 +1,99 @@
-# WebCodex
+<p align="right"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a></p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/webcodex-mark-dark.svg">
+    <img src="docs/assets/brand/webcodex-mark.svg" alt="WebCodex mark" width="76" height="76">
+  </picture>
+</p>
 
-**WebCodex lets ChatGPT, Claude, and other AI agents work directly with code and developer tools on your own machines.**
+<h1 align="center">WebCodex</h1>
 
-Ask your assistant to inspect a repository, modify code, run tests, use Git, or investigate a failure. Your repository stays on the machine where it already lives; you do not need to move the project into a hosted workspace just to use an AI coding agent.
+<p align="center"><strong>Give cloud AI agents a real development environment on your own machines.</strong></p>
+<p align="center">Connect ChatGPT, Claude, and other MCP clients to the repositories, Git checkout, compilers, tests, and tools you already use.</p>
+<p align="center"><a href="#try-one-repository">Quick Trial</a> · <a href="#full-setup">Full Setup</a> · <a href="docs/INDEX.md">Documentation</a> · <a href="SECURITY.md">Security</a></p>
 
-## Start using WebCodex
+<p align="center">
+  <a href="docs/MCP.md"><img src="https://img.shields.io/badge/protocol-MCP-334155" alt="MCP protocol"></a>
+  <a href="docs/QUICK_START.md#prerequisites"><img src="https://img.shields.io/badge/Node.js-18%2B-334155" alt="Node.js 18 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-334155" alt="Apache 2.0 license"></a>
+</p>
 
-### Everyday development: full WebCodex (recommended)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/webcodex-overview-dark.svg">
+    <img src="docs/assets/readme/webcodex-overview.svg" alt="AI clients connect to the WebCodex Server over MCP. The Server routes authorized work to a Runner on your own machine, where repositories, Git, tests, and developer tools live." width="520">
+  </picture>
+</p>
 
-If you want ChatGPT to keep using your real development environment, start with a **regular Server + Runner**. This is the full development experience: durable access to multiple projects plus project exploration, editing, Git, commands, tests, long-running work, and code navigation. Public HTTPS, Cloudflare Tunnel, and OpenAI Secure MCP Tunnel are only ways for ChatGPT to reach the Server; they do not switch you into a different restricted experience.
+## Try one repository
 
-Follow the [Full Setup guide](docs/PERSONAL_SETUP.md) for installation, one-time login, project selection, Runner startup, and ChatGPT connection. You do not need to learn internal identity, registry, or token details before the first successful setup.
-
-### Just trying it for a few minutes: temporary share
-
-To quickly see whether WebCodex fits your workflow, run this inside one repository:
+From a repository you want an AI client to inspect:
 
 ```bash
 cd /path/to/your/repository
 npx --yes @yyjeqhc/webcodex share
 ```
 
-`share` starts a temporary, single-project, restricted WebCodex environment and prints the ChatGPT connection values. The endpoint and temporary credential stop working when the command exits. It is intended for trials and short-lived sharing, not as the default full daily setup. See the [Quick Trial](docs/QUICK_START.md) for the exact steps.
+This starts a **temporary, single-project, restricted trial**. Keep the command running, use the printed MCP connection values, and stop it to end the endpoint and credential. See the [Quick Trial](docs/QUICK_START.md) for prerequisites and ChatGPT connection steps.
 
-## What can it do?
+## Full setup
 
-- **Understand and edit code** — read, search, inspect, and make guarded changes inside configured projects.
-- **Use the real toolchain** — run commands, tests, formatters, compilers, and project-specific tooling on the machine that owns the repository.
-- **Work with Git** — inspect status and diffs while keeping repository operations visible and reviewable.
-- **Handle long-running work** — keep jobs observable instead of requiring one model turn to stay open indefinitely.
-- **Support human review** — use the Runtime Console and task workflow to guide, cancel, accept, or reject work where those actions are available.
+For everyday development, run a regular **Server + Runner**. The Runner works where your repositories and toolchain already live; the Server gives your AI client an authenticated path to registered projects. This supports multiple projects and the full development workflow.
 
-## Why WebCodex?
+Install the CLI with `npm install -g @yyjeqhc/webcodex`, then follow the [Full Setup guide](docs/PERSONAL_SETUP.md). A public HTTPS endpoint or tunnel is a way to reach the Server, not a replacement for the regular setup.
 
-- **Your code stays on your machine.** The repository does not need to be copied into the chat service.
-- **The agent gets a real development environment.** It can use the same files, Git checkout, compilers, tests, and tools you already use.
-- **Work survives beyond a single request.** Long-running execution and evidence remain observable through WebCodex.
-- **Start temporary or run it long-term.** Use one-command sharing for a quick session, or connect machines to a self-hosted Server for a durable setup.
+## Why WebCodex
+
+- **Work on the real repository.** The Runner operates in registered project directories on your machine, using the Git checkout you already have.
+- **Use the real toolchain.** Read and edit code, inspect Git, and run compilers, tests, formatters, and project commands within the configured boundaries.
+- **Keep long work observable.** Commands and checks that outlive a quick response continue as Jobs with bounded status and output you can inspect or stop.
+- **Keep work reviewable.** Project policy, guarded edits, Git diffs, validation results, and runtime evidence help you inspect what happened.
 
 ## How it works
 
-```text
-AI client
-   |
-   | MCP / HTTPS
-   v
-WebCodex
-   |
-   v
-your machine
-   |
-   +-- repository
-   +-- Git
-   +-- compilers / tests / developer tools
-```
+WebCodex is a self-hosted execution bridge. The AI client calls its Server through MCP; the Server authenticates and routes the request, and a Runner on the repository machine performs the work. The Server does not scan your filesystem for projects. For the detailed model, see [Architecture](docs/ARCHITECTURE.md).
 
-For the internal Server/Runner architecture, protocol surfaces, and authority boundaries, see [Architecture](docs/ARCHITECTURE.md), [MCP](docs/MCP.md), and [Authentication](docs/AUTH_MODEL.md).
+## Security and control
+
+Your repository stays on the machine that owns it. Tool results, including requested file excerpts, may be returned to the AI client. Register only projects you intend to expose, keep credentials private, and review changes before accepting them. WebCodex can read and modify files in registered projects and run powerful project commands; read the [security model](SECURITY.md) before connecting sensitive projects.
 
 ## Platforms
 
-- **Linux x64/arm64** — local `share`, Server, and Runner workflows.
-- **macOS x64/arm64** — local `share` and Runner workflows.
-- **Windows x64/arm64** — CLI + Runner, local foreground Server, and explicit `webcodex share --tunnel cloudflare|openai|none`. Windows x64 can auto-manage the pinned Cloudflare Quick Tunnel binary; OpenAI `tunnel-client` is managed on both x64 and arm64. Cloudflare does not publish a Windows ARM64 artifact for the pinned release, so Windows ARM64 Cloudflare sharing requires a trusted explicit/PATH `cloudflared`. WebCodex-managed Windows Server services remain unsupported.
+| Platform | Quick Trial | Everyday setup |
+| --- | --- | --- |
+| Linux x64 / arm64 | `share` | Server + Runner |
+| macOS x64 / arm64 | `share` | Runner connected to a Server |
+| Windows x64 | `share` | Foreground Server + Runner |
+| Windows arm64 | `share` with an explicit supported tunnel option | Foreground Server + Runner |
 
-Windows and long-lived deployments are covered in [Deployment](docs/DEPLOYMENT.md) and [MCP](docs/MCP.md).
-
-## Existing Servers and advanced setup
-
-If someone already provides the WebCodex Server and connection credential, use that existing Server. For a normal personal installation, follow the [Full Setup guide](docs/PERSONAL_SETUP.md). Use [Deployment](docs/DEPLOYMENT.md) later for production hosting, multiple users, systemd/Docker, OAuth, proxies, and private CAs.
-
-Those are follow-up operating concerns, not concepts a first-time user should have to learn before WebCodex works.
+The default managed Cloudflare trial is available on Linux, macOS, and Windows x64. Windows arm64 tunnel details and service limitations are in [Deployment](docs/DEPLOYMENT.md) and [MCP](docs/MCP.md).
 
 ## Documentation
 
-- [Full Setup](docs/PERSONAL_SETUP.md) — recommended daily use: a regular Server + Runner + your projects
-- [Quick Trial](docs/QUICK_START.md) — temporarily try one repository with `share`
-- [MCP](docs/MCP.md) — ChatGPT, Claude, authentication choices, and MCP reference
-- [Deployment](docs/DEPLOYMENT.md) — production, self-hosting, and advanced operations
-- [Troubleshooting](docs/TROUBLESHOOTING.md) — connection and runtime problems
-- [CLI](docs/CLI.md) — command and credential reference
-- [AI-assisted setup](docs/AI_ONBOARDING.md) — have an AI agent help configure WebCodex
-- [Security](SECURITY.md) — security model and operational guidance
-- [Documentation index](docs/INDEX.md) — all user and contributor documentation
+**Get started:** [Quick Trial](docs/QUICK_START.md) · [Full Setup](docs/PERSONAL_SETUP.md) · [AI-assisted setup](docs/AI_ONBOARDING.md)
 
-## Security
+**Connect clients:** [MCP](docs/MCP.md) · [CLI](docs/CLI.md)
 
-WebCodex can read and modify files and execute commands inside configured project boundaries. Use version control, keep credentials out of prompts/logs/Git, and register only project roots the assistant should access. Read [SECURITY.md](SECURITY.md) for the complete model.
+**Operate safely:** [Security](SECURITY.md) · [Deployment](docs/DEPLOYMENT.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-## Build from source
+**Understand the system:** [Architecture](docs/ARCHITECTURE.md) · [Authentication](docs/AUTH_MODEL.md) · [All documentation](docs/INDEX.md)
+
+## Build and contribute
+
+The npm package is the normal installation path. To build the binaries from source:
 
 ```bash
 cargo build --release --workspace --bins
 export PATH="$PWD/target/release:$PATH"
 ```
 
-## Contributing
-
-Contributions are welcome, including contributions created with WebCodex itself or other coding agents. For bug reports, development workflow, and pull request guidance, see [CONTRIBUTING.md](CONTRIBUTING.md).
+See [Contributing](CONTRIBUTING.md) for development and pull request guidance.
 
 ## Acknowledgements
 
-Thanks to the [LINUX DO](https://linux.do/) community for its welcoming space for technical discussion and support for open-source sharing.
+Thanks to the [LINUX DO](https://linux.do/) community for technical discussion and support for open-source sharing.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).
