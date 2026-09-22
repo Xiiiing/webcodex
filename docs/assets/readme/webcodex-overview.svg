@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 294" role="img" aria-labelledby="title desc">
+  <title id="title">How WebCodex connects AI clients to your development environment</title>
+  <desc id="desc">AI clients connect over MCP to a WebCodex Server. The Server routes authorized work to a Runner on your machine, where repositories, Git, tests, and tools are available.</desc>
+  <rect x="1" y="1" width="518" height="292" rx="18" fill="#F6F8FC" stroke="#DDE5F0" stroke-width="2"/>
+  <g fill="#FFFFFF" stroke="#DDE5F0" stroke-width="2">
+    <rect x="20" y="22" width="480" height="68" rx="12"/>
+    <rect x="20" y="113" width="480" height="68" rx="12"/>
+    <rect x="20" y="204" width="480" height="68" rx="12"/>
+  </g>
+  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <g fill="#17263E" font-size="19" font-weight="650">
+      <text x="42" y="51">AI clients</text>
+      <text x="42" y="142">WebCodex Server</text>
+      <text x="42" y="233">Runner on your machine</text>
+    </g>
+    <g fill="#52647F" font-size="15">
+      <text x="42" y="74">ChatGPT · Claude · other MCP clients</text>
+      <text x="42" y="165">Authentication · policy · routing</text>
+      <text x="42" y="256">Repositories · Git · tests · developer tools</text>
+    </g>
+    <g fill="#2C5FCB" font-size="12" font-weight="700" letter-spacing="1.5">
+      <text x="390" y="61">MCP / HTTPS</text>
+    </g>
+  </g>
+  <g fill="none" stroke="#316BE8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M260 92v14m-5-5 5 5 5-5"/>
+    <path d="M260 183v14m-5-5 5 5 5-5"/>
+  </g>
+</svg>
