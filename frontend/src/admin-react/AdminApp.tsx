@@ -151,6 +151,11 @@ export function AdminApp() {
     refreshRef.current?.lock(message);
     setDashboard(emptyDashboard);
     setTokenInput("");
+    // Old-generation mutation completions intentionally cannot update React
+    // state. Clear their pending/error projection at the session boundary.
+    setDialogPending(false);
+    setDialogError("");
+    setError("");
   };
 
   if (!refreshRef.current) {
@@ -217,9 +222,17 @@ export function AdminApp() {
   }, []);
 
   useEffect(() => {
-    const onPageHide = () => { flowRef.current?.closeForSessionEnd(); mutationRef.current?.dispose(); refreshRef.current?.dispose(); };
+    // pagehide can enter the back-forward cache without unmounting React.
+    // Lock both the credential holders and rendered privileged state so a
+    // restored page cannot display an authenticated but disposed workbench.
+    const onPageHide = () => lock();
     window.addEventListener("pagehide", onPageHide);
-    return () => { window.removeEventListener("pagehide", onPageHide); onPageHide(); };
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      flowRef.current?.closeForSessionEnd();
+      mutationRef.current?.dispose();
+      refreshRef.current?.dispose();
+    };
   }, []);
 
   useEffect(() => {

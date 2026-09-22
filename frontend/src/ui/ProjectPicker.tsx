@@ -39,6 +39,10 @@ export function ScopePicker({ label, allLabel, emptyLabel, searchLabel, options,
   const selected = options.find((option) => option.value === value);
   const visible = options.filter((option) => `${option.label} ${option.detail || ""}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
 
+  useEffect(() => {
+    if (disabled) { setOpen(false); setQuery(""); }
+  }, [disabled]);
+
   useLayoutEffect(() => {
     if (!open) return;
     const place = () => {
@@ -77,6 +81,7 @@ export function ScopePicker({ label, allLabel, emptyLabel, searchLabel, options,
   }, [open, options.length, value]);
 
   const choose = (next: string) => {
+    if (disabled) return;
     onChange(next);
     setOpen(false);
     setQuery("");
@@ -84,12 +89,12 @@ export function ScopePicker({ label, allLabel, emptyLabel, searchLabel, options,
   };
 
   return <div className={`project-picker ${className}`}>
-    <button ref={trigger} type="button" className="project-picker-trigger" aria-label={`${label}: ${selected?.label || allLabel || label}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} disabled={disabled} onClick={() => { if (open) setQuery(""); setOpen((current) => !current); }}>
+    <button ref={trigger} type="button" className="project-picker-trigger" aria-label={`${label}: ${selected?.label || allLabel || label}`} aria-haspopup="dialog" aria-expanded={open && !disabled} aria-controls={open && !disabled ? id : undefined} disabled={disabled} onClick={() => { if (open) setQuery(""); setOpen((current) => !current); }}>
       <span className="project-picker-trigger-icon"><PickerGlyph kind={kind} all={!value} /></span>
       <span className="project-picker-value">{selected?.label || allLabel || label}</span>
       <svg className="project-picker-chevron" aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="m5 7.5 5 5 5-5"/></svg>
     </button>
-    {open && createPortal(<div ref={panel} id={id} className="project-picker-popover" role="dialog" aria-label={label} style={position} onKeyDown={(event) => {
+    {open && !disabled && createPortal(<div ref={panel} id={id} className="project-picker-popover" role="dialog" aria-label={label} style={position} onKeyDown={(event) => {
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       event.preventDefault();
       const items = Array.from(panel.current?.querySelectorAll<HTMLButtonElement>(".project-picker-option") || []);

@@ -76,3 +76,52 @@ test("Admin React lock aborts a dashboard request in flight", async () => {
   expect(pendingSignal?.aborted).toBe(true);
   expect(await screen.findByRole("heading", { name: "Administrator access" })).toBeTruthy();
 });
+
+
+test("Admin pagehide clears authentication and protected dashboard before a bfcache restore", async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(dashboardFixture));
+  vi.stubGlobal("fetch", fetchMock);
+  render(<UiProvider><AdminApp /></UiProvider>);
+  fireEvent.change(screen.getByLabelText("Admin token"), { target: { value: "pagehide-secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock console" }));
+  await screen.findByRole("heading", { name: "Operations" });
+  fireEvent(window, new Event("pagehide"));
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "Operations" })).toBeNull());
+  expect(screen.getByRole("heading", { name: "Administrator access" })).toBeTruthy();
+  expect(screen.queryByText("fixture-runner")).toBeNull();
+  expect((screen.getByLabelText("Admin token") as HTMLInputElement).value).toBe("");
+  fireEvent(window, new Event("pageshow"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+});
+
+test("Admin can authorize a fresh mutation after an in-flight mutation loses authorization", async () => {
+  let mutations = 0;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.endsWith("dashboard")) return jsonResponse(dashboardFixture);
+    mutations += 1;
+    return mutations === 1 ? new Response("{}", { status: 401 }) : jsonResponse({ success: true });
+  }));
+  render(<UiProvider><AdminApp /></UiProvider>);
+  const unlock = async () => {
+    fireEvent.change(screen.getByLabelText("Admin token"), { target: { value: "fresh-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Unlock console" }));
+    await screen.findByRole("heading", { name: "Operations" });
+  };
+  const open = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Alpha" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Disable" }));
+    return screen.findByRole("dialog");
+  };
+  await unlock();
+  let dialog = await open();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+  await screen.findByRole("heading", { name: "Administrator access" });
+  await unlock();
+  dialog = await open();
+  const submit = within(dialog).getByRole("button", { name: "Continue" }) as HTMLButtonElement;
+  expect(submit.disabled).toBe(false);
+  fireEvent.click(submit);
+  await waitFor(() => expect(mutations).toBe(2));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});

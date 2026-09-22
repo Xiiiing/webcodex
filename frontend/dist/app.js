@@ -27325,7 +27325,9 @@ function sT({ label: e, allLabel: i, emptyLabel: a, searchLabel: r, options: l, 
     width: 260,
     maxHeight: 320
   }), D = l.find((N) => N.value === u), L = l.filter((N) => `${N.label} ${N.detail || ""}`.toLocaleLowerCase().includes(C.toLocaleLowerCase()));
-  (0, x.useLayoutEffect)(() => {
+  (0, x.useEffect)(() => {
+    h && (j(!1), T(""));
+  }, [h]), (0, x.useLayoutEffect)(() => {
     if (!_) return;
     const N = () => {
       const A = b.current?.getBoundingClientRect();
@@ -27362,7 +27364,7 @@ function sT({ label: e, allLabel: i, emptyLabel: a, searchLabel: r, options: l, 
     u
   ]);
   const M = (N) => {
-    d(N), j(!1), T(""), b.current?.focus();
+    h || (d(N), j(!1), T(""), b.current?.focus());
   };
   return /* @__PURE__ */ (0, c.jsxs)("div", {
     className: `project-picker ${v}`,
@@ -27372,8 +27374,8 @@ function sT({ label: e, allLabel: i, emptyLabel: a, searchLabel: r, options: l, 
       className: "project-picker-trigger",
       "aria-label": `${e}: ${D?.label || i || e}`,
       "aria-haspopup": "dialog",
-      "aria-expanded": _,
-      "aria-controls": _ ? y : void 0,
+      "aria-expanded": _ && !h,
+      "aria-controls": _ && !h ? y : void 0,
       disabled: h,
       onClick: () => {
         _ && T(""), j((N) => !N);
@@ -27398,7 +27400,7 @@ function sT({ label: e, allLabel: i, emptyLabel: a, searchLabel: r, options: l, 
           children: /* @__PURE__ */ (0, c.jsx)("path", { d: "m5 7.5 5 5 5-5" })
         })
       ]
-    }), _ && (0, Ld.createPortal)(/* @__PURE__ */ (0, c.jsxs)("div", {
+    }), _ && !h && (0, Ld.createPortal)(/* @__PURE__ */ (0, c.jsxs)("div", {
       ref: g,
       id: y,
       className: "project-picker-popover",

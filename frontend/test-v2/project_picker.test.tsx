@@ -59,3 +59,17 @@ describe("ProjectPicker", () => {
     expect(within(screen.getByRole("dialog", { name: "Projects" })).getByRole("button", { name: /alpha/ })).toBeTruthy();
   });
 });
+
+
+it("closes an open resource picker when its owning operation becomes disabled", () => {
+  const onChange = vi.fn();
+  const props = { label: "Projects", allLabel: "All Projects", emptyLabel: "No projects", searchLabel: "Search projects", options, value: "alpha", onChange };
+  const view = render(<ProjectPicker {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Projects: alpha" }));
+  expect(screen.getByRole("dialog", { name: "Projects" })).toBeTruthy();
+  view.rerender(<ProjectPicker {...props} disabled />);
+  expect(screen.queryByRole("dialog", { name: "Projects" })).toBeNull();
+  expect(onChange).not.toHaveBeenCalled();
+  view.rerender(<ProjectPicker {...props} />);
+  expect(screen.queryByRole("dialog", { name: "Projects" })).toBeNull();
+});

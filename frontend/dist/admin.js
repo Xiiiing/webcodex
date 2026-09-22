@@ -25713,7 +25713,7 @@ var Tk = class {
     this.timer !== null && ((this.dependencies.clearInterval || clearInterval)(this.timer), this.timer = null);
   }
   dispose() {
-    this.invalidateRequests(), this.stopAutoRefresh();
+    this.invalidateRequests(), this.stopAutoRefresh(), this.token = "";
   }
   invalidateRequests() {
     this.generation += 1, this.active?.controller.abort(), this.active = null;
@@ -27016,7 +27016,7 @@ function Hk() {
   const e = G8(), [i, o] = (0, w.useState)(Lk), [r, l] = (0, w.useState)(UE), [u, f] = (0, w.useState)(""), [h, m] = (0, w.useState)(!1), [p, y] = (0, w.useState)(""), [g, v] = (0, w.useState)(rw), [S, T] = (0, w.useState)("Locked"), [C, A] = (0, w.useState)(""), [R, _] = (0, w.useState)(!0), [M, N] = (0, w.useState)("overview-section"), [z, j] = (0, w.useState)(null), [D, k] = (0, w.useState)(Eu), [X, F] = (0, w.useState)(""), [te, re] = (0, w.useState)(!1), ae = (0, w.useRef)(!1), Q = (0, w.useRef)(null), fe = (0, w.useRef)(null), B = (0, w.useRef)(null), I = (0, w.useRef)(null), Y = () => {
     ae.current = !1, j(null);
   }, K = (P = "Locked.") => {
-    I.current?.closeForSessionEnd(), B.current?.lock(), fe.current?.lock(P), v(rw), f("");
+    I.current?.closeForSessionEnd(), B.current?.lock(), fe.current?.lock(P), v(rw), f(""), re(!1), F(""), A("");
   };
   fe.current || (fe.current = new Tk({
     request: Vk,
@@ -27071,11 +27071,9 @@ function Hk() {
       window.removeEventListener(wl, P), window.removeEventListener("storage", P);
     };
   }, []), (0, w.useEffect)(() => {
-    const P = () => {
-      I.current?.closeForSessionEnd(), B.current?.dispose(), fe.current?.dispose();
-    };
+    const P = () => K();
     return window.addEventListener("pagehide", P), () => {
-      window.removeEventListener("pagehide", P), P();
+      window.removeEventListener("pagehide", P), I.current?.closeForSessionEnd(), B.current?.dispose(), fe.current?.dispose();
     };
   }, []), (0, w.useEffect)(() => {
     if (!z || z.kind === "register" || z.kind === "create" || !X.startsWith("Project state changed")) return;
