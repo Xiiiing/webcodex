@@ -14,9 +14,9 @@
 <p align="center"><a href="#只想先试几分钟临时分享">快速试用</a> · <a href="#下载发行版">下载</a> · <a href="docs/PERSONAL_SETUP.zh-CN.md">完整配置</a> · <a href="#文档">文档</a> · <a href="SECURITY.md">安全说明</a></p>
 
 <p align="center">
-  <a href="docs/MCP.zh-CN.md"><img src="https://img.shields.io/badge/protocol-MCP-334155" alt="MCP 协议"></a>
-  <a href="docs/QUICK_START.zh-CN.md#前置条件"><img src="https://img.shields.io/badge/Node.js-18%2B-334155" alt="需要 Node.js 18 或更新版本"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-334155" alt="Apache 2.0 许可证"></a>
+  <a href="docs/MCP.zh-CN.md"><img src="https://img.shields.io/badge/protocol-MCP-2563EB?labelColor=1E40AF&amp;style=flat-square" alt="MCP 协议"></a>
+  <a href="docs/QUICK_START.zh-CN.md#前置条件"><img src="https://img.shields.io/badge/Node.js-18%2B-0D9488?labelColor=0F766E&amp;style=flat-square" alt="需要 Node.js 18 或更新版本"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2563EB?labelColor=1E40AF&amp;style=flat-square" alt="Apache 2.0 许可证"></a>
 </p>
 
 你可以直接让 AI 理解项目、修改代码、运行测试、检查 Git 或排查问题。仓库仍然留在原来的机器上，不需要为了使用 WebCodex 把整个项目搬到托管环境里。
