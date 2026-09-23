@@ -725,6 +725,7 @@ impl ToolRuntime {
                 &mut result,
                 &self.sessions,
                 session_id,
+                "recording_session",
                 outer_ack_observation
                     .as_ref()
                     .expect("authorized outer recorder must have ACK observation"),
@@ -762,10 +763,11 @@ impl ToolRuntime {
         // pre-execution audit projection and later dispatch. Malformed input is
         // recorded with an empty request projection rather than reparsed through
         // a schema-filter fallback.
-        let parsed_call = ToolCall::from_tool_name(&request.tool_name, concrete_arguments);
+        let parsed_call =
+            ToolCall::from_tool_name_with_normalization(&request.tool_name, concrete_arguments);
         let session_log_arguments = parsed_call
             .as_ref()
-            .map(|call| session_log_arguments_for_typed_call(&request.tool_name, call))
+            .map(|(call, _)| session_log_arguments_for_typed_call(&request.tool_name, call))
             .unwrap_or_else(|_| Value::Object(Default::default()));
         let mut session_event = self.sessions.record_tool_call_started_with_metadata(
             context.session_id,
@@ -803,8 +805,8 @@ impl ToolRuntime {
             }
         }
 
-        let mut call = match parsed_call {
-            Ok(call) => call,
+        let (mut call, input_normalization) = match parsed_call {
+            Ok(parsed) => parsed,
             Err(message) => {
                 self.sessions.record_tool_call_finished(
                     session_event,
@@ -857,6 +859,7 @@ impl ToolRuntime {
                     &mut result,
                     &self.sessions,
                     session_id,
+                    "recording_session",
                     outer_ack_observation
                         .as_ref()
                         .expect("authorized outer recorder must have ACK observation"),
@@ -928,6 +931,16 @@ impl ToolRuntime {
                 capabilities,
             )
             .await;
+        if result.success {
+            if let Some(code) = input_normalization {
+                let hint = match code {
+                    "argv_to_args" => "normalized argv→args",
+                    _ => unreachable!("parser returns only stable known normalization codes"),
+                };
+                result.output["input_normalization"] =
+                    serde_json::json!({"code": code, "hint": hint});
+            }
+        }
         if let Some(control) = control.as_mut() {
             control
                 .after(self, &request.tool_name, &result, context)
@@ -946,15 +959,19 @@ impl ToolRuntime {
                 relation: super::window_activity::WorkflowSessionCorrelationRelation::Recording,
             });
         }
-        if result.success && context.session_id.is_none() {
-            correlation.recorder_gap_session_id = self
-                .workflow_recording_gap_candidate(
-                    &request.tool_name,
-                    context.window,
-                    context.auth,
-                    &correlation,
-                )
-                .await;
+        let window_attention_session_id = if context.session_id.is_none() {
+            self.workflow_window_affinity_candidate(
+                &request.tool_name,
+                context.window,
+                context.auth,
+                &correlation,
+            )
+            .await
+        } else {
+            None
+        };
+        if result.success {
+            correlation.recorder_gap_session_id = window_attention_session_id.clone();
         }
         if let Some(start) = session_event.as_mut() {
             if let Some(permission) =
@@ -980,9 +997,31 @@ impl ToolRuntime {
                 &mut result,
                 &self.sessions,
                 session_id,
+                "recording_session",
                 outer_ack_observation
                     .as_ref()
                     .expect("authorized outer recorder must have ACK observation"),
+                recorder_ack_requested,
+            );
+        } else if let Some(session_id) = window_attention_session_id
+            .as_deref()
+            .filter(|_| result.output.get("session_attention").is_none())
+        {
+            // Window affinity is correlation evidence only. It may locate one
+            // authorized active Session message board for request-scoped ACK and
+            // delivery, but never becomes recorder, business input, execution
+            // context, or durable resolution authority.
+            let ack = session_context::observe_session_attention_acks(
+                &self.sessions,
+                session_id,
+                &recorder_metadata.ack_session_message_ids,
+            );
+            session_context::add_session_attention_projection(
+                &mut result,
+                &self.sessions,
+                session_id,
+                "window_affinity",
+                &ack,
                 recorder_ack_requested,
             );
         }
@@ -1074,7 +1113,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn workflow_recording_gap_candidate(
+    async fn workflow_window_affinity_candidate(
         &self,
         tool_name: &str,
         window: Option<&crate::client_window::ClientWindow>,

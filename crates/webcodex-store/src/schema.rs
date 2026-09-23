@@ -71,6 +71,16 @@ impl Database {
         let mut conn = self.lock_connection(crate::StoreDomain::Schema);
         conn.execute_batch(
             "
+            CREATE TABLE IF NOT EXISTS wc_external_observations (
+                session_id TEXT NOT NULL,
+                project TEXT NOT NULL,
+                adapter_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                exit_code INTEGER,
+                recorded_at INTEGER NOT NULL,
+                PRIMARY KEY(session_id, adapter_id, event_id)
+            );
             CREATE TABLE IF NOT EXISTS wc_job_receipts (
                 job_id TEXT PRIMARY KEY,
                 client_id TEXT NOT NULL,
@@ -507,7 +517,9 @@ impl Database {
                 first_projected_at_ms INTEGER,
                 last_projected_at_ms INTEGER,
                 projection_count INTEGER NOT NULL DEFAULT 0,
-                first_ack_observed_at_ms INTEGER
+                first_ack_observed_at_ms INTEGER,
+                delivery_key_hash TEXT,
+                delivery_payload_hash TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_window_peer_messages_recipient
                 ON window_peer_messages(
@@ -544,6 +556,28 @@ impl Database {
         }
         tx.execute_batch(CHILD_SCHEMA)
             .context("create ActionAudit Window correlation schema")?;
+        let mut peer_columns = table_columns(&tx, "window_peer_messages")?;
+        for (name, definition) in [
+            ("delivery_key_hash", "TEXT"),
+            ("delivery_payload_hash", "TEXT"),
+        ] {
+            if peer_columns.iter().any(|column| column == name) {
+                continue;
+            }
+            tx.execute_batch(&format!(
+                "ALTER TABLE window_peer_messages ADD COLUMN {name} {definition};"
+            ))
+            .with_context(|| format!("add Peer message replay column {name}"))?;
+            peer_columns.push(name.to_string());
+        }
+        tx.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_window_peer_messages_delivery
+                 ON window_peer_messages(
+                    principal_kind, principal_id, sender_window_key, delivery_key_hash
+                 )
+                 WHERE delivery_key_hash IS NOT NULL;",
+        )
+        .context("create Peer message delivery replay index")?;
         tx.commit()
             .context("commit ActionAudit Window schema migration")?;
         Ok(())
