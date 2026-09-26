@@ -24,12 +24,12 @@
 
 ## 开始使用 WebCodex
 
-按代码所在位置选择安装方式：
+以下统一安装流程仍在开发中，请先查看[验收状态](docs/unified-deployment-validation.md)。对应安装包通过验收并发布后，按代码所在位置选择安装方式：
 
 - **一台电脑：**在个人工作站安装 WebCodex，打开 Desktop，并按[统一安装指南](docs/unified-installation.zh-CN.md)操作。每个平台的统一安装包包含 Desktop、CLI、Server 和 Runner。
 - **多台电脑：**在承载 WebCodex Server 的机器以及持有代码仓库的每台机器上安装相同平台安装包。按[统一安装指南](docs/unified-installation.zh-CN.md#多台电脑)和[部署验收清单](docs/unified-deployment-validation.md)操作。
 
-面向 Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 统一安装包是**本分支构建流程定义的交付目标**，本次尚未实际构建或发布这六类安装文件。三种平台的真实机器安装、重启持久性、GUI 行为和升级尚未全部验收；本分支不宣称跨平台体验一致。已发布文件见 [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases)。仓库 [`download/`](download/README.md) 目录仅包含静态页面源文件；[下载页 workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) 会在 Release 发布后根据 manifest 构建 GitHub Actions artifact，但不会托管或部署网页。现有[上游源码压缩包](https://github.com/yyjeqhc/webcodex/archive/refs/heads/main.zip)不包含本分支尚未发布的改动。
+面向 Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 统一安装包是**本分支构建流程定义的交付目标**，六类安装文件仍需完成原生构建和安装验收后才能发布。三种平台的真实机器安装、重启持久性、GUI 行为和升级尚未全部验收；本分支不宣称跨平台体验一致。已发布文件见 [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases)。仓库 [`download/`](download/README.md) 目录仅包含静态页面源文件；[下载页 workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) 会在 Release 发布后根据 manifest 构建 GitHub Actions artifact，但不会托管或部署网页。源码预览请检出要验证的功能分支或发布修订，再按 [Desktop 开发指南](docs/DESKTOP_DEVELOPMENT.zh-CN.md#linux-源码预览与已有-server)操作。
 
 临时单仓库试用、高级自托管、npm/runtime 压缩包、Docker 和历史版本请看[部署指南](docs/DEPLOYMENT.zh-CN.md)。
 
@@ -80,7 +80,7 @@ WebCodex
 
 ## 平台安装包
 
-统一安装包目标平台为 Windows NSIS、macOS 和 Debian 12 / Ubuntu 22.04+ `.deb`，支持 x64 与 arm64。本分支定义了构建流程；本次未构建或发布这六类安装文件，也未完成原生安装验收。详见[统一安装指南](docs/unified-installation.zh-CN.md)和[验收清单](docs/unified-deployment-validation.md)。现有 Release artifact 与 npm/Docker 部署路径仍作为高级历史/兼容参考保留在[部署指南](docs/DEPLOYMENT.zh-CN.md)。
+统一安装包目标平台为 Windows NSIS、macOS 和 Debian 12 / Ubuntu 22.04+ `.deb`，支持 x64 与 arm64。本分支定义了构建流程；六类安装文件仍需完成原生构建和安装验收后才能发布。详见[统一安装指南](docs/unified-installation.zh-CN.md)和[验收清单](docs/unified-deployment-validation.md)。现有 Release artifact 与 npm/Docker 部署路径仍作为高级历史/兼容参考保留在[部署指南](docs/DEPLOYMENT.zh-CN.md)。
 
 ## 文档
 
@@ -88,7 +88,7 @@ WebCodex
 - [部署验收清单](docs/unified-deployment-validation.md) —— 各平台验收状态与真实机器检查项
 - [旧版 Desktop 安装指南](docs/desktop-install.zh-CN.md) —— 现有 Release 的详细说明
 - [Desktop 日常使用](docs/desktop-guide.zh-CN.md) —— 项目、连接、活动与后台运行
-- [Desktop 开发与打包](docs/DESKTOP_DEVELOPMENT.zh-CN.md) —— 从源码运行并在 Windows/macOS 本地构建安装包
+- [Desktop 开发与打包](docs/DESKTOP_DEVELOPMENT.zh-CN.md) —— 在 Linux、Windows、macOS 从源码运行，以及本地打包
 - [完整使用指南](docs/PERSONAL_SETUP.zh-CN.md) —— CLI、已有 Server、Linux 与高级普通 Server + Runner 配置
 - [快速试用](docs/QUICK_START.zh-CN.md) —— 用 `share` 临时体验一个仓库
 - [MCP](docs/MCP.zh-CN.md) —— ChatGPT、Claude、认证方式和 MCP 参考

@@ -4,9 +4,11 @@
 
 This guide describes the unified installer workflow being developed on this branch. It is not a claim that a new release is available. Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` builds are intended to include Desktop, CLI, Server, and Runner for x64 and arm64. Linux unified installers build and probe in native-architecture Ubuntu 22.04 containers, with GLIBC symbol requirements capped at 2.35 and runtime dependencies checked there. Real-machine installation, reboot persistence, GUI-session behavior, and upgrade have not been accepted across all three platforms. Track the concrete checks in [Deployment validation](unified-deployment-validation.md).
 
-Get published files from [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases). The tracked [`download/`](../download/README.md) directory contains only the static page source; its generated `manifest.json` is intentionally not committed. The [download-page workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) builds a manifest-based GitHub Actions artifact after a release, but does not host or deploy it. The available [upstream source archive](https://github.com/yyjeqhc/webcodex/archive/refs/heads/main.zip) does not contain this unpublished branch's changes.
+Get published files from [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases). The tracked [`download/`](../download/README.md) directory contains only the static page source; its generated `manifest.json` is intentionally not committed. The [download-page workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) builds a manifest-based GitHub Actions artifact after a release, but does not host or deploy it. To preview a source revision before installer release, follow [Linux source preview](DESKTOP_DEVELOPMENT.md#linux-source-preview-against-an-existing-server).
 
 ## One computer
+
+The following workflow applies when a validated installer for your platform is available; source previews are documented separately above.
 
 1. Install the platform package and open WebCodex Desktop.
 2. Choose **Create** and select the project directory, or choose no project yet.
@@ -33,7 +35,15 @@ Use `--no-project` if that machine has no repository. On each repository machine
 webcodex environment configure --join https://server.example --project PATH
 ```
 
-Use `--no-project` to enroll first and add a project later. Interactive setup is intended to ask only whether to create or join and which project path to register. Joining as a viewer uses the user's personal access token, entered through secure hidden input or a protected `--token-file`; it does not use a pairing code. A Runner join uses a one-time pairing code supplied once through stdin:
+Use `--no-project` to join as a viewer without configuring a local Server or Runner. The two setup choices are create/join and project/skip; the selected flow then requests the Server address, authentication, and any required system authorization. Joining as a viewer uses the user's personal access token, entered through secure hidden input or a protected `--token-file`; it does not use a pairing code. For example, import an existing user API credential from a protected file:
+
+```text
+webcodex environment configure --join https://server.example --no-project --token-file PATH
+```
+
+Viewer setup does not redeem Runner pairing codes or create a Runner token, `client_id`, or `runner.toml`. Desktop reports **Local Runner · Not configured**, while its project list can show authorized projects on other Runners.
+
+A Runner join uses a one-time pairing code supplied once through stdin:
 
 ```text
 webcodex environment configure --join https://server.example --project PATH --code-stdin
@@ -84,9 +94,9 @@ The intended persistent service managers are systemd on Linux, LaunchDaemon on m
 
 If a Windows Runner service loses its logon credential, use `webcodex environment repair-credential runner`. It requires the native Windows account credential through hidden console input; a Windows Hello PIN is not the account password. The service runs under the real user's SID. SCM stores the service logon password; WebCodex does not retain a duplicate password copy.
 
-Desktop Diagnostics provides separate Start, Stop, and Restart controls for the local Server and Runner. On Windows it also offers native Runner service credential repair. When Desktop opens an environment with persistent services, it reads their status and periodically refreshes it; it does not automatically restart a stopped service. To restore the saved Server user credential, use **Restore Server user credential** in Diagnostics and enter the replacement through its protected input, or run `webcodex environment repair-user-credential [--token-file PATH]`. The operation verifies the saved Server and username, then atomically saves the replacement credential. It does not pair a Runner or change service state.
+Desktop Diagnostics provides separate Start, Stop, and Restart controls only for local components owned by the saved environment. A Server-only environment has only Server controls; a viewer has neither. Connecting as a viewer to a Server on the same machine does not take over independently managed services. On Windows it also offers native Runner service credential repair. When Desktop opens an environment with persistent services, it reads their status and periodically refreshes it; it does not automatically restart a stopped service. To restore the saved Server user credential, use **Restore Server user credential** in Diagnostics and enter the replacement through its protected input, or run `webcodex environment repair-user-credential [--token-file PATH]`. The operation verifies the saved Server and username, then atomically saves the replacement credential. It does not pair a Runner or change service state.
 
-ChatGPT uses the central Server's existing MCP/Tunnel integration. A Runner on another machine needs its own reachable URL to that Server. Setup does not open firewall ports or change the Server's listening address. Tailscale is an optional way to provide private reachability; it is not required by WebCodex.
+ChatGPT uses the central Server's existing MCP/Tunnel integration. A Runner on another machine needs a separately reachable URL to that Server. The OpenAI Tunnel only carries ChatGPT-to-MCP traffic; its address is not a Runner enrollment endpoint. Setup does not open firewall ports or change the Server's listening address. Tailscale is an optional way to provide private reachability; it is not required by WebCodex.
 
 On macOS, boot recovery requires the system and project volumes to be unlocked. FileVault unlocking remains an OS responsibility; WebCodex does not disable encryption or retain disk-unlock passwords. After unlocking, project services do not depend on an open Desktop window. GUI operations still require the owner’s active, unlocked session. See [Apple’s FileVault documentation](https://support.apple.com/guide/deployment/intro-to-filevault-dep82064ec40/web).
 

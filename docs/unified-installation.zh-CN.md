@@ -4,9 +4,11 @@
 
 本文描述本分支正在开发的统一安装流程，不代表已有新版本发布。Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 计划在 x64 与 arm64 上统一包含 Desktop、CLI、Server 和 Runner。Linux 统一安装包会在原生架构的 Ubuntu 22.04 容器中构建和探测，将 GLIBC 符号版本限制在 2.35 以内，并检查运行时依赖。三种平台的真实机器安装、重启持久性、GUI 会话行为和升级尚未全部验收。具体检查项见[部署验收清单](unified-deployment-validation.md)。
 
-已发布文件请从 [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases)获取。仓库 [`download/`](../download/README.md) 目录仅包含静态页面源文件；生成的 `manifest.json` 不提交到仓库。[下载页 workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) 会在 Release 发布后构建基于 manifest 的 GitHub Actions artifact，但不会托管或部署网页。现有[上游源码压缩包](https://github.com/yyjeqhc/webcodex/archive/refs/heads/main.zip)不包含本分支尚未发布的改动。
+已发布文件请从 [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases)获取。仓库 [`download/`](../download/README.md) 目录仅包含静态页面源文件；生成的 `manifest.json` 不提交到仓库。[下载页 workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) 会在 Release 发布后构建基于 manifest 的 GitHub Actions artifact，但不会托管或部署网页。安装包发布前如需预览特定源码修订，请看 [Linux 源码预览](DESKTOP_DEVELOPMENT.zh-CN.md#linux-源码预览与已有-server)。
 
 ## 一台电脑
+
+以下流程适用于对应平台的安装包已经验收并发布之后；源码预览请使用上文单独列出的开发流程。
 
 1. 安装对应平台的安装包并打开 WebCodex Desktop。
 2. 选择**创建环境**并选择项目目录，也可以暂时不选项目。
@@ -33,7 +35,15 @@ webcodex environment configure --create --project PATH
 webcodex environment configure --join https://server.example --project PATH
 ```
 
-也可以先用 `--no-project` 接入，稍后再添加项目。交互配置只询问创建还是加入，以及要注册哪个项目路径。以 viewer 身份加入时，使用用户个人访问 token，通过隐藏输入或受保护的 `--token-file` 提供；不使用 pairing code。Runner 接入时，通过 stdin 一次性提供短期 pairing code：
+使用 `--no-project` 可仅作为查看端加入，不配置本机 Server 或 Runner。两项业务选择是创建/加入和项目/跳过；随后按所选流程收集 Server 地址、认证信息和必要的系统授权。以 viewer 身份加入时，使用用户个人访问 token，通过隐藏输入或受保护的 `--token-file` 提供；不使用 pairing code。例如，从受保护文件导入已有用户 API 凭据：
+
+```text
+webcodex environment configure --join https://server.example --no-project --token-file PATH
+```
+
+仅查看配置不会兑换 Runner 配对码，也不会生成 Runner token、`client_id` 或 `runner.toml`。Desktop 显示“本地 Runner · 未配置”，项目列表仍可展示其他 Runner 上获授权的项目。
+
+Runner 接入时，通过 stdin 一次性提供短期 pairing code：
 
 ```text
 webcodex environment configure --join https://server.example --project PATH --code-stdin
@@ -84,9 +94,9 @@ webcodex environment migrate-legacy-server \
 
 如果 Windows Runner 服务丢失登录凭据，使用 `webcodex environment repair-credential runner`。它要求通过隐藏控制台输入真实 Windows 账户凭据；Windows Hello PIN 不是账户密码。服务以真实用户 SID 运行。服务登录密码仅由 SCM 保存；WebCodex 不会另存密码副本。
 
-Desktop Diagnostics 为本机 Server 和 Runner 分别提供 Start、Stop、Restart 控制。Windows 上还提供 Runner 服务原生凭据修复。Desktop 打开已有持久服务的环境时只读取状态并定期刷新，不会自动重启已停止的服务。若要恢复已保存的 Server 用户凭据，可在 Diagnostics 使用 **Restore Server user credential** 并通过受保护输入提供新凭据，或运行 `webcodex environment repair-user-credential [--token-file PATH]`。操作会核对已保存的 Server 和用户名，再原子写入新凭据；不会配对 Runner，也不会更改服务状态。
+Desktop Diagnostics 只为已保存环境所拥有的本机组件提供独立 Start、Stop、Restart 控制。Server-only 环境只有 Server 控制；仅查看端没有本机服务控制。以查看端连接同一台机器的 Server，也不会接管由其他方式管理的服务。Windows 上还提供 Runner 服务原生凭据修复。Desktop 打开已有持久服务的环境时只读取状态并定期刷新，不会自动重启已停止的服务。若要恢复已保存的 Server 用户凭据，可在 Diagnostics 使用 **Restore Server user credential** 并通过受保护输入提供新凭据，或运行 `webcodex environment repair-user-credential [--token-file PATH]`。操作会核对已保存的 Server 和用户名，再原子写入新凭据；不会配对 Runner，也不会更改服务状态。
 
-ChatGPT 使用中心 Server 现有的 MCP/Tunnel 集成。其他机器上的 Runner 需要有一条自己可访问的 Server URL。配置不会自动开放防火墙端口或修改 Server 监听地址。Tailscale 可作为可选的私有网络连通方式，WebCodex 本身不依赖它。
+ChatGPT 使用中心 Server 现有的 MCP/Tunnel 集成。其他机器上的 Runner 需要有一条自己可访问的 Server URL。OpenAI Tunnel 只承载 ChatGPT 到 MCP 的连接，不能作为 Runner 接入地址。配置不会自动开放防火墙端口或修改 Server 监听地址。Tailscale 可作为可选的私有网络连通方式，WebCodex 本身不依赖它。
 
 macOS 的开机恢复以系统和项目所在磁盘已解锁为前提。FileVault 的启动解锁由操作系统负责；WebCodex 不关闭加密或保存磁盘解锁密码。磁盘解锁后，后台项目任务不要求 Desktop 窗口保持打开；GUI 操作仍要求所属用户的活动、未锁定会话。参见 [Apple FileVault 说明](https://support.apple.com/guide/deployment/intro-to-filevault-dep82064ec40/web)。
 

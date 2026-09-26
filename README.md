@@ -24,12 +24,12 @@ Ask your assistant to inspect a repository, modify code, run tests, use Git, or 
 
 ## Start using WebCodex
 
-Choose the setup that matches where your code lives:
+The unified installer workflow below is under development; see the [validation status](docs/unified-deployment-validation.md) before choosing an artifact. Once a validated installer is available, choose the setup that matches where your code lives:
 
 - **One computer:** install WebCodex on your personal workstation, open Desktop, and follow [Unified installation](docs/unified-installation.md). This setup includes Desktop, CLI, Server, and Runner in one platform package.
 - **Several computers:** install the same package on the machine that will host the WebCodex Server and on each machine that owns repositories. Follow [Unified installation](docs/unified-installation.md#several-computers) and [Deployment validation](docs/unified-deployment-validation.md).
 
-This branch defines unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installer targets for x64 and arm64. These six installer artifacts were not built or published in this session. Real-machine installation, reboot persistence, GUI behavior, and upgrade have not been accepted across all three platforms; this branch makes no claim of identical cross-platform behavior. Published files are listed in [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases). The [`download/`](download/README.md) directory contains static page source only; the [download-page workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) builds a Release-manifest-based GitHub Actions artifact after publication, but does not host or deploy a page. The available [upstream source archive](https://github.com/yyjeqhc/webcodex/archive/refs/heads/main.zip) does not contain this unpublished branch's changes.
+This branch defines unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installer targets for x64 and arm64. The six installer variants still require native build and installation acceptance before release. Real-machine installation, reboot persistence, GUI behavior, and upgrade have not been accepted across all three platforms; this branch makes no claim of identical cross-platform behavior. Published files are listed in [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases). The [`download/`](download/README.md) directory contains static page source only; the [download-page workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) builds a Release-manifest-based GitHub Actions artifact after publication, but does not host or deploy a page. For a source preview, check out the exact feature or release revision you intend to evaluate and follow [Desktop development](docs/DESKTOP_DEVELOPMENT.md#linux-source-preview-against-an-existing-server).
 
 For temporary one-repository trials, advanced self-hosting, npm/runtime archives, Docker, or historical release artifacts, see [Deployment](docs/DEPLOYMENT.md).
 
@@ -80,7 +80,7 @@ This chart tracks the upstream [yyjeqhc/webcodex](https://github.com/yyjeqhc/web
 
 ## Platform packages
 
-The unified installer targets Windows NSIS, macOS, and Debian 12 / Ubuntu 22.04+ `.deb` on x64 and arm64. The branch defines the build pipeline; these six installer artifacts were not built or published in this session. See [Unified installation](docs/unified-installation.md) and the [validation checklist](docs/unified-deployment-validation.md). Existing release artifacts and npm/Docker deployment paths remain documented as advanced historical/current compatibility references in [Deployment](docs/DEPLOYMENT.md).
+The unified installer targets Windows NSIS, macOS, and Debian 12 / Ubuntu 22.04+ `.deb` on x64 and arm64. The branch defines the build pipeline; the six installer variants still require native build and installation acceptance before release. See [Unified installation](docs/unified-installation.md) and the [validation checklist](docs/unified-deployment-validation.md). Existing release artifacts and npm/Docker deployment paths remain documented as advanced historical/current compatibility references in [Deployment](docs/DEPLOYMENT.md).
 
 ## Documentation
 
@@ -88,7 +88,7 @@ The unified installer targets Windows NSIS, macOS, and Debian 12 / Ubuntu 22.04+
 - [Deployment validation](docs/unified-deployment-validation.md) — platform acceptance status and required native checks
 - [Legacy Desktop installation](docs/desktop-install.md) — existing release-specific detailed guide
 - [Using Desktop](docs/desktop-guide.md) — projects, connections, activity, and background operation
-- [Desktop development](docs/DESKTOP_DEVELOPMENT.md) — run from source and build Windows/macOS installers locally
+- [Desktop development](docs/DESKTOP_DEVELOPMENT.md) — run from source on Linux, Windows, and macOS; build local packages
 - [Full Setup](docs/PERSONAL_SETUP.md) — CLI, existing Server, Linux, and advanced regular Server + Runner setup
 - [Quick Trial](docs/QUICK_START.md) — temporarily try one repository with `share`
 - [MCP](docs/MCP.md) — ChatGPT, Claude, authentication choices, and MCP reference

@@ -2,7 +2,7 @@
 
 [简体中文](#中文)
 
-This checklist records scope and evidence for the unified environment work. The unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installers for x64 and arm64 are defined by this branch’s build pipeline; no six-platform installer build or release was produced in this session. Source changes and CI/package construction do not prove real-machine behavior. No cross-platform equivalence claim is made.
+This checklist records scope and evidence for the unified environment work. The unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installers for x64 and arm64 are defined by this branch’s build pipeline; the six installer variants have not yet received native build/installation acceptance or a unified release. Source changes and CI/package construction do not prove real-machine behavior. No cross-platform equivalence claim is made.
 
 ## Milestones and scope
 
@@ -25,11 +25,23 @@ This checklist records scope and evidence for the unified environment work. The 
 These automated results have been confirmed for the current branch at this checkpoint. Later changes or runs may change counts. They do not establish native installer, reboot, GUI-session, or upgrade behavior:
 
 - Core: 70 tests passed.
-- Desktop: 146 TypeScript tests passed; 204 Rust tests passed and 4 were ignored.
+- Desktop: 148 TypeScript tests passed at `31940d7e` (including viewer presentation and Add Project routing); 204 Rust tests passed and 4 were ignored.
 - Web runtime: 101 runtime tests and 2 build tests, plus typecheck, build, and `check:dist`.
 - Server Runtime Console HTTP: 44 tests; runtime status HTTP: 4 tests.
 - Runtime Console registry: 301 tests; Runner computer-use: 6 tests; CLI: 424 tests passed (including 7 environment adapter tests); packaging/release scripts: 306 tests.
 - Linux `cargo check` passed for Server, CLI, and Runner.
+
+## Linux source deployment evidence
+
+On 2026-09-26, Ubuntu 24.04.4 x64 was used for a local source deployment of version `0.4.3`, source `31940d7e8f5786b727735d121cde2738cf07668b`, with `git_dirty: false` on CLI, Server, Runner, and Desktop. This is a development snapshot, not an installer release.
+
+- Existing custom **user** systemd units continued to own Server and Runner. Before replacement, active Jobs and pending Runner requests were zero; prior binaries/configuration and a stopped, consistent Server data snapshot were retained for recovery.
+- After restart, the same three Runner identities were online and the same four projects were visible. Only the local Server/Runner were upgraded; the two remote Runners retained their prior build.
+- `/runtime`, its JavaScript and stylesheet returned HTTP 200. Authenticated local MCP initialization returned HTTP 200 with Server version `0.4.3`.
+- Native Desktop used embedded assets and user-authenticated viewer setup against the existing Server. It showed the four authorized projects without a new Runner identity. Viewer labels and Add Project routing passed the 148-test Desktop frontend suite. Repeated Desktop restarts left the independently managed services running.
+- The existing OpenAI Tunnel process, configuration, and credentials were retained. No new ChatGPT-to-Tunnel end-to-end read/write was performed; local MCP success is not evidence of that full path.
+
+This evidence does **not** accept `.deb` installation, Core system-service migration, unattended reboot/logout recovery, installer rollback, Windows/macOS service behavior, or GUI helper session transitions. The native matrix below remains pending. Local recovery files are private and are not included in the repository.
 
 ## Native acceptance matrix
 
@@ -67,7 +79,7 @@ A successful cross-compiled build or package inspection is useful packaging evid
 
 ## 中文
 
-本清单记录统一环境工作的范围和证据边界。Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 安装包由本分支构建流程定义；本次尚未实际构建或发布这六类安装文件。源码和 CI/打包结果不能证明真实机器上的行为；本文不宣称跨平台体验一致。
+本清单记录统一环境工作的范围和证据边界。Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 安装包由本分支构建流程定义；六类安装文件尚未完成原生构建/安装验收，也未作为统一安装包发布。源码和 CI/打包结果不能证明真实机器上的行为；本文不宣称跨平台体验一致。
 
 ### 里程碑与范围
 
@@ -90,11 +102,23 @@ A successful cross-compiled build or package inspection is useful packaging evid
 以下为本分支此检查点已确认的自动化结果。后续代码或测试运行可能改变数量。这些结果不能证明原生安装器、重启、GUI 会话或升级行为：
 
 - Core：70 项测试通过。
-- Desktop：146 项 TypeScript 测试通过；204 项 Rust 测试通过，4 项被忽略。
+- Desktop：`31940d7e` 上 148 项 TypeScript 测试通过（包含仅查看状态及添加项目入口）；204 项 Rust 测试通过，4 项被忽略。
 - Web runtime：101 项 runtime 测试、2 项 build 测试，以及 typecheck、build、`check:dist`。
 - Server Runtime Console HTTP：44 项；runtime status HTTP：4 项。
 - Runtime Console registry：301 项；Runner computer-use：6 项；CLI：424 项通过（其中包含 7 项 environment adapter 测试）；打包/Release scripts：306 项。
 - Linux 上 Server、CLI 和 Runner 的 `cargo check` 通过。
+
+### Linux 源码部署证据
+
+2026-09-26 在 Ubuntu 24.04.4 x64 上部署了源码开发版 `0.4.3`，source 为 `31940d7e8f5786b727735d121cde2738cf07668b`；CLI、Server、Runner 和 Desktop 的 `git_dirty` 均为 `false`。这是开发快照，不是安装包发布。
+
+- Server、Runner 继续由原有自定义 systemd **用户服务**托管。切换前确认活动 Job 和 Runner 待处理请求均为零，保留旧程序、配置以及停服后的一致 Server 数据快照供恢复。
+- 重启后，相同的 3 个 Runner 身份在线，相同的 4 个项目可见。只升级了本机 Server/Runner，另外两台 Runner 保留原构建。
+- `/runtime`、JavaScript 和样式资源均返回 HTTP 200；使用既有用户认证初始化本地 MCP 返回 HTTP 200，Server 版本为 `0.4.3`。
+- 原生 Desktop 使用内嵌资源，以用户认证的仅查看配置连接已有 Server，显示 4 个获授权项目，没有创建新的 Runner 身份。仅查看文案与添加项目入口通过了 148 项 Desktop 前端测试；多次重启 Desktop 后，独立托管的服务继续运行。
+- 原 OpenAI Tunnel 进程、配置和凭据保留。本次没有重新通过 ChatGPT/Tunnel 执行端到端项目读写，本地 MCP 成功不能替代整条链路验证。
+
+以上证据**不代表** `.deb` 安装、Core 系统服务迁移、无人登录重启/注销恢复、安装器回滚、Windows/macOS 服务行为或 GUI helper 会话切换已经验收。下表的原生验收仍待完成。恢复文件保存在本机私有目录，不提交到仓库。
 
 ### 原生平台验收矩阵
 
