@@ -26,6 +26,7 @@ const state = {
   saved_projects: [{ path: alpha.path, runtime_project_id: alpha.id }, { path: beta.path, runtime_project_id: beta.id }],
   readiness: { runtime_ready: true, server: "ready", runner: "ready", exposure: "none" },
   topology: { server: { kind: "local" }, runner: { kind: "local" }, experience: "full" },
+  workspace_runner: { client_id: "mini", server_url: "http://localhost", config_path: "fixture.toml" },
   current_operation: null, chatgpt_activity: { observed: false, last_meaningful_activity_at_ms: null },
 } as unknown as DesktopState;
 const overview = { projects_available: true, client_id: "mini", connected: true, projects: [alpha, beta], visible_project_count: 2, projects_truncated: false, recent_sessions: { sessions: [session], truncated: false, scan_truncated: false } };
@@ -39,6 +40,7 @@ beforeEach(() => {
   native.invoke.mockImplementation(async (_command, { request }) => {
     switch (request.kind) {
       case "overview": return overview;
+      case "projects": return { projects: overview.projects, total: overview.visible_project_count, truncated: overview.projects_truncated };
       case "windows": return { windows: [windowRow] };
       case "project_git": return { branch: "feat/export", clean: false, git_available: true, non_git_project: false, files: [{ path: "src/export.ts", status: " M" }] };
       case "window": return { ...windowRow, linked_sessions: [{ project: alpha.id, workflow_session_id: session.session_id, title: session.title }], activity: [{ tool_name: "apply_text_edits", meaningful: true, project: alpha.id, status: "succeeded", ended_at_ms: 100_000 }] };
@@ -57,6 +59,65 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("product workspace task flows", () => {
+  it.each([
+    ["workspace_authentication_required", "User authentication is missing or expired. Restore your Server credential."],
+    ["workspace_permission_denied", "This user does not have permission to view this Server data."],
+    ["workspace_server_unreachable", "Server unreachable. Check its address and your connection."],
+  ])("distinguishes %s from an empty authorized inventory", async (code, message) => {
+    native.invoke.mockRejectedValue({ code, message: "secret-response-body" });
+    render(wrap(<ProjectsPanel state={state} onChooseProject={vi.fn()} onState={vi.fn()} />));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByText("secret-response-body")).not.toBeInTheDocument();
+    expect(screen.queryByText("No authorized projects yet")).not.toBeInTheDocument();
+    if (code !== "workspace_server_unreachable") expect(screen.queryByRole("row", { name: "alpha" })).not.toBeInTheDocument();
+  });
+
+  it("marks cached GUI availability stale on transport failure and clears data on authorization loss", async () => {
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((name, value) => value.request.kind === "overview"
+      ? Promise.resolve({ ...overview, runners: [{ client_id: "mini", connected: true, computer_session_availability: true }] }) : normal(name, value));
+    render(wrap(<ProjectsPanel state={state} onChooseProject={vi.fn()} onState={vi.fn()} />));
+    const fleet = await screen.findByRole("region", { name: "Authorized Runners" });
+    expect(fleet).toHaveTextContent("GUI session available");
+    native.invoke.mockRejectedValue({ code: "workspace_server_unreachable" });
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByRole("alert");
+    expect(fleet).toHaveTextContent("Status is stale · GUI session unavailable");
+    native.invoke.mockRejectedValue({ code: "workspace_permission_denied" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Authorized Runners" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("row", { name: "alpha" })).not.toBeInTheDocument();
+  });
+
+  it("shows the authorized B/C fleet and GUI availability on a viewer with no local Runner", async () => {
+    const viewer = { ...state, project: null, saved_projects: [], workspace_runner: null,
+      topology: { ...state.topology!, server: { kind: "remote", url: "https://central.example" }, runner: { kind: "none" } } } as DesktopState;
+    const projects = [{ ...alpha, id: "agent:B:alpha", client_id: "B" }, { ...beta, id: "agent:C:beta", client_id: "C" }];
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((name, value) => value.request.kind === "overview"
+      ? Promise.resolve({ ...overview, projects, runners: [
+          { client_id: "B", connected: true, status: "online", computer_session_availability: true },
+          { client_id: "C", connected: true, status: "stale", computer_session_availability: true },
+        ] })
+      : value.request.kind === "projects" ? Promise.resolve({ projects, total: 2, truncated: false }) : normal(name, value));
+    render(wrap(<ProjectsPanel state={viewer} onChooseProject={vi.fn()} onState={vi.fn()} />, viewer));
+    const fleet = await screen.findByRole("region", { name: "Authorized Runners" });
+    const rows = within(fleet).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("B · Online · GUI session available");
+    expect(rows[1]).toHaveTextContent("C · Status is stale · GUI session unavailable");
+    expect(screen.getByRole("row", { name: "alpha" })).toHaveTextContent("Runner · B");
+    expect(screen.getByRole("row", { name: "beta" })).toHaveTextContent("Runner · C");
+    expect(screen.queryByRole("button", { name: "Add Project" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Unregister project/ })).not.toBeInTheDocument();
+  });
+
+  it("never merges a remote path into a local saved project just because the strings match", () => {
+    const remote = { ...alpha, id: "agent:other:alpha", client_id: "other" };
+    const merged = mergeProjects([remote], [{ path: alpha.path }], false, "mini");
+    expect(merged).toHaveLength(2);
+    expect(merged[0].id).toBe(remote.id);
+  });
+
   it("shows a read-only Runner inventory and retains Add Project", async () => {
     const add = vi.fn();
     render(wrap(<ProjectsPanel onState={vi.fn()} state={state} onChooseProject={add} />));
@@ -78,7 +139,10 @@ describe("product workspace task flows", () => {
     const selected = { ...state, project: saved, saved_projects: [saved] };
     const normal = native.invoke.getMockImplementation()!;
     native.invoke.mockImplementation((name, value) => value.request.kind === "overview"
-      ? Promise.resolve({ ...overview, projects: [runner] }) : value.request.kind === "project_git" && !savedId
+      ? Promise.resolve({ ...overview, projects: [runner] })
+      : value.request.kind === "projects"
+        ? Promise.resolve({ projects: [runner], total: 1, truncated: false })
+        : value.request.kind === "project_git" && !savedId
         ? Promise.reject(new Error("Git metadata unavailable")) : normal(name, value));
     render(wrap(<ProjectsPanel onState={vi.fn()} state={selected} onChooseProject={vi.fn()} />, selected));
     await screen.findByLabelText("2 active sessions");
@@ -239,12 +303,15 @@ describe("inventory convergence", () => {
   it.each([false, true])("hides stale saved rows after complete inventory (empty=%s)", async empty => {
     const normal = native.invoke.getMockImplementation()!;
     native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
-      ? Promise.resolve({ ...overview, projects: empty ? [] : [beta], visible_project_count: empty ? 0 : 1 }) : normal(command, value));
+      ? Promise.resolve({ ...overview, projects: empty ? [] : [beta], visible_project_count: empty ? 0 : 1 })
+      : value.request.kind === "projects"
+        ? Promise.resolve({ projects: empty ? [] : [beta], total: empty ? 0 : 1, truncated: false })
+        : normal(command, value));
     const selected = { ...state, project: null };
     const add = vi.fn();
     render(wrap(<ProjectsPanel state={selected} onChooseProject={add} onState={vi.fn()} />, selected));
     await waitFor(() => expect(screen.queryByRole("row", { name: "alpha" })).not.toBeInTheDocument());
-    if (empty) expect(screen.getByText("This Runner has no projects yet")).toBeInTheDocument();
+    if (empty) expect(screen.getByText("No authorized projects yet")).toBeInTheDocument();
     else expect(screen.getByRole("row", { name: "beta" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add Project" })); expect(add).toHaveBeenCalledOnce();
   });
