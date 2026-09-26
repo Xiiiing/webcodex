@@ -4,6 +4,12 @@
 
 本文档只面向**生产与高级自托管**：长期 Server、多机器/多用户、systemd/Docker、反向代理和 operator 管理的网络配置。普通 Windows / macOS 工作站**不要从这里开始**；最推荐的路径是 [WebCodex Desktop + 官方 OpenAI Secure Tunnel](desktop-install.zh-CN.md)。CLI 或已有 Server 再看[完整使用指南](PERSONAL_SETUP.zh-CN.md)；如果只想几分钟临时体验一个仓库，再看[快速试用](QUICK_START.zh-CN.md)。
 
+## 统一安装状态
+
+个人或多机安装请先看[统一安装指南](unified-installation.zh-CN.md)。其中面向 Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 产物属于当前分支构建结果，不是新发布版本。三种平台的真实机器安装、重启持久性、GUI 行为和升级尚未全部验收，详见[部署验收清单](unified-deployment-validation.md)。
+
+下文的 npm/runtime 压缩包、Docker 和平台专属操作流程作为高级兼容与历史运维参考保留，不改变统一安装流程。
+
 ## 组件
 
 - `webcodex` —— 统一 CLI：项目工作流、Server/Runner 生命周期、接入与运维。

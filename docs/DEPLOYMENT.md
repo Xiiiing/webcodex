@@ -4,6 +4,12 @@
 
 This guide is for **production and advanced self-hosting**: long-lived Servers, multiple machines/users, system services, reverse proxies, Docker, and operator-managed networking. If you are installing WebCodex on a normal Windows or macOS workstation, **do not start here**; the recommended path is [WebCodex Desktop + the official OpenAI Secure Tunnel](desktop-install.md). For CLI or an existing Server, use the [Full Setup guide](PERSONAL_SETUP.md). For a few-minute one-repository trial, use the [Quick Trial](QUICK_START.md).
 
+## Unified installation status
+
+For personal or multi-computer installation, start with [Unified installation](unified-installation.md). Its Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` artifacts for x64 and arm64 are build outputs of the current branch, not a newly published release. Real-machine installation, reboot persistence, GUI behavior, and upgrade have not yet been accepted on all three platforms; see the [validation checklist](unified-deployment-validation.md).
+
+The npm/runtime archive, Docker, and platform-specific procedures below are retained as advanced compatibility and historical operational guidance. They do not redefine the unified installer workflow.
+
 ## Components
 
 - `webcodex` — the unified CLI for project workflows, Server/Runner lifecycle,
