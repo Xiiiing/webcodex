@@ -808,6 +808,7 @@ async fn long_run_shell_async_job_capability_does_not_bypass_shell_authority() {
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: Some(4),
@@ -1726,6 +1727,7 @@ pub(super) async fn register_job_agent_for_auth_with_reconciliation(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: Some(4),
@@ -1780,6 +1782,7 @@ async fn register_managed_job_agent(
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
+            computer_session_availability: None,
             process_started_at: None,
             build: None,
             job_concurrency_limit: Some(4),

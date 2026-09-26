@@ -1684,6 +1684,7 @@ mod phase_e2_status_tests {
         }
 
         let client = RunnerView {
+            computer_session_availability: None,
             client_id: "shared-runner".to_string(),
             runner_instance_id: "shared-instance".to_string(),
             display_name: None,
