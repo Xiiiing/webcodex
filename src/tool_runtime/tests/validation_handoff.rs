@@ -33,6 +33,19 @@ pub(super) async fn poll_start_validation_job(
     (request, job_id)
 }
 
+pub(super) async fn poll_start_validation_job_with_timeout(
+    runtime: &ToolRuntime,
+    client_id: &str,
+    timeout: std::time::Duration,
+) -> (crate::runner_protocol::RunnerRequest, String) {
+    let request =
+        wait_for_runner_request_for_instance_with_timeout(runtime, client_id, "inst", timeout)
+            .await;
+    assert_eq!(request.kind, "start_validation_job", "{:?}", request.kind);
+    let job_id = request.job_id.clone().expect("start_validation_job job_id");
+    (request, job_id)
+}
+
 async fn wait_for_runner_request(
     runtime: &ToolRuntime,
     client_id: &str,
@@ -3304,6 +3317,13 @@ fn cargo_output_schema_enforces_handoff_terminal_and_rejection_branches() {
         "success": true,
         "output": {
             "execution_state": "pending",
+            "pending_strategy": {
+                "default": "continue_independent_work",
+                "passive_terminal_attention": "same_scope_may_surface",
+                "observe_continuation": "logs_details_recovery_fallback",
+                "observe_auto_follow": false,
+                "blocked_fallback": "wait_for_job_terminal"
+            },
             "continuation": {
                 "tool": "observe_jobs",
                 "arguments": {

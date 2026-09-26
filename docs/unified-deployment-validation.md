@@ -31,7 +31,7 @@ These automated results have been confirmed for the current branch at this check
 - Runtime Console registry: 301 tests; Runner computer-use: 6 tests; CLI: 424 tests passed (including 7 environment adapter tests); packaging/release scripts: 306 tests.
 - Linux `cargo check` passed for Server, CLI, and Runner.
 
-After integration with upstream `2f5d34b4`, Web runtime coverage is 125 tests plus 2 build tests, the Runner registry has 304 passing tests, and Runtime Console HTTP has 47 passing tests. Web typecheck, build, `check:dist`, Linux Server/CLI/Runner compilation, and formatting were checked again. The source-deployment evidence below remains tied to its original revision.
+After integration with upstream `2f5d34b4`, Web runtime coverage is 125 tests plus 2 build tests, the Runner registry has 304 passing tests, and Runtime Console HTTP has 47 passing tests. Web typecheck, build, `check:dist`, Linux Server/CLI/Runner compilation, and formatting were checked again. The source-deployment evidence below remains tied to its original revision. A later integration with upstream `20abda57` preserved the extracted RuntimeInfo test module and passed 5 RuntimeInfo-filtered tests plus all 49 metadata tests. A reproduced test-only environment-variable race was fixed with the existing environment guard; the original assertions remain intact.
 
 ## Linux source deployment evidence
 
@@ -110,7 +110,7 @@ A successful cross-compiled build or package inspection is useful packaging evid
 - Runtime Console registry：301 项；Runner computer-use：6 项；CLI：424 项通过（其中包含 7 项 environment adapter 测试）；打包/Release scripts：306 项。
 - Linux 上 Server、CLI 和 Runner 的 `cargo check` 通过。
 
-合并上游 `2f5d34b4` 后，Web runtime 为 125 项测试和 2 项 build 测试，Runner registry 为 304 项通过，Runtime Console HTTP 为 47 项通过。已重新检查 Web typecheck、build、`check:dist`、Linux Server/CLI/Runner 编译及格式。下文源码部署证据仍对应原始部署修订。
+合并上游 `2f5d34b4` 后，Web runtime 为 125 项测试和 2 项 build 测试，Runner registry 为 304 项通过，Runtime Console HTTP 为 47 项通过。已重新检查 Web typecheck、build、`check:dist`、Linux Server/CLI/Runner 编译及格式。下文源码部署证据仍对应原始部署修订。 随后合并上游 `20abda57` 时保留了独立的 RuntimeInfo 测试模块，5 项 RuntimeInfo 筛选测试和全部 49 项 metadata 测试通过。已复现的测试环境变量竞争通过现有环境 guard 修复，原断言保持不变。
 
 ### Linux 源码部署证据
 

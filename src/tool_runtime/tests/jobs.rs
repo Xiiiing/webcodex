@@ -2622,7 +2622,7 @@ async fn runtime_status_and_list_runners_filter_concurrency_counts_by_auth_group
         .await;
     assert_eq!(
         compact_a.output["jobs"],
-        json!({"active_count": 2, "running_count": 1, "queued_count": 1})
+        json!({"active_count": 2, "running_count": 1, "queued_count": 1, "recovering_count": 0, "lost_after_reconcile_count": 0})
     );
 }
 
@@ -2802,12 +2802,26 @@ fn job_handoff_model_projection_keeps_identity_and_exceptional_receipts() {
             .keys()
             .cloned()
             .collect::<std::collections::BTreeSet<_>>(),
-        ["continuation".to_string(), "execution_state".to_string()]
-            .into_iter()
-            .collect()
+        [
+            "continuation".to_string(),
+            "execution_state".to_string(),
+            "pending_strategy".to_string(),
+        ]
+        .into_iter()
+        .collect()
     );
     assert_eq!(model.output["execution_state"], "pending");
     assert_observe_job_continuation(&model.output);
+    assert_eq!(
+        model.output["pending_strategy"],
+        json!({
+            "default": "continue_independent_work",
+            "passive_terminal_attention": "same_scope_may_surface",
+            "observe_continuation": "logs_details_recovery_fallback",
+            "observe_auto_follow": false,
+            "blocked_fallback": "wait_for_job_terminal",
+        })
+    );
     for key in [
         "job_id",
         "job_status",

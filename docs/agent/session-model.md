@@ -79,6 +79,12 @@ Workflow Session lifecycle is independent from the durable `wc_goal_*` Goal doma
 
 A `session_ref` is only a short model selector. The Server owns a durable mapping scoped to the authenticated principal and pins the ref to one exact canonical Workflow Session incarnation. Resolving it produces the canonical `wc_sess_*` before business authorization/dispatch; the ordinary Project visibility, Session authority, lifecycle, and guard checks then run unchanged. The ref is not a credential, bearer capability, recorder identity, or "current/recent Session" inference. If the pinned Session disappears or its exact incarnation cannot be proven, the old ref fails closed and is never recycled or silently retargeted. Canonical Session ids remain authoritative for persistence, audit, diagnostics, internal joins, and explicit API/CLI consumers.
 
+Canonical Session identity/retention is separate from in-memory residency. `Active` and `Closed` are business lifecycle states; hot/cold residency and LRU ordering are implementation details and never lifecycle transitions. Active canonical Sessions currently remain materialized hot. The configured `hot_session_capacity_target` is therefore an observability target rather than destructive authority: when Active Session count exceeds it, the store retains those Active identities instead of deleting them or turning later exact resume into `unknown_session_id`. Restart restore follows the same rule and never trims Active rows merely to satisfy that target.
+
+Closed historical rows use an independent bounded retention policy. Closed Sessions are coldified to compact durable JSON and remain queryable while retained; mutation remains denied and retention never reopens them. `historical_session_retention_limit` bounds retained Closed history only. When that explicit historical policy expires an old Closed row, the current v2 ledger has no tombstone shape, so a later lookup can no longer distinguish retention expiry from an identity that was never present. Adding explicit retention-expired tombstones is a separate follow-up and must not be approximated by deleting Active identities. The compatibility `max_sessions` status field now aliases the hot capacity target and must not be interpreted as permission to delete durable Active Sessions.
+
+Per-Session event and message tails remain independently bounded (`DEFAULT_MAX_EVENTS_PER_SESSION` and `DEFAULT_MAX_MESSAGES_PER_SESSION`); preserving a canonical Active identity does not turn its event/message history into an unbounded archive. The persistence wire shape remains ledger version 2 because this change alters retention/restore policy, not the serialized Session row schema. Existing Session rows already deleted by an older Server cannot be reconstructed by upgrading: the fix prevents future destructive capacity loss from the first upgraded snapshot onward.
+
 `recording_session_id` remains a separate provenance contract. It may explicitly carry the same principal-scoped `session_ref` returned for that exact Session; Runtime canonicalizes the ref before recorder authorization and durable provenance recording. This does not make recorder provenance a business Session target, and omission never selects a recorder implicitly or creates sticky recorder context.
 
 Stateless MCP 2026 never derives a Workflow Session recorder identity from transport/window continuity. ChatGPT may supply `_meta["openai/session"]` as a hashed `ClientWindow`, but that identity is intentionally not a Workflow Session selector or trusted provenance source. Its `tools/list` schema therefore projects `recording_session_id` as explicit wrapper metadata for runtime tools. A call may carry `recording_session_id=W` while the concrete tool body carries business `session_id=C`; the MCP adapter removes the recorder field before concrete parsing and the kernel independently authorizes `W` before it can record evidence or supply trusted collaboration provenance. This does not revive legacy `mcp-session-id`, grant target authority, or infer a recorder from credentials, project identity, connection state, or `ClientWindow`.
@@ -448,20 +454,21 @@ through `context_request`. Omission means no static material, not an inferred
 retention state. `include_extension_catalog` remains a separate caller-explicit
 selection-metadata preference.
 
-`guidance_profile` is a request-local presentation enum: `direct` by default,
-`host_code_mode` for Host-supplied native orchestration in every build, or
-`code_mode` for WebCodex nested orchestration only in Experimental Code Mode
-builds. Host-native guidance favors canonical batches and `search_and_read`,
+`guidance_profile` is a request-local presentation enum. Explicit selection wins;
+when omitted on MCP, `McpHostRuntimePolicy.profile` (configured by
+`WEBCODEX_MCP_HOST_PROFILE`) supplies the default, while non-MCP/internal omission
+falls back to `direct`. Available explicit values are `direct`, `host_code_mode` for
+Host-supplied native orchestration in every build, or `code_mode` for WebCodex nested
+orchestration only in Experimental Code Mode builds. Host-native guidance favors canonical batches and `search_and_read`,
 allows independent cross-tool observations and dependent branching within one
 Host cell, keeps raw ToolResults in that cell, and warns against Job polling and
 stale validation after covered source changes. It does not assert that WebCodex
 verified Host capability or require nested Code Mode. Exact resume may choose any available profile
-without a Session transition; omission always selects `direct`, never a remembered
-choice. It is not persisted in Session state or event arguments and changes no
-admission, authority, effects, validation or Job semantics. An unavailable profile
-fails parsing. When `work_on_project` explicitly requests `webcodex.workflow`, its
-sidecar uses that request-local profile; unrelated tools without profile context
-continue to project the canonical default `direct`.
+without a Session transition; omission is resolved from the current transport/Host policy,
+never a remembered choice. It is not persisted in Session state or event arguments and
+changes no admission, authority, effects, validation or Job semantics. An unavailable
+profile fails parsing. `work_on_project` startup and later `webcodex.workflow` context
+refreshes use the same effective-profile resolver, preventing Direct/HostCodeMode drift.
 
 `current_window_activity` observes persisted ActionAudit activity for the exact
 ClientWindow supplied by the current adapter request. Its input cannot select
