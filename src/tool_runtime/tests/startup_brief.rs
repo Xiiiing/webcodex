@@ -132,6 +132,8 @@ fn assert_builtin_workflow(output: &Value) {
         .expect("Session recording guidance");
     assert!(recording_guidance.contains("work_on_project creates or resumes"));
     assert!(recording_guidance.contains("recording_session_id"));
+    assert!(recording_guidance.contains("prefer its returned session_ref"));
+    assert!(recording_guidance.contains("canonical wc_sess_* remains valid"));
     assert!(recording_guidance.contains("recorder provenance only"));
     assert!(recording_guidance.contains("business session_id may target another Session"));
     assert!(recording_guidance.contains("grants no authority"));
@@ -141,6 +143,10 @@ fn assert_builtin_workflow(output: &Value) {
     assert!(message_ack_guidance.contains("session_attention"));
     assert!(message_ack_guidance.contains("requires_ack"));
     assert!(message_ack_guidance.contains("ack_session_message_ids"));
+    assert!(message_ack_guidance.contains("operator_messages"));
+    assert!(message_ack_guidance.contains("peer_messages"));
+    assert!(message_ack_guidance.contains("historical wrapper name"));
+    assert!(message_ack_guidance.contains("ack_ref remains Session-only"));
     assert!(message_ack_guidance.contains("model-context retention"));
     assert!(message_ack_guidance.contains("resolves messages"));
     assert!(message_ack_guidance.contains("grants authority"));
@@ -187,12 +193,17 @@ fn assert_builtin_workflow(output: &Value) {
         "Validation failure is evidence, not queue cleanliness",
         "Reuse assertion_name",
         "outcome_unknown fails closed",
+        "Development validation may overlap independent work",
+        "covered-source edits make it stale for final evidence",
+        "freeze source covered by final validation",
+        "invalidate that evidence",
+        "rerun the appropriate final validation",
         "exact continuation",
-        "wait_for_job_terminal with a real Host carrier",
-        "no short polling",
-        "stop_job(confirm=true)",
+        "passive Job attention",
+        "observe_jobs is for logs/details/recovery",
         "list_jobs is identity recovery",
-        "sufficient fresh validation",
+        "wait_for_job_terminal only when terminal outcome is a true dependency",
+        "no independent work remains",
     ] {
         assert!(defaults.contains(phrase), "workflow guidance: {phrase}");
     }
@@ -219,14 +230,18 @@ fn assert_builtin_workflow(output: &Value) {
         .as_str()
         .expect("work result presentation guidance");
     for phrase in [
-        "substantial coding",
-        "present_work_result(project, session_id) once",
-        "materially stateful",
-        "Do not repeat it",
-        "Tiny/read-only work skips it",
-        "non-blocking finish_coding_task",
-        "seals eligible final changes",
-        "mounted card to discover on refresh",
+        "substantial Project work",
+        "stable client Window",
+        "present_work_result(project) exactly once",
+        "first successful project-scoped WebCodex action",
+        "Do not wait for work_on_project",
+        "same Window ActionAudit activity as WebUI",
+        "observe/diagnostic actions",
+        "optional linked Session collaboration",
+        "final changes may appear later",
+        "Never repeat presentation or model-poll it",
+        "Tiny one-step/read-only lookups may skip it",
+        "fallback if no card was presented",
     ] {
         assert!(work_result_guidance.contains(phrase), "{phrase}");
     }
@@ -1297,9 +1312,7 @@ async fn startup_runner_health_uses_the_exact_project_client() {
 
     let status = runtime.runtime_status(None).await;
     assert!(status.success);
-    let clients = status.output["agents"]["summary"]["clients"]
-        .as_array()
-        .unwrap();
+    let clients = status.output["runners"]["clients"].as_array().unwrap();
     assert!(clients
         .iter()
         .any(|client| client["client_id"] == "startup-peer" && client["status"] == "online"));

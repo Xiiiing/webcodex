@@ -15,7 +15,8 @@ from scripts import collect_release_bundle as collector
 
 SOURCE_SHA = "a" * 40
 RUN_ID = 123456
-VERSION = "0.4.0"
+VERSION = "0.4.3"
+SOURCE_REF = f"release/v{VERSION}"
 
 
 def _archive_bytes(platform: str) -> bytes:
@@ -49,7 +50,7 @@ def _write_bundle(root: Path, tag: str, build_kind: str) -> tuple[str, dict[str,
         checksum_lines.append(f"{digest}  {filename}")
 
     desktop_artifacts: dict[str, dict[str, str]] = {}
-    for platform in collector.DESKTOP_PLATFORMS:
+    for platform in collector.primary_desktop_platforms_for_version(VERSION):
         desktop_name = collector.desktop_artifact_filename(
             VERSION,
             platform,
@@ -148,7 +149,7 @@ class ArtifactSelectionTests(unittest.TestCase):
         with self.assertRaises(collector.CollectionError):
             collector.select_bundle_artifact(expired, RUN_ID, SOURCE_SHA)
 
-    def test_run_requires_success_main_and_exact_source(self) -> None:
+    def test_run_requires_success_and_exact_source_independent_of_dispatch_ref(self) -> None:
         run = {
             "id": RUN_ID,
             "status": "completed",
@@ -156,14 +157,21 @@ class ArtifactSelectionTests(unittest.TestCase):
             "head_sha": SOURCE_SHA,
             "event": "workflow_dispatch",
             "path": collector.RELEASE_WORKFLOW_PATH,
-            "head_branch": "main",
+            "head_branch": f"v{VERSION}",
         }
         collector.validate_run(run, RUN_ID, SOURCE_SHA)
-        for key, bad in (("conclusion", "failure"), ("head_sha", "b" * 40), ("head_branch", "other")):
+        for key, bad in (("conclusion", "failure"), ("head_sha", "b" * 40)):
             changed = dict(run)
             changed[key] = bad
             with self.assertRaises(collector.CollectionError):
                 collector.validate_run(changed, RUN_ID, SOURCE_SHA)
+
+    def test_release_source_ref_validation(self) -> None:
+        self.assertEqual(collector.normalize_source_ref("main"), "main")
+        self.assertEqual(collector.normalize_source_ref(SOURCE_REF), SOURCE_REF)
+        for value in ("feature/x", "release/foo", "refs/heads/main", "release/v0.4.3/extra"):
+            with self.assertRaises(collector.CollectionError):
+                collector.normalize_source_ref(value)
 
 
 class BundleTests(unittest.TestCase):
@@ -181,10 +189,7 @@ class BundleTests(unittest.TestCase):
             )
             self.assertEqual(summary["artifacts"], hashes)
             self.assertEqual(summary["build_kind"], "release")
-            self.assertEqual(
-                summary["desktop_artifacts"]["darwin-x64"]["filename"],
-                f"webcodex-desktop-v{VERSION}-darwin-x64.dmg",
-            )
+            self.assertNotIn("darwin-x64", summary["desktop_artifacts"])
             self.assertEqual(
                 summary["desktop_artifacts"]["darwin-arm64"]["filename"],
                 f"webcodex-desktop-v{VERSION}-darwin-arm64.dmg",
@@ -220,7 +225,7 @@ class BundleTests(unittest.TestCase):
             root = Path(temp)
             stem, _hashes = _write_bundle(root, f"v{VERSION}", "release")
             metadata = json.loads((root / "release-build.json").read_text(encoding="utf-8"))
-            desktop_name = metadata["desktop_artifacts"]["darwin-x64"]["filename"]
+            desktop_name = metadata["desktop_artifacts"]["darwin-arm64"]["filename"]
             (root / desktop_name).write_bytes(b"drifted-dmg")
             with self.assertRaises(collector.CollectionError):
                 collector.verify_bundle_directory(
@@ -238,9 +243,9 @@ class BundleTests(unittest.TestCase):
             stem, _hashes = _write_bundle(root, f"v{VERSION}", "release")
             metadata_path = root / "release-build.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            item = metadata["desktop_artifacts"]["darwin-x64"]
+            item = metadata["desktop_artifacts"]["darwin-arm64"]
             old_name = item["filename"]
-            bad_name = "webcodex-desktop-v0.4.0-macos-x64.dmg"
+            bad_name = f"webcodex-desktop-v{VERSION}-macos-arm64.dmg"
             (root / old_name).rename(root / bad_name)
             item["filename"] = bad_name
             metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")

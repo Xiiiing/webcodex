@@ -15,7 +15,7 @@ impl AppState {
             (
                 core.runtime_settings_snapshot().await,
                 core.config.runtime.clone(),
-                identity_from_config(&core.config),
+                runner_identity_from_config(&core.config),
             )
         };
         if let Some(runtime) = runtime {
@@ -31,7 +31,7 @@ impl AppState {
         let slot = self.core.lock().await;
         if slot.as_ref().is_none_or(|core| {
             core.config.runtime_selection_revision != settings.selection_revision
-                || identity_from_config(&core.config) != identity
+                || runner_identity_from_config(&core.config) != identity
         }) {
             return Err(runtime_selection::error("runtime_selection_changed"));
         }
@@ -147,8 +147,13 @@ impl AppState {
 }
 
 pub(super) fn observed_active_jobs(value: &Value) -> Option<u64> {
-    if value.get("connected").and_then(Value::as_bool) != Some(true) { return None; }
-    value.get("jobs_running")?.as_u64()?.checked_add(value.get("jobs_queued")?.as_u64()?)
+    if value.get("connected").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    value
+        .get("jobs_running")?
+        .as_u64()?
+        .checked_add(value.get("jobs_queued")?.as_u64()?)
 }
 
 fn selection_context(config: &StoredDesktopConfig) -> String {
@@ -324,7 +329,7 @@ impl DesktopCore {
             self.config.topology.as_ref().map(|t| &t.server),
             Some(ServerTopology::Local)
         );
-        let identity = identity_from_config(&self.config);
+        let identity = runner_identity_from_config(&self.config);
         if self.config.runtime.is_some() && identity.is_none() {
             return Err(runtime_selection::error("runtime_identity_unavailable"));
         }
@@ -444,7 +449,7 @@ impl DesktopCore {
     /// activation, port substitution, or credential regeneration on binary switch.
     pub(super) async fn start_existing_runtime(
         &mut self,
-        identity: &ProjectRuntimeIdentity,
+        identity: &RunnerRuntimeIdentity,
         local_server: bool,
         cancellation: &CancellationContext,
     ) -> DesktopResult<()> {
@@ -535,8 +540,7 @@ impl DesktopCore {
             .iter()
             .find(|b| b.binary == "webcodex-runner")
             .ok_or_else(|| runtime_selection::error("build_info_unverifiable"))?;
-        if runner.get("client_id").and_then(Value::as_str)
-            != Some(runner_client_id.as_str())
+        if runner.get("client_id").and_then(Value::as_str) != Some(runner_client_id.as_str())
             || runner.get("version").and_then(Value::as_str) != Some(expected.version.as_str())
             || runner.get("build_git_commit").and_then(Value::as_str)
                 != expected.git_commit.as_deref()
@@ -558,7 +562,7 @@ struct RuntimeSwitchExecution<'a> {
     candidate_binaries: ResolvedBinaries,
     previous_config: StoredDesktopConfig,
     previous_binaries: Option<ResolvedBinaries>,
-    identity: Option<ProjectRuntimeIdentity>,
+    identity: Option<RunnerRuntimeIdentity>,
     local: bool,
     cancellation: &'a CancellationContext,
 }

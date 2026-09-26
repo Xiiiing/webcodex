@@ -2,42 +2,43 @@
 
 Open `/runtime` and connect with an existing runtime credential.
 
-The start page is **Project overview**: choose an authorized project and review
-**Needs attention**, **Working now**, **Recently closed**, and recent work Sessions.
-Counts describe loaded evidence; unavailable or stale data is not an empty healthy
-workspace. Closed does not imply successful. Each Session opens explicitly, with a
-work summary of retained edits, Jobs, and terminal validation before the message board.
-The summary is not a live Git diff or host conversation transcript.
+The default **Work** page opens **Activity**, with a Window list and a single
+workspace. Filter Windows by Project or search by activity, Project, Runner, or
+Window identity. The selected Window displays a chronological tool-call stream,
+without a Session selector or a separate context sidebar.
 
-Press **Command+Shift+K** / **Ctrl+Shift+K**, or choose **Commands**, for keyboard
-navigation. Escape closes the command dialog and restores focus. These actions
-never create a Session or submit a message. Press **Command+K** on macOS or **Ctrl+K** on Windows/Linux
-while connected to open Projects & Sessions and focus project search. On narrow
-screens this also opens the navigation drawer. These shortcuts navigate only;
-they do not create Sessions or send messages.
+Every returned invocation has its own row, including repeated observe and
+diagnostic calls. Running and completed calls share start-time order, oldest
+first. Each row shows the tool name, status, start time, and duration (elapsed
+time for running calls). A Project path tag appears only when the call itself
+names a Project whose path is available; Session relations never supply a tag.
+There are no per-call technical disclosures or Session links. The Window view
+also does not fetch Session details or messages.
 
-- **Work Sessions** is the collaboration workspace. Select a Project and
-  Workflow Session in the sidebar. Recent Sessions starts expanded and can be
-  collapsed when more room is needed.
-- **Context** opens the selected Session's context. **Overview** shows work,
-  attention, validation, and model-reported progress directly. **Activity** shows
-  retained events and the existing follow-latest control. **Details** shows
-  identity, lifecycle, mode, timestamps, and workspace information.
-- **Diagnostics & Agents** provides three secondary destinations: **Overview**,
-  **Runner fleet**, and **Durable Agents**. Selecting a destination
-  shows its full content and updates the navigation highlight. Switching
-  destinations keeps existing forms mounted so unsent input is retained.
-- **Window activity** is a first-class navigation destination and also appears in
-  Project overview. Adapter `_meta["openai/session"]` is hashed into a `ClientWindow`,
-  separate from explicit `wc_sess_*` Workflow Sessions. This is an observability view
-  for ChatGPT/WebCodex call correlation. It
-  lists hashed `ClientWindow` identities, current in-flight WebCodex requests,
-  bounded durable call history, linked Workflow Sessions, and explicit recorder
-  continuity gaps. It never shows the raw host window value, tool arguments or
-  outputs, and it cannot observe model reasoning or determine whether a host UI
-  is frozen. Window/Session links are many-to-many evidence only: they do not
-  select a Workflow Session, grant Project authority, or make a Window an
-  execution/continuity owner.
+The console requests up to 2,000 retained calls. When the response is truncated,
+a visible notice explains that earlier calls are not available in this view;
+the stream does not imply that pruned history is recoverable.
+**Goals** remains available in the Work switch; returning from another destination
+preserves the chosen Work surface.
+
+**Projects** browses authorized workspaces and their retained Sessions.
+**Runtime** contains **Overview**, **Window Activity**, and **Agents**.
+
+In **Window Activity**, the left list puts Windows with active requests first,
+then sorts by recent activity. Each row shows the hashed Window identity,
+last observed Project, request count, and recency. Hovering
+on a timestamp reveals the absolute time. The last Project is a historical
+observation, not the attribution for every call in the Window.
+
+The selected Window uses the same individual tool-call stream as **Work**.
+Failed refreshes identify retained observations as stale. Switching Windows
+never displays the previous Window's calls under the newly selected identity.
+
+Adapter `_meta["openai/session"]` is hashed into a `ClientWindow`, separate from
+explicit `wc_sess_*` Workflow Sessions. This view never exposes the raw host value,
+tool arguments or outputs, and cannot observe model reasoning or determine whether
+a host UI is frozen. Window/Session links are many-to-many observations: they do
+not select a Workflow Session, grant Project authority, or imply ownership.
 
 For ordinary non-streaming `tools/call`, Window activity can project three timing
 facts from canonical adapter timestamps: `service_ms` is request-observed to
@@ -58,14 +59,9 @@ not used as the HTTP response-handoff performance timestamp.
 
 When the experimental Code Mode feature is enabled, one outer `code_mode_exec` Window activity may also show a bounded composition projection: nested call/success/failure counts, maximum nested in-flight concurrency, Code Mode duration, input/returned bytes, nested raw-result bytes, and counts for the explicit admitted nested tool names. These fields come from the same outer ActionAudit row. Nested canonical calls do **not** create synthetic Window activities, and the projection never includes JavaScript source, nested arguments/results, paths, queries, commands, credentials, arbitrary error strings, or raw Window identity.
 
-The context panel still adapts between a docked rail, popover, and mobile sheet.
-Closing it leaves a labeled Context entry in the header. Context navigation uses
-ordinary keyboard-focusable buttons, with the current choice announced as pressed.
-Mobile operation navigation closes after selection and focuses the destination.
-
 These are presentation changes. Workflow Session and durable Agent identities,
-credential scopes, refresh behavior, and mutation handling keep their existing
-contracts. Model-reported progress remains informational.
+credential scopes, and mutation handling keep their existing contracts.
+Model-reported progress remains informational.
 
 The Windows list and detail routes require `runtime:read`. Non-admin callers are
 first principal-filtered and then re-projected through current canonical Project
@@ -77,25 +73,12 @@ permission requirement. Durable terminal history is backed by ActionAudit, while
 currently-running requests are process-local and intentionally disappear on
 Server restart. The dedicated Windows refresh is three seconds only while that
 view is selected and the page is foregrounded; the normal Runtime Console refresh
-cadence is unchanged.
-
-Each selected Project/workspace has its own keyboard-accessible disclosure below
-its Runner. Closing it hides that workspace's Sessions without clearing the
-selected Session or composer; its preference survives refresh. Selecting another
-workspace opens its Session list.
-
-At widths of 1600px and above, Context docks beside a narrower conversation, with
-more room for readable status and progress. Its Overview starts with the latest
-retained Agent-authored message. Resolution text is also visible directly below
-the original message, rather than only in a tooltip.
-
-Project search continues to query authorized Projects by name, id, Runner, or
-workspace path. Separate searches filter the loaded Sessions by title/id/lifecycle
-and retained messages by body, resolution, id, or author Session. Match counts
-refer only to loaded results; these controls do not search unretained history or
-host transcripts and do not change the selected Session. Expand **Search retained
-messages** above the board to filter messages. Its match count stays visible when
-collapsed; closing the search keeps the current filter.
+cadence is unchanged. List and detail polls run independently and skip resources
+with a request already in flight, so a response slower than the polling interval
+is not repeatedly canceled. Returning to a visible/focused page refreshes idle
+requests immediately. Active Session refreshes likewise preserve slow requests.
+Window relations use the returned evidence directly instead of fetching each
+linked Session solely to enrich a Window count.
 
 The Session board is not a mirrored host chat transcript. An observed ACK records
 an explicit model-context acknowledgement, not a reply, read receipt, or completed

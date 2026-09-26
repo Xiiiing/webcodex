@@ -23,17 +23,37 @@ work_on_project
 对于 substantial coding，在 Workflow Session 进入真实工作状态后（例如第一次有意义的源码 mutation，或开始长时间 validation），对该 exact Session 调用一次 `present_work_result(project, session_id)`。挂载后的 MCP App 会自行进行有界的 Workspace / Validation / Review live read，因此不要重复创建卡片，也不要为了给卡片喂状态而额外消耗 model turn。tiny/read-only 工作不需要 progress card。`finish_coding_task` 在 non-blocking closeout 时 seal eligible final changes，已经挂载的同一张卡会在后续 App refresh 中发现这份 immutable snapshot；如果此前没有挂卡而 closeout 明确返回 presentation suggestion，再在收尾时调用一次即可。
 它的 primary output 默认保持紧凑，不重复静态 instruction/workflow 正文；当前模型上下文缺少这些材料时，分别显式请求 `context_request=["project.instructions"]` 和/或 `context_request=["webcodex.workflow"]`。Workflow Session identity 不证明当前模型仍保留这些上下文。
 Bootstrap 或 discovery 返回 `project_ref` 后，普通 Project-scoped tool call 的 `project` 应优先复用这个短 selector。Canonical `agent:<client_id>:<project_id>` 仍保留用于 diagnostic 与显式 addressing，但模型无需机械重复。`project_ref` 由 Server 持久维护、按 principal 隔离，不携带 authority；每次调用都会根据其钉住的 canonical Project/root identity 重新授权。
+
+当 `work_on_project`、`start_session`、`session_summary` 或显式 handoff 返回 `session_ref` 时，后续显式 Session 选择可优先复用这个短 selector。Business `session_id` 与 wrapper `recording_session_id` 仍是两套独立语义，但都可以显式携带已签发的 ref：Runtime 会先把它还原为钉住的 canonical `wc_sess_*`，再执行各自原有的授权、生命周期或 guard 逻辑。Canonical identity 仍是持久化、审计、诊断和内部关联的权威身份。`session_ref` 只是按 principal 隔离的便利选择器；省略 recorder 时不会自动推断，也不会形成隐式或粘滞的 recorder context。
 默认情况下，它还会返回一个很小且有界的 `extensions` selection catalog：Skill metadata 来自 canonical 的 project / Runner-configured `skills.roots` / Runner-managed Skill Store 三类来源；Plugin metadata 只包含 configured working directory 与当前 Project root 匹配、且已 ready/committed 的 provider。该 metadata 不授予任何 authority，也不会自动读取 Skill body 或创建 Plugin binding；模型选择后使用 `skill_read_file` 读取 Skill 文本，`run_skill_resource` 只执行可信 Runner-configured live `scripts/` resource（由 `expected_definition_revision` fence definition）或 Runner-installed managed resource（另由 `expected_package_revision` fence package），Plugin 则走 `plugin_tool describe -> call`。Configured resource bytes 会一直保持 live 到实际执行时，并不会预先被 package revision 固定。只有当前模型上下文仍明确保留这些 discovery metadata 时，才应设置 `include_extension_catalog=false`。
 
 ## 工具策略 guidance
 
-`work_on_project` 的 `guidance_profile` 默认是 `direct`。Workflow contract v17
+`work_on_project` 的 `guidance_profile` 默认是 `direct`。Workflow contract v21
 保持共享的 `guidance`、`model_protocol` 和 review `roles`，并在显式
 `context_request=["webcodex.workflow"]` 时通过
-`tool_strategy: {profile, guidance}` 返回本次请求选中的策略。
+`tool_strategy` 返回本次请求选中的策略。
 
 - `direct`：简单 observation 直接调用最合适的 primitive；预先确定且独立的
   observations 可以批量执行，模型根据结果顺序决定 adaptive follow-up。
+- `host_code_mode`：Host 确实提供 native orchestration 时使用。预先确定的同类输入
+  首先使用工具自己的 canonical batch，不要拆成同类 micro-call 并发；预先确定、互相
+  独立的 cross-tool read-only observation 才适合 Host 并行。native batch 之后若仍需
+  cross-tool fan-out，partial evidence 仍有价值时优先 `Promise.allSettled`，只有真正的
+  all-or-nothing 才使用 `Promise.all`。对于 result-dependent search/read/branch chain，
+  只要下一调用由结果机械确定且没有新的语义判断，就继续留在
+  同一个 Host cell。单个 child ToolResult 返回本身不是 model-turn boundary；需要 semantic
+  choice、ambiguous result、新用户决策、authority/permission、uncertain outcome、竞争性
+  recovery 或 mutation intent 尚未确定时才自然回到模型。完整 ToolResult 尽量留在 Host
+  cell，只返回下一次决策需要的紧凑证据。每个 Host cell 应是短生命周期 dependency DAG，
+  而不是承载长时间 Job lifetime。Job handoff 保存精确 identity 后，先完成已经确定的独立工作；
+  如果剩余工作主要只是等待，就结束当前 cell，之后从 exact continuation 恢复，不要让 cell
+  持续挂在长等待上，也不要因为 Job 存在就机械 `observe_jobs`。startup
+  `tool_strategy.host_orchestration` catalog 与 exact
+  `tool_manifest(tool_name=...)` hint 都从 canonical `ToolDefinition` metadata 派生；
+  它们只提供 guidance，不改变 `ToolCompositionPolicy`、authority、effect、permission、
+  retry、idempotency 或 runtime scheduling，默认/broad ToolSpec 也不携带这批 metadata。
+  该 profile 不授予任何 WebCodex capability/authority，也不要求 nested WebCodex Code Mode。
 - `code_mode`：简单单步 observation 仍直接调用；相关 search/read、跨文件定位或
   综合调查能减少外层模型往返时，优先 read-only Code Mode。在同一个 cell 内顺序
   完成依赖结果的 follow-up，只并发独立 observations。Raw child results 留在 cell
@@ -47,7 +67,7 @@ Bootstrap 或 discovery 返回 `project_ref` 后，普通 Project-scoped tool ca
 `guidance_profile`；其他无 profile context 的普通工具显式请求该 material 时，
 继续使用 canonical default `direct`。
 
-两者共用 scope、recovery、validation truth、Job continuation、review 和 closeout。
+这些策略共用 scope、recovery、validation truth、Job continuation、review 和 closeout。
 默认仍走 canonical edit 和 structured validation；只有多个相关 validation 或
 adaptive read → one guarded edit 确实减少外层往返时，才考虑相应的 effectful/mutating
 Code Mode。Nested canonical authority、effects、evidence 和 retry certainty 不变。

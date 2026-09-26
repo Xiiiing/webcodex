@@ -446,7 +446,7 @@ REGISTERED=0
 for _ in $(seq 1 60); do
     check_deadline
     body="$(api_post /api/runtime/status '{}' || true)"
-    agent_count="$(json_get "$body" output.agents.count)"
+    agent_count="$(json_get "$body" output.runners.count)"
     if [ "$agent_count" = "1" ]; then
         REGISTERED=1
         break
@@ -476,9 +476,9 @@ log "keepalive liveness check (idle ${KEEPALIVE_WAIT}s)"
 sleep "$KEEPALIVE_WAIT"
 check_deadline
 body="$(api_post /api/runtime/status '{}' || true)"
-agent_connected="$(json_get "$body" output.agents.clients.0.connected)"
-agent_status="$(json_get "$body" output.agents.clients.0.status)"
-agent_transport="$(json_get "$body" output.agents.clients.0.transport)"
+agent_connected="$(json_get "$body" output.runners.clients.0.connected)"
+agent_status="$(json_get "$body" output.runners.clients.0.status)"
+agent_transport="$(json_get "$body" output.runners.clients.0.transport)"
 if [ "$agent_connected" = "True" ] && [ "$agent_status" = "online" ]; then
     pass "agent still online after idle wait (transport=$agent_transport)"
 else
@@ -633,7 +633,7 @@ mcp_tool_present() {
 
 adaptive_present=1
 for tname in work_on_project runtime_status tool_manifest \
-    search_project_texts read_files apply_text_edits run_process run_shell observe_jobs list_jobs \
+    search_project_texts read_files apply_text_edits run_process run_script run_shell observe_jobs list_jobs \
     cargo_check cargo_test git_review_summary git_diff_hunks \
     show_changes call_runtime_tool; do
     if ! mcp_tool_present "$tname"; then
@@ -642,7 +642,7 @@ for tname in work_on_project runtime_status tool_manifest \
     fi
 done
 for tname in list_tools list_projects workspace_hygiene_check finish_coding_task \
-    project_overview apply_patch run_script apply_unified_diff go_test validation_summary git_status \
+    project_overview apply_patch apply_unified_diff go_test validation_summary git_status \
     goto_definition computer_observe computer_control computer_save_snapshot post_session_message \
     coding_agent_start artifact_upload_begin; do
     if mcp_tool_present "$tname"; then
@@ -1029,12 +1029,12 @@ else
     fail "POST /api/runtime/status without token returned HTTP ${no_auth_status} (expected 401)"
 fi
 
-# runtime_status now carries per-agent last_seen + stale_count for the console.
+# runtime_status now carries per-Runner last_seen + stale_count for the console.
 status_body="$(api_post /api/runtime/status '{}')"
-if [ "$(json_get "$status_body" output.agents.stale_count)" != "None" ]; then
-    pass "runtime_status exposes agents.stale_count"
+if [ "$(json_get "$status_body" output.runners.stale_count)" != "None" ]; then
+    pass "runtime_status exposes runners.stale_count"
 else
-    fail "runtime_status missing agents.stale_count"
+    fail "runtime_status missing runners.stale_count"
 fi
 
 # ----------------------------------------------------------------------------

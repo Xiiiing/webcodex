@@ -167,6 +167,81 @@ fn apply_text_edits_shorthand_normalizes_once_to_canonical_call() {
 }
 
 #[test]
+fn start_agent_task_endpoint_continuation_parses_ref_or_explicit_tuple() {
+    let by_ref = ToolCall::from_tool_name(
+        "start_agent_task_endpoint_continuation",
+        json!({"attempt_ref": "~ta1"}),
+    )
+    .unwrap();
+    assert!(matches!(
+        by_ref,
+        ToolCall::StartAgentTaskEndpointContinuation {
+            attempt_ref: Some(ref selector),
+            task_id: None,
+            attempt_id: None,
+            assignee_agent_id: None,
+            attempt_fence: None,
+            attempt_controller_generation: None,
+        } if selector == "~ta1"
+    ));
+    let by_tuple = ToolCall::from_tool_name(
+        "start_agent_task_endpoint_continuation",
+        json!({
+            "task_id": "wc_agent_task_ERERERERERERERER",
+            "attempt_id": "wc_agent_task_attempt_IiIiIiIiIiIiIiIi",
+            "assignee_agent_id": "wc_dagent_MzMzMzMzMzMzMzMz",
+            "attempt_fence": "wc_agent_task_fence_RERERERERERERERERERERA",
+            "attempt_controller_generation": 1
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        by_tuple,
+        ToolCall::StartAgentTaskEndpointContinuation {
+            attempt_ref: None,
+            task_id: Some(_),
+            attempt_id: Some(_),
+            assignee_agent_id: Some(_),
+            attempt_fence: Some(_),
+            attempt_controller_generation: Some(1),
+        }
+    ));
+    assert!(ToolCall::from_tool_name(
+        "start_agent_task_endpoint_continuation",
+        json!({
+            "attempt_ref": "~ta1",
+            "task_id": "wc_agent_task_ERERERERERERERER"
+        }),
+    )
+    .is_ok());
+    assert!(ToolCall::from_tool_name(
+        "start_agent_task_endpoint_continuation",
+        json!({"task_id": "wc_agent_task_ERERERERERERERER"}),
+    )
+    .is_ok());
+    assert!(ToolCall::from_tool_name(
+        "start_agent_task_endpoint_continuation",
+        json!({
+            "attempt_ref": "~ta1",
+            "session_id": "wc_sess_0123456789abcdef0123456789abcdef"
+        }),
+    )
+    .is_err());
+    assert!(ToolCall::from_tool_name(
+        "heartbeat_agent_task_attempt",
+        json!({
+            "attempt_ref": "~ta1",
+            "task_id": "wc_agent_task_ERERERERERERERER",
+            "attempt_id": "wc_agent_task_attempt_IiIiIiIiIiIiIiIi",
+            "assignee_agent_id": "wc_dagent_MzMzMzMzMzMzMzMz",
+            "attempt_fence": "wc_agent_task_fence_RERERERERERERERERERERA",
+            "attempt_controller_generation": 1
+        }),
+    )
+    .is_err());
+}
+
+#[test]
 fn heartbeat_agent_task_attempt_parses_optional_active_turn_proof() {
     let base = json!({
         "task_id": "wc_agent_task_ERERERERERERERER".to_string(),
@@ -1236,14 +1311,21 @@ fn tool_call_session_id_accessor_covers_session_tool_specs() {
         }
         let call = ToolCall::from_tool_name(&spec.name, sample_tool_args_with_session(&spec.name))
             .unwrap_or_else(|e| panic!("{} should deserialize: {}", spec.name, e));
-        let expected = if spec.name == "list_jobs" {
-            // list_jobs.session_id is an exact metadata filter over the
-            // already-authorized Job set. It deliberately does not opt into
-            // generic Workflow Session lookup/recording, which would turn a
-            // foreign or missing filter value into an existence oracle.
-            None
-        } else {
-            Some("wc_sess_accessor")
+        let expected = match spec.name.as_str() {
+            "list_jobs" => {
+                // list_jobs.session_id is an exact metadata filter over the
+                // already-authorized Job set. It deliberately does not opt into
+                // generic Workflow Session lookup/recording, which would turn a
+                // foreign or missing filter value into an existence oracle.
+                None
+            }
+            "present_work_result" => {
+                // Work Result is Window-first. Its optional session_id is
+                // compatibility/context evidence only and must not re-enter the
+                // generic business-Session lookup or recorder projection.
+                None
+            }
+            _ => Some("wc_sess_accessor"),
         };
         assert_eq!(
             call.session_id(),
@@ -2072,6 +2154,71 @@ fn retired_start_coding_task_is_a_canonical_unknown_tool() {
 }
 
 #[test]
+fn present_agent_continuation_parses_ref_or_explicit_tuple_without_session() {
+    let spec = registered_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == "present_agent_continuation")
+        .unwrap();
+    let properties = spec.input_schema["properties"].as_object().unwrap();
+    assert!(properties.contains_key("agent_continuation_ref"));
+    assert!(properties.contains_key("agent_id"));
+    if let Some(fields) = spec.input_schema["required"].as_array() {
+        for field in fields {
+            assert!(
+                field != "agent_id"
+                    && field != "endpoint_id"
+                    && field != "expected_controller_generation"
+                    && field != "agent_continuation_ref",
+                "present_agent_continuation must accept either selector form"
+            );
+        }
+    }
+    let schema_text = spec.input_schema.to_string();
+    assert!(schema_text.contains(crate::AGENT_CONTINUATION_REF_PATTERN));
+
+    let by_ref = ToolCall::from_tool_name(
+        "present_agent_continuation",
+        json!({"agent_continuation_ref": "~ac1"}),
+    )
+    .unwrap();
+    assert!(matches!(
+        by_ref,
+        ToolCall::PresentAgentContinuation {
+            agent_continuation_ref: Some(ref selector),
+            agent_id: None,
+            endpoint_id: None,
+            expected_controller_generation: None,
+        } if selector == "~ac1"
+    ));
+    let by_tuple = ToolCall::from_tool_name(
+        "present_agent_continuation",
+        json!({
+            "agent_id": "wc_dagent_qqqqqqqqqqqqqqqq",
+            "endpoint_id": "wc_endpoint_u7u7u7u7u7u7u7u7",
+            "expected_controller_generation": 1
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        by_tuple,
+        ToolCall::PresentAgentContinuation {
+            agent_continuation_ref: None,
+            agent_id: Some(_),
+            endpoint_id: Some(_),
+            expected_controller_generation: Some(1),
+        }
+    ));
+    assert!(ToolCall::from_tool_name(
+        "present_agent_continuation",
+        json!({
+            "agent_continuation_ref": "~ac1",
+            "session_id": "wc_sess_0123456789abcdef0123456789abcdef"
+        }),
+    )
+    .is_err());
+}
+
+#[test]
 fn agent_continuation_bind_requires_view_fence() {
     let binding_id = format!("wc_host_binding_{}", "a0".repeat(16));
     let mut args = json!({
@@ -2141,11 +2288,11 @@ fn guidance_profile_defaults_and_schema_follow_compiled_availability() {
         .as_array()
         .unwrap()
         .contains(&json!("guidance_profile")));
-    let mut profiles = vec!["direct"];
+    let mut profiles = vec!["direct", "host_code_mode"];
     if cfg!(feature = "experimental-code-mode") {
         profiles.push("code_mode");
     }
-    assert_eq!(property["enum"], json!(profiles));
+    assert_eq!(property["enum"], json!(profiles), "{property}");
     let output_schema = output_schema_for_tool("work_on_project");
     let output_properties = output_schema["properties"]["output"]["properties"]
         .as_object()
@@ -2168,6 +2315,47 @@ fn guidance_profile_defaults_and_schema_follow_compiled_availability() {
         let mut args = base.clone();
         args["guidance_profile"] = invalid;
         assert!(ToolCall::from_tool_name("work_on_project", args).is_err());
+    }
+}
+
+#[test]
+fn current_window_activity_has_no_model_supplied_window_selector() {
+    let input = crate::request_schema::input_schema_for_tool("current_window_activity");
+    let properties = input["properties"].as_object().unwrap();
+    assert!(properties.contains_key("limit"));
+    assert!(properties.contains_key("include_nonmeaningful"));
+    assert!(!properties.contains_key("client_window_key"));
+    assert!(!properties.contains_key("window"));
+    assert!(ToolCall::from_tool_name(
+        "current_window_activity",
+        json!({
+            "client_window_key": "foreign"
+        })
+    )
+    .is_err());
+    assert_eq!(
+        ToolCall::from_tool_name("current_window_activity", json!({"limit":20}))
+            .unwrap()
+            .tool_name(),
+        "current_window_activity"
+    );
+}
+
+#[test]
+fn current_window_activity_description_keeps_timing_factual_and_overlap_explicit() {
+    let spec = registered_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == "current_window_activity")
+        .expect("current_window_activity ToolSpec");
+    let description = spec.description.as_str();
+    for phrase in [
+        "WebCodex-observed request timing only",
+        "gap threshold counts are cumulative",
+        "short gaps never prove Host cells",
+        "window_transition_kind=overlap",
+        "never inferred from gap duration",
+    ] {
+        assert!(description.contains(phrase), "{phrase}: {description}");
     }
 }
 

@@ -69,26 +69,24 @@ pub(crate) fn builtin_coding_workflow_projection(profile: CodingGuidanceProfile)
             "Verify Project/branch/HEAD/changes/nested rules. Recovery/compaction/exact Session resume is continuation: reuse still-current Git/read/validation/Job facts; revalidate changed snapshots/HEAD/worktree/instructions.",
             "Preserve unrelated work; push/publish/deploy/restart need explicit action/target. If a user answer/Job/validation/result is not a dependency, continue independent work; wait only on real dependencies.",
             "Ordinary implementation is default: map cross-layer changes end to end; use compiler/schema/exhaustiveness failures for gaps; minimize concepts, avoid speculative redesign.",
-            "Validation failure is evidence, not queue cleanliness. Fix dependent blockers; continue otherwise. Reuse assertion_name; outcome_unknown fails closed. After Rust stabilizes, format once; rerun only after later Rust edits. Require sufficient fresh validation.",
-            "Keep one execution/Job and exact continuation. Blocked: use wait_for_job_terminal with a real Host carrier; no short polling. observe_jobs for details, stop_job(confirm=true) for control; list_jobs is identity recovery."
+            "Validation failure is evidence, not queue cleanliness. Fix dependent blockers; continue otherwise. Reuse assertion_name; outcome_unknown fails closed. After Rust stabilizes, format once. Development validation may overlap independent work; covered-source edits make it stale for final evidence.",
+            "For closeout evidence, freeze source covered by final validation. Continue read-only review/docs/external inspection; if covered source must change, invalidate that evidence and rerun the appropriate final validation.",
+            "Keep one execution/Job and exact continuation. After handoff continue independent work; passive Job attention may surface transitions. observe_jobs is for logs/details/recovery; list_jobs is identity recovery. Use wait_for_job_terminal only when terminal outcome is a true dependency and no independent work remains."
         ],
-        "tool_strategy": {
-            "profile": profile,
-            "guidance": tool_strategy_guidance(profile),
-        },
+        "tool_strategy": tool_strategy_projection(profile),
         "model_protocol": {
             "goal_workflow": "On exact Session re-entry, honor work_on_project.goal_context: reuse one exact active Goal with get_goal/present_goal_plan; choose explicitly among multiple candidates; never infer from Project/Window/title/recency. For ordinary new substantial multi-step/cross-turn work with no reusable Goal, call prepare_goal_workflow with the exact current Workflow Session, bounded completion_conditions/steps, and optional explicit controller Agent, then present_goal_plan. available=false never proves no Goal. Host continuation setup/readiness remains separate. Low-level create_goal and associate_goal_workflow_session remain available. Tiny one-step lookups/trivial edits need no Goal. This applies independently of AGENTS.md.",
             "goal_continuation": "Automatic continuation needs an exact explicit durable controller Agent and the existing production Host carrier. Reuse the same Agent already made callable by explicit setup or exact Wake context; never infer Agent identity from a Window or create a second Goal-only identity. An Agent may be both Task assignee and Goal controller: Tasks/Attempts own execution, the controller routes next reasoning only. Goal Plan detects; the separate Agent Continuation card carries turns. Stalled is not offline; dispatch acceptance is not resume. An exact stall Wake requires bootstrap, immediate consume, get_goal and exact Session handoff recovery; never retry an uncertain prior effect.",
             "goal_checkpoint": "After a plan phase completes, prefer _control.before.goal_progress on the next ordinary call: mark the previous phase complete and next phase current with exact revision/key. Record only facts already true; never pre-complete tests or defer checkpoints to closeout. checkpoint_goal remains valid standalone. Complete all steps and verify/review before explicit update_goal or finish_coding_task + goal_completion; the Server cannot judge natural-language conditions.",
             "handoff_recovery": "Use handoff recovery only after task-context loss/compaction/restart, explicit cross-window/Agent handoff, or user-requested recovery. Never use it for routine progress/baselines. A frontend timeout alone does not imply Workflow Session loss. If task context is genuinely lost and the exact session_id is unknown, request context_request=[\"workflow.resume\"], choose an exact authorized candidate, call session_handoff_summary with the exact session_id, check basis completeness, then resume with work_on_project(project=..., session_id=...). A dirty workspace after context loss is not evidence of external or concurrent modification by itself. Recover exact Workflow Session evidence first.",
-            "session_recording": "When work_on_project creates or resumes, pass recording_session_id for recorder provenance only. business session_id may target another Session; it grants no authority.",
-            "session_message_ack": "For retained session_attention with requires_ack, echo ack_session_message_ids. This proves model-context retention only; it never resolves messages, grants authority, or gates execution.",
+            "session_recording": "When work_on_project creates or resumes, prefer its returned session_ref as recording_session_id for recorder provenance only; canonical wc_sess_* remains valid. business session_id may target another Session; it grants no authority.",
+            "session_message_ack": "For any retained collaboration message with requires_ack=true projected in session_attention, peer_messages, or operator_messages, echo its wc_msg_* id in ack_session_message_ids on the next ordinary model-visible call. The historical wrapper name is shared across Session, Peer, and Operator messages; compact ack_ref remains Session-only. ACK proves model-context retention only; it never resolves messages, grants authority, or gates execution.",
             "session_message_resolution": "For a handled non-todo, send session_message_resolution on the next ordinary call with recording_session_id; if requires_ack, also send ack_session_message_ids. It cannot predict the main call. Todos use complete_session_message.",
             "control_sidecars": "_control is optional: piggyback an established transition only when an ordinary call is already needed; otherwise omit it or use the standalone canonical tool. before supports goal_progress, wake_consume, attempt_heartbeat, session_context_update; after_success supports todo_completion, plus goal_completion/session_close on non-blocking finish_coding_task. One mutation per phase, independently authorized; no automatic transitions. Post failure preserves main success. session_context_update is fail-closed pending CAS/replay support.",
             "context_sidecar": "context_request after the main tool; never authorizes. jobs.attention is Project-level, not Session/control; workflow.resume is Window/principal-scoped recovery evidence only and never selects or resumes a Session. Recover project.instructions by observation call before dependent mutation.",
             "runner_targeting": "For exact Runner client_id, use runtime_status(client_id=...) or list_projects(client_id=...) before treating it as absent.",
             "persistent_shell": "Local: run_process=literal argv; run_shell=shell grammar/short chains; run_script=program-like scripts; specialize for added semantics. Persistent shell only for repeated named-SSH state or local same-process state.",
-            "work_result_presentation": "For substantial coding with meaningful mutation or long-running validation, present_work_result(project, session_id) once after the Session becomes materially stateful so the user gets a persistent live progress card. Do not repeat it or model-poll to feed it. Tiny/read-only work skips it. A non-blocking finish_coding_task seals eligible final changes for the mounted card to discover on refresh; if no card was presented and finish suggests present_work_result, call it once at closeout.",
+            "work_result_presentation": "For substantial Project work in a stable client Window, call present_work_result(project) exactly once immediately after the first successful project-scoped WebCodex action. Do not wait for work_on_project, a Workflow Session, mutation, validation, or closeout. The mounted card refreshes the same Window ActionAudit activity as WebUI, including observe/diagnostic actions; optional linked Session collaboration and final changes may appear later. Never repeat presentation or model-poll it in the same Window. Tiny one-step/read-only lookups may skip it; finish may suggest it only as a fallback if no card was presented.",
             "normal_closeout": "Source/validation/open evidence: finish_coding_task(summary_only=true). Honor goal_follow_up for explicitly correlated active Goals: checkpoint incomplete/current steps or explicitly complete with update_goal after fresh verification/review. Finish never completes a Goal implicitly; explicit goal_completion sidecar intent is required. Read/planning/artifact: finalize directly, also closing any established Goal."
         },
         "roles": {
@@ -103,12 +101,78 @@ pub(crate) fn builtin_coding_workflow_projection(profile: CodingGuidanceProfile)
     })
 }
 
+fn tool_strategy_projection(profile: CodingGuidanceProfile) -> Value {
+    let mut strategy = json!({
+        "profile": profile,
+        "guidance": tool_strategy_guidance(profile),
+    });
+    if profile == CodingGuidanceProfile::HostCodeMode {
+        strategy["host_orchestration"] = host_orchestration_catalog();
+    }
+    strategy
+}
+
+fn host_orchestration_catalog() -> Value {
+    let mut native_batch_first = Vec::new();
+    let mut independent_parallel_reads = Vec::new();
+    let mut compound_preferred = Vec::new();
+    let mut sequential = Vec::new();
+
+    for definition in super::tool_definition::model_visible_tool_definitions() {
+        let hint = definition.host_orchestration;
+        if hint.native_batch_field.is_some() {
+            native_batch_first.push(definition.name);
+        }
+        match hint.concurrency {
+            super::tool_definition::ToolHostConcurrencyHint::IndependentParallelRead => {
+                independent_parallel_reads.push(definition.name);
+            }
+            super::tool_definition::ToolHostConcurrencyHint::Sequential => {
+                sequential.push(definition.name);
+            }
+            super::tool_definition::ToolHostConcurrencyHint::Unspecified => {}
+        }
+        if hint.compound_preferred {
+            compound_preferred.push(definition.name);
+        }
+    }
+
+    for list in [
+        &mut native_batch_first,
+        &mut independent_parallel_reads,
+        &mut compound_preferred,
+        &mut sequential,
+    ] {
+        list.sort_unstable();
+    }
+
+    json!({
+        "guidance_only": true,
+        "native_batch_first": native_batch_first,
+        "independent_parallel_reads": independent_parallel_reads,
+        "compound_preferred": compound_preferred,
+        "sequential": sequential,
+    })
+}
+
 fn tool_strategy_guidance(profile: CodingGuidanceProfile) -> &'static [&'static str] {
     match profile {
         CodingGuidanceProfile::Direct => &[
-            "Use the simplest sufficient primitive: native commands and structured tools are first-class; bounded deterministic Python/run_shell for coherent edits.",
+            "Project source mutation: prefer canonical structured editors—apply_text_edits for exact transactional edits, expected_match_count=N for bounded repetitive exact replacement, and apply_patch for patch-shaped changes.",
+            "Use run_script/Python for computation, inspection, generation, non-source transforms, or when structured editing cannot express the change; never use it to bypass revision/SHA fences, rollback, or sensitive-path policy.",
+            "Coalesce known work: read_files(items), search_project_texts(queries), search_and_read for search→source inspection, cargo_check(packages), and one apply_text_edits batch. Keep result-dependent operations sequential; avoid ritual model turns.",
             "Simple observation: direct primitive. Batch predetermined independent observations; adaptive follow-ups stay sequential across model calls.",
             "Known target: bounded targeted reads. Broad discovery: small files/count search then targeted reads. Avoid ritual turns.",
+        ],
+        CodingGuidanceProfile::HostCodeMode => &[
+            "Host-native Code Mode is model guidance only. It grants no WebCodex capability/authority, changes no effects/retry/idempotency, and does not require WebCodex nested Code Mode.",
+            "Known same-kind inputs: prefer native batches such as read_files(items), search_project_texts(queries), cargo_check(packages), or one apply_text_edits batch; do not Promise.all same-kind micro-calls.",
+            "Known independent cross-tool read-only observations: native batches first. For remaining fan-out, use Host Promise.allSettled when partial evidence is useful; use Promise.all only for true all-or-nothing. Prefer search_and_read for search→read; keep result-dependent chains in one Host cell when mechanically determined.",
+            "Do not return to the model merely because one child ToolResult arrived. If the next call is mechanically determined with no unresolved semantic choice/uncertainty/authority need, stay in the Host cell and return compact evidence for the next decision.",
+            "Natural model-turn boundaries are semantic choice, ambiguous result, new user decision, authority/permission, outcome_unknown or competing recovery, or unresolved mutation intent—not child-call completion.",
+            "Keep full ToolResults in the Host cell when possible; preserve identities/revisions/continuations such as job_id, observation_ref, read_revision and failure/recovery fields. Avoid text(JSON.stringify(fullResult)) dumps.",
+            "Host cells are short dependency DAGs, not long Job lifetimes. After handoff save exact identity; finish independent work. If only waiting remains, end the cell and resume continuation. Passive Job attention; observe_jobs only for logs/details/recovery; wait_for_job_terminal only after independent work is exhausted.",
+            "Development validation may overlap independent work. For final evidence freeze covered source; covered-source edits invalidate that evidence and require rerun. Host support is supplied by the Host, not verified by WebCodex.",
         ],
         #[cfg(feature = "experimental-code-mode")]
         CodingGuidanceProfile::CodeMode => &[

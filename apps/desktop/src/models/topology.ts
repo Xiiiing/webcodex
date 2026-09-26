@@ -120,13 +120,14 @@ export interface TunnelProxySnapshot {
   mode: TunnelProxyMode;
   custom_url?: string | null;
   effective_source: string;
-  effective_url?: string | null;
-  detected_url?: string | null;
+  effective_proxy_present: boolean;
+  system_proxy_detected: boolean;
 }
 
 export type DesktopOperationKind =
   | "local_setup"
   | "local_project_activate"
+  | "project_unregister"
   | "remote_setup"
   | "quick_share_start"
   | "quick_share_stop"
@@ -170,6 +171,7 @@ export interface ChatGptActivitySnapshot {
 }
 
 export interface DesktopState {
+  workspace_runner?: SettingsTarget | null;
   configuration_issue?: string | null;
   saved_projects?: ProjectSelection[];
   topology?: RuntimeTopology | null;

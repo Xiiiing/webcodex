@@ -2,6 +2,8 @@
 
 mod support;
 
+mod agent_continuation_refs;
+mod agent_task_attempt_refs;
 mod agent_tasks;
 mod agent_waits;
 mod apply_text_edits;
@@ -22,6 +24,7 @@ mod computer_budgets;
 mod context_projection;
 mod continuation_feedback;
 mod control_sidecars;
+mod current_window_activity;
 mod diagnostics;
 mod dispatch;
 mod edit_tool_telemetry;
@@ -33,6 +36,7 @@ mod goals;
 mod handoff;
 mod handoff_brief;
 mod hygiene;
+mod job_attention;
 mod job_continuation;
 mod job_terminal_wait;
 mod jobs;

@@ -2010,6 +2010,14 @@ impl ToolRuntime {
                     .await
             }
 
+            ToolCall::CurrentWindowActivity {
+                limit,
+                include_nonmeaningful,
+            } => {
+                self.current_window_activity(window, auth, limit, include_nonmeaningful)
+                    .await
+            }
+
             call @ (ToolCall::RunnerConfigCheck { .. } | ToolCall::RunnerConfigReload { .. }) => {
                 self.dispatch_runner_config_tool(call, auth).await
             }
@@ -2090,12 +2098,35 @@ impl ToolRuntime {
             ToolCall::PresentWorkResult {
                 project,
                 session_id,
-            } => self.present_work_result(project, session_id, auth).await,
+            } => {
+                self.present_work_result_for_window(project, session_id, auth, window)
+                    .await
+            }
 
             ToolCall::WorkResultState {
                 project,
                 session_id,
-            } => self.work_result_state(project, session_id, auth).await,
+            } => {
+                self.work_result_state_for_window(project, session_id, auth, window)
+                    .await
+            }
+
+            ToolCall::WorkResultSendMessage {
+                project,
+                session_id,
+                message,
+                delivery_key,
+            } => {
+                self.work_result_send_message(
+                    project,
+                    session_id,
+                    message,
+                    delivery_key,
+                    auth,
+                    window,
+                )
+                .await
+            }
 
             ToolCall::ChangesFileDiff {
                 project,
@@ -2655,13 +2686,15 @@ impl ToolRuntime {
             } => self.start_agent_task_attempt(auth, task_id, assignee_agent_id, idempotency_key),
 
             ToolCall::StartAgentTaskEndpointContinuation {
+                attempt_ref,
                 task_id,
                 attempt_id,
                 assignee_agent_id,
                 attempt_fence,
                 attempt_controller_generation,
-            } => self.start_agent_task_endpoint_continuation(
+            } => self.start_agent_task_endpoint_continuation_with_selector(
                 auth,
+                attempt_ref,
                 task_id,
                 attempt_id,
                 assignee_agent_id,
@@ -2802,11 +2835,13 @@ impl ToolRuntime {
             ),
 
             ToolCall::PresentAgentContinuation {
+                agent_continuation_ref,
                 agent_id,
                 endpoint_id,
                 expected_controller_generation,
-            } => self.present_agent_continuation(
+            } => self.present_agent_continuation_with_selector(
                 auth,
+                agent_continuation_ref,
                 agent_id,
                 endpoint_id,
                 expected_controller_generation,
@@ -3308,7 +3343,7 @@ mod structured_execution_sparse_projection_tests {
 
         let mut work_result = ToolCall::WorkResultState {
             project: "demo".to_string(),
-            session_id: "wc_sess_x".to_string(),
+            session_id: Some("wc_sess_x".to_string()),
         };
         assert!(canonical_execution_project_binding(&mut work_result).is_none());
         assert_eq!(work_result.project(), Some("demo"));

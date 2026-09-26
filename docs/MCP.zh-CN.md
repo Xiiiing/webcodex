@@ -73,11 +73,13 @@ Connection: Tunnel + No authentication；临时 WebCodex Bearer 留在本机，�
 OpenAI `tunnel-client` 注入。
 
 对于通过 OpenAI Secure Tunnel 访问的长期 **loopback-only** Server，可以设置
-`WEBCODEX_MCP_TRUST_LOOPBACK_API_TOKEN_FILE_IMPORT=true`，从而信任由本机 user API token
-认证的 ChatGPT host-file rewrite。WebCodex Desktop 自 v0.4.2 起会为它自己管理的本机
-loopback Server 默认写入该值；已有显式配置不会被覆盖。该例外仅在 `WEBCODEX_ADDR` 解析为
-loopback 且当前 credential 是普通 user API token 时生效。独立/network-accessible Server
-仍默认关闭，不应使用它替代 OAuth。
+`WEBCODEX_MCP_TRUST_LOOPBACK_API_TOKEN_FILE_IMPORT=true`，从而信任由明确允许的本地 tunnel
+credential 认证的 ChatGPT host-file rewrite。WebCodex Desktop 自 v0.4.2 起会为它自己管理的
+本机 loopback Server 默认写入该值；已有显式配置不会被覆盖。该例外仅在 `WEBCODEX_ADDR`
+解析为 loopback，且当前 credential 是普通 user API token，或 Desktop regular Tunnel 使用的
+已配置 Server bootstrap credential 时生效。regular Tunnel 从本机 `WEBCODEX_TOKEN` 配置派生
+该 credential，并只把它注入私有 tunnel-client authorization；用户不应复制或暴露该
+credential。独立/network-accessible Server 仍默认关闭，不应使用它替代 OAuth。
 
 如果在 Windows 上使用普通独立 Server + Runner 并通过 OpenAI Tunnel 接入，或排查“本地 `/readyz` 正常但 ChatGPT Connector 创建失败”的情况，见 [Windows + OpenAI Secure MCP Tunnel 深入实操](WINDOWS_OPENAI_TUNNEL.zh-CN.md)。它是深入配置/排障文档，不是普通用户第一次必须阅读的教程。
 
@@ -238,6 +240,14 @@ Adaptive Runtime 可以把常用工具直接暴露，把 long-tail 工具通过 
 ### 长任务使用 Job lifecycle
 
 长时间 command 与 validation 使用 canonical WebCodex Job。发起调用返回 exact Job 后，用 `observe_jobs` 观察同一个 Job；只有 Job identity 确实丢失时才用 `list_jobs` 恢复，不要重复启动。Jobs 不再包装成 MCP Tasks，WebCodex 也不再 advertise 原 Connector-specific MCP Tasks extension。
+
+ChatGPT/model turn 与一次 MCP observation request 都不拥有 Job 的生命周期。因此 Host 侧
+出现 `Thinking stopped` / `Thinking failed`、request timeout 或 observation 中断，
+本身不能证明 Job 已经停止。优先在原会话继续并重新观察已有 Job；identity 丢失时先恢复
+Job inventory，再考虑 retry。不要仅仅因为 model turn 结束就重复 dispatch。符合条件的
+terminal wait 可以提供 best-effort Host continuation，但 Host 接受 continuation 并不保证
+新的 model turn 已经实际运行。详见
+[Troubleshooting](TROUBLESHOOTING.zh-CN.md#长任务期间-chatgpt-显示-thinking-stopped--thinking-failed)。
 
 ## 第一个安全 prompt
 

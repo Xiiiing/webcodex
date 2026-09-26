@@ -18,6 +18,12 @@ Desktop, CLI, Server, and Runner do **not** need the same Git commit or package 
 6. A missing feature capability disables that operation only. For example, Project Lifecycle still requires `RunnerFeature::ProjectLifecycle`; it must not disable otherwise-supported read, shell or Git operations.
 7. Custom source modifications are the operator's responsibility. Inspecting declared metadata is not code auditing, signature trust evaluation, or a filesystem sandbox.
 
+The #579 Runner observation migration keeps the management contract at `[1, 1]`.
+It changes raw `runtime_status` / `list_runners` projections and their first-party
+consumers, while preserving the management command fields Desktop deserializes.
+It does not require raw observation compatibility with older `/agents` clients.
+See [migration scope](agent/runner-observability.md#upgrade-status).
+
 ### Machine-readable build information
 
 All three binaries support the side-effect-free standalone flag:
@@ -100,7 +106,7 @@ Saving modifies only `WEBCODEX_TOOL_REQUEST_TRACE` in the managed Server environ
 
 Activity's **ChatGPT calls** tab shows actual observed work/calls; **Workflow Sessions** shows durable work progress/Jobs/validation; **System events** shows Desktop-owned service events. IDs are correlation details, not the primary user-facing description.
 
-A completed call without `response_handed_at_ms` is **Execution completed; response handoff not confirmed**. A confirmed handoff means bytes were handed to the MCP client, not proof that a model received or processed them. Streaming start is shown separately from completed handoff.
+A completed call without `response_handed_at_ms` is **Execution completed; response handoff not confirmed**. A confirmed handoff means the response was handed to the HTTP framework, not proof that the MCP client received it or that a model processed it. Streaming start is shown separately from completed handoff.
 
 The canonical `next_call_gap_ms` is attached to the arriving request and measures its gap from a previous non-streaming response. It is **not** evidence that another meaningful call followed the current event. A following meaningful call is only claimed when later canonical activity proves it. The elapsed gap can include networking, Host scheduling, inference, user input, or other time WebCodex cannot observe. The UI does not diagnose “ChatGPT stuck” or model failure from silence.
 

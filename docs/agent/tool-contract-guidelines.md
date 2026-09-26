@@ -19,6 +19,32 @@ belongs so those boundaries do not leak into unrelated mechanical friction.
 
 ## 1. Spend turns on meaning, not syntax
 
+### Bounded bulk exact edits
+
+For repetitive mechanical changes in an explicit file, `apply_text_edits` accepts
+`replace_exact` with `expected_match_count=N` (1..=1024) and a current
+`expected_read_revision`. The Runner replaces every fully contained exact match
+only when the observed count equals N. `occurrence` selects one match and cannot
+be combined with this field; `line_scope` may narrow the counted matches. The
+Runner plans every source range against one original snapshot, checks overlaps
+across the whole file change, and applies the transaction only after every file
+has passed preflight. A count mismatch writes nothing.
+The additive Runner capability is `apply_text_edit_expected_match_count`.
+Servers reject bulk requests before dispatch to an older Runner that lacks it;
+requests without the field keep their existing admission and unique-match behavior.
+
+For nontrivial bulk changes, read the file and revision, optionally call
+`apply_text_edits(dry_run=true)`, inspect the bounded `match_count` and
+`match_ranges`, then send an independent actual request with the still-valid
+guard. The actual request resolves all matches and fences again. A simple,
+obvious bulk edit may be applied directly. Dry-run creates no future mutation
+authority. The compact success `change_summary` reports counts; use
+`show_changes`, `git_diff_hunks`, or `git_review_summary` for semantic review.
+
+Use this exact cardinality contract for known repeated fixtures or struct
+literals instead of an ad-hoc Python or sed global rewrite. It does not infer
+the count, choose an occurrence, use regex, or expand across a glob.
+
 A tool should reject an input when the model must make a new semantic decision.
 If WebCodex already knows the only safe interpretation, prefer deterministic
 normalization and continue the requested work.
@@ -154,6 +180,16 @@ separate compatibility domains and must be handled explicitly.
 Runtime Project identity remains canonical as `agent:<client_id>:<project_id>`. Keep that form for authorization, persistence, audit, Runner routing, diagnostics and explicit API/CLI addressing. A Server-issued `project_ref` is a model-facing selector only: the Server owns a durable mapping scoped to the authenticated caller and pins it to one canonical Project incarnation, including stable root identity. The model may reuse the short ref across windows for the same principal, but no Workflow Session, ClientWindow, MCP session, transport connection, recent activity or Host rewrite participates.
 
 Resolving a `project_ref` must always look up the pinned canonical identity and then run the ordinary current Project resolution/authorization path again. The ref is not a credential, bearer token or capability. If the canonical Project disappears, becomes invisible, loses stable identity, or the same canonical address is later registered for a different root, the old ref fails closed. Never recycle or silently retarget an issued ref. Discovery/bootstrap may expose both `project_ref` and canonical identity; ordinary hot-path results should not repeat them when no model decision depends on that duplication.
+
+The same typed durable-reference layer may issue a principal-scoped `session_ref` such as `~s1` for one exact Workflow Session incarnation. Canonical `wc_sess_*` remains authoritative for Session persistence, audit, diagnostics and internal joins. Business `session_id` and wrapper `recording_session_id` remain separate semantic roles, but either may explicitly carry an already-issued Session ref. Runtime canonicalizes the selector before the role-specific authorization/dispatch path: business targeting still reruns Project visibility, Session authority, lifecycle and guards, while recorder provenance still reruns its independent recorder authorization and never supplies business authority. A Session ref never creates ambient or sticky recorder state. Bootstrap, discovery and handoff may expose both identities, while ordinary hot-path results should avoid redundant duplication.
+
+### Agent continuation selectors
+
+`present_agent_continuation` may take a server-issued `agent_continuation_ref` instead of the explicit `agent_id`, `endpoint_id`, and `expected_controller_generation` tuple. The ref is a durable mapping scoped to the communication principal and pinned to that exact Endpoint generation. It is not a bearer credential, Workflow Session, ClientWindow, or Host binding. Dereference expands the ref to the stored tuple and then runs the ordinary owner, lifecycle, and generation checks. A later rotation, expiry, or detach leaves the old ref stale; it must not be rewritten onto the successor. Canonical ids stay in the Endpoint record, audit, and continuation projection. App-only bind, recover, and wake tools keep the explicit tuple. Keep this mapping separate from Project and Session refs; do not generalize it to Goals, Tasks, or Conversations without a separate contract.
+
+### AgentTask attempt selectors
+
+`start_agent_task_endpoint_continuation` may take a server-issued `attempt_ref` instead of the explicit `task_id`, `attempt_id`, `assignee_agent_id`, `attempt_fence`, and `attempt_controller_generation` tuple. `start_agent_task_attempt` returns that ref for the Attempt it just created, including exact keyed replay. The ref is a durable mapping scoped to the communication principal and pinned to that exact fence and controller generation. It is not a bearer credential and does not weaken the fence. Dereference expands the ref to the stored tuple and then runs the ordinary owner, lease, fence, and generation checks. A later takeover, expiry, replacement, or controller generation change leaves the old ref stale; it must not be rewritten onto the successor. Canonical ids stay on the Attempt record and in the result audit. The request audit records the ref or the canonical ids, and records only whether a fence was supplied. Heartbeat, completion, coding-run, and reconcile keep the explicit tuple. This table is separate from Project, Session, and Agent continuation refs.
 
 ### Model-projection deletion test
 

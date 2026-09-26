@@ -28,6 +28,8 @@ use crate::tool_runtime::{ToolCall, ToolResult, ToolRuntime, ToolSpec};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+pub(super) const WORK_RESULT_APP_RESULT_META_KEY: &str = "webcodex/workResult";
+
 fn filter_specs_for_oauth(mut specs: Vec<ToolSpec>, auth: Option<&AuthContext>) -> Vec<ToolSpec> {
     let oauth_scope_projection = auth.is_some_and(AuthContext::is_oauth_token);
     specs.retain(|spec| {
@@ -210,6 +212,7 @@ fn unwrap_adaptive_runtime_gateway_arguments(
         allowed_wrapper_fields.extend([
             crate::tool_runtime::sessions::TOOL_CALL_RECORDING_SESSION_ID_FIELD,
             crate::tool_runtime::sessions::TOOL_CALL_ACK_SESSION_MESSAGE_IDS_FIELD,
+            crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD,
             crate::tool_runtime::sessions::TOOL_CALL_SESSION_MESSAGE_RESOLUTION_FIELD,
             crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD,
             crate::tool_runtime::control_sidecar::CONTROL_FIELD,
@@ -454,7 +457,15 @@ fn stateless_collaboration_ack_schema() -> Value {
             "type": "string",
             "pattern": "^wc_msg_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"
         },
-        "description": "Proves the current model context still retains the listed ACK-required collaboration messages. Session ACK uses the explicit recorder when present, otherwise an authorized same-Window active Session affinity for the resolved Project; Peer ACK targets the current principal-bound ClientWindow. Repeat while retained. ACK neither resolves messages nor grants authority or gates execution."
+        "description": "Proves the current model context still retains the listed ACK-required collaboration messages. Session ACK uses the explicit recorder when present, otherwise an authorized same-Window active Session affinity for the resolved Project; Peer and Operator ACK target the current principal-bound ClientWindow. Repeat while retained. The historical field name is shared across all three channels. ACK neither resolves messages nor grants authority or gates execution."
+    })
+}
+
+fn stateless_session_ack_ref_schema() -> Value {
+    json!({
+        "type": "string",
+        "maxLength": crate::tool_runtime::sessions::MAX_TOOL_CALL_ACK_REF_CHARS,
+        "description": "Compact request-scoped ACK evidence returned as session_attention.ack_ref for the exact retained Session ACK set represented by that exchange. It acknowledges only that Session set, grants no authority, never resolves messages, and does not apply to Peer ACK."
     })
 }
 
@@ -473,6 +484,11 @@ fn stateless_session_attention_output_schema() -> Value {
                 "enum": ["recording_session", "business_session", "window_affinity"]
             },
             "requires_ack": {"type": "boolean"},
+            "ack_ref": {
+                "type": "string",
+                "maxLength": crate::tool_runtime::sessions::MAX_TOOL_CALL_ACK_REF_CHARS,
+                "description": "Exact compact Session ACK set retained across this exchange; echo on a later request while this context is still retained."
+            },
             "messages": {
                 "type": "array",
                 "maxItems": crate::tool_runtime::SESSION_ATTENTION_MAX_MESSAGES,
@@ -536,7 +552,14 @@ fn insert_stateless_collaboration_ack_property(properties: &mut serde_json::Map<
         crate::tool_runtime::sessions::TOOL_CALL_ACK_SESSION_MESSAGE_IDS_FIELD.to_string(),
         stateless_collaboration_ack_schema(),
     );
+    properties.insert(
+        crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD.to_string(),
+        stateless_session_ack_ref_schema(),
+    );
 }
+
+pub(super) const RECORDING_SESSION_SELECTOR_SCHEMA_PATTERN: &str =
+    "^(~s[1-9][0-9]{0,19}|wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32}))$";
 
 pub(super) fn add_stateless_workflow_recorder_metadata(payload: &mut Value) {
     let Some(tools) = payload.get_mut("tools").and_then(Value::as_array_mut) else {
@@ -562,8 +585,8 @@ pub(super) fn add_stateless_workflow_recorder_metadata(payload: &mut Value) {
             crate::tool_runtime::sessions::TOOL_CALL_RECORDING_SESSION_ID_FIELD.to_string(),
             json!({
                 "type": "string",
-                "pattern": "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$",
-                "description": "Optional explicit recorder provenance for one exact Workflow Session. Never execution authority or a business Session target. When omitted, authorized same-Window affinity may still deliver and ACK Session collaboration without recording this call."
+                "pattern": RECORDING_SESSION_SELECTOR_SCHEMA_PATTERN,
+                "description": "Optional explicit recorder provenance for one exact Workflow Session; accepts canonical wc_sess_* or issued principal-scoped ~sN. Never execution/business authority. Omission may still allow authorized same-Window attention without recording."
             }),
         );
         insert_stateless_collaboration_ack_property(properties);
@@ -774,6 +797,21 @@ fn attach_app_tool_content_fallback(result: &mut Value) {
         return;
     };
     result["content"] = json!([{ "type": "text", "text": text }]);
+}
+
+fn attach_work_result_app_private_result(result: &mut Value) {
+    let Some(structured) = result.get("structuredContent").cloned() else {
+        return;
+    };
+    let meta = result.as_object_mut().and_then(|result| {
+        result
+            .entry("_meta")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+    });
+    if let Some(meta) = meta {
+        meta.insert(WORK_RESULT_APP_RESULT_META_KEY.to_string(), structured);
+    }
 }
 
 fn safe_continuation_dispatch_observation(value: Option<&Value>) -> &'static str {
@@ -1108,7 +1146,9 @@ pub(super) async fn handle_list(
 pub(super) enum HostFileImportTrustReason {
     Trusted,
     TrustedLoopbackApiToken,
+    TrustedLoopbackBootstrap,
     LoopbackApiTokenTrustRequiresLoopback,
+    LoopbackBootstrapTrustRequiresLoopback,
     MissingConfig,
     MissingDatabase,
     MissingAuth,
@@ -1125,8 +1165,12 @@ impl HostFileImportTrustReason {
         match self {
             Self::Trusted => "trusted",
             Self::TrustedLoopbackApiToken => "trusted_loopback_api_token",
+            Self::TrustedLoopbackBootstrap => "trusted_loopback_bootstrap",
             Self::LoopbackApiTokenTrustRequiresLoopback => {
                 "loopback_api_token_trust_requires_loopback"
+            }
+            Self::LoopbackBootstrapTrustRequiresLoopback => {
+                "loopback_bootstrap_trust_requires_loopback"
             }
             Self::MissingConfig => "missing_config",
             Self::MissingDatabase => "missing_database",
@@ -1214,21 +1258,41 @@ pub(super) fn mcp_host_file_import_trust_decision_from_state(
     let Some(auth) = auth else {
         return base;
     };
-    if auth.kind == crate::auth::AuthKind::ApiToken
-        && auth.token_kind.as_deref() == Some("user")
-        && config.oauth2.trust_loopback_api_token_mcp_file_import
-    {
-        if config.is_loopback_bound() {
+    if config.oauth2.trust_loopback_api_token_mcp_file_import {
+        let loopback_reasons = if auth.kind == crate::auth::AuthKind::ApiToken
+            && auth.token_kind.as_deref() == Some("user")
+        {
+            Some((
+                HostFileImportTrustReason::TrustedLoopbackApiToken,
+                HostFileImportTrustReason::LoopbackApiTokenTrustRequiresLoopback,
+            ))
+        } else if auth.kind == crate::auth::AuthKind::Bootstrap
+            && auth.is_bootstrap()
+            && config
+                .token
+                .as_deref()
+                .is_some_and(|token| !token.trim().is_empty())
+        {
+            Some((
+                HostFileImportTrustReason::TrustedLoopbackBootstrap,
+                HostFileImportTrustReason::LoopbackBootstrapTrustRequiresLoopback,
+            ))
+        } else {
+            None
+        };
+        if let Some((trusted_reason, non_loopback_reason)) = loopback_reasons {
+            if config.is_loopback_bound() {
+                return HostFileImportTrustDecision {
+                    trust: HostFileImportTrust::TrustedMcpHostFile,
+                    reason: trusted_reason,
+                    ..base
+                };
+            }
             return HostFileImportTrustDecision {
-                trust: HostFileImportTrust::TrustedMcpHostFile,
-                reason: HostFileImportTrustReason::TrustedLoopbackApiToken,
+                reason: non_loopback_reason,
                 ..base
             };
         }
-        return HostFileImportTrustDecision {
-            reason: HostFileImportTrustReason::LoopbackApiTokenTrustRequiresLoopback,
-            ..base
-        };
     }
     if !auth.is_oauth_token() {
         return HostFileImportTrustDecision {
@@ -1410,6 +1474,15 @@ pub(super) fn strip_recording_session_id(arguments: &mut Value) -> Result<Option
     }
 }
 
+fn canonicalize_recording_session_id(
+    runtime: &crate::tool_runtime::ToolRuntime,
+    raw: Option<String>,
+    auth: Option<&crate::auth::AuthContext>,
+) -> Result<Option<String>, String> {
+    raw.map(|raw| runtime.canonicalize_explicit_session_selector(&raw, auth))
+        .transpose()
+}
+
 pub(super) fn strip_stateless_ack_session_message_ids(
     arguments: &mut Value,
 ) -> Result<Vec<String>, String> {
@@ -1455,6 +1528,31 @@ pub(super) fn strip_stateless_ack_session_message_ids(
         }
     }
     Ok(normalized)
+}
+
+pub(super) fn strip_stateless_ack_ref(arguments: &mut Value) -> Result<Option<String>, String> {
+    let Some(object) = arguments.as_object_mut() else {
+        return Ok(None);
+    };
+    match object.remove(crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD) {
+        None => Ok(None),
+        Some(Value::String(value)) => {
+            let value = value.trim();
+            if value.is_empty()
+                || value.len() > crate::tool_runtime::sessions::MAX_TOOL_CALL_ACK_REF_CHARS
+            {
+                return Err(format!(
+                    "field '{}' must be a non-empty bounded string",
+                    crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD
+                ));
+            }
+            Ok(Some(value.to_string()))
+        }
+        Some(_) => Err(format!(
+            "field '{}' must be a non-empty bounded string",
+            crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD
+        )),
+    }
 }
 
 pub(super) fn strip_stateless_session_message_resolution(
@@ -1679,6 +1777,20 @@ pub(super) async fn handle_call(
     } else {
         Vec::new()
     };
+    let ack_ref = if stateless_2026 {
+        match strip_stateless_ack_ref(&mut params.arguments) {
+            Ok(ack_ref) => ack_ref,
+            Err(message) => {
+                if let Some(lc) = lifecycle.as_deref() {
+                    lc.dispatch_failed("invalid_arguments");
+                    lc.dispatch_finished(false, Some(false), "invalid_arguments");
+                }
+                return McpOutcome::BadRequest(rpc_error(id, -32602, message));
+            }
+        }
+    } else {
+        None
+    };
     // Strip private control payloads before tracing, canonical argument parsing,
     // specialized dispatch, and audit. Legacy/hidden adapters reject explicitly.
     let control = match crate::tool_runtime::control_sidecar::strip_control_sidecars(
@@ -1769,6 +1881,17 @@ pub(super) async fn handle_call(
         let ToolCall::PluginTool(plugin) = call else {
             unreachable!("plugin_tool parser must yield ToolCall::PluginTool");
         };
+        let recording_session_id =
+            match canonicalize_recording_session_id(runtime, recording_session_id, auth) {
+                Ok(session_id) => session_id,
+                Err(message) => {
+                    if let Some(lc) = lifecycle.as_deref() {
+                        lc.dispatch_failed("invalid_arguments");
+                        lc.dispatch_finished(false, Some(false), "invalid_arguments");
+                    }
+                    return McpOutcome::BadRequest(rpc_error(id, -32602, message));
+                }
+            };
         if let Some(lc) = lifecycle.as_deref() {
             lc.capture_payload_lazy("effective_arguments", || {
                 crate::plugin_gateway::audit_arguments(&params.arguments)
@@ -1876,6 +1999,18 @@ pub(super) async fn handle_call(
                 return McpOutcome::BadRequest(rpc_error(id, -32602, message));
             }
         };
+        // Resolve once so a valid short recorder can drive the same best-effort
+        // fallback Project projection as its canonical id. Defer ref errors until
+        // business parsing succeeds to preserve the existing fallback precedence.
+        let canonical_recording_session_id =
+            canonicalize_recording_session_id(runtime, recording_session_id.clone(), auth);
+        let recorder_project = || {
+            canonical_recording_session_id
+                .as_ref()
+                .ok()
+                .and_then(|session_id| session_id.as_deref())
+                .and_then(|session_id| runtime.sessions.session_project(session_id).flatten())
+        };
         let policy = match crate::ssh_resource_gateway::operation_policy(&params.arguments) {
             Ok(policy) => policy,
             Err(_) => {
@@ -1886,9 +2021,7 @@ pub(super) async fn handle_call(
                 }
                 let mut result =
                     crate::ssh_resource_gateway::call(runtime, params.arguments, auth).await;
-                let project = recording_session_id
-                    .as_deref()
-                    .and_then(|session_id| runtime.sessions.session_project(session_id).flatten());
+                let project = recorder_project();
                 runtime.add_peer_collaboration_to_mcp_call_result(
                     &mut result,
                     auth,
@@ -1922,9 +2055,7 @@ pub(super) async fn handle_call(
                 }
                 let mut result =
                     crate::ssh_resource_gateway::call(runtime, params.arguments, auth).await;
-                let project = recording_session_id
-                    .as_deref()
-                    .and_then(|session_id| runtime.sessions.session_project(session_id).flatten());
+                let project = recorder_project();
                 runtime.add_peer_collaboration_to_mcp_call_result(
                     &mut result,
                     auth,
@@ -1944,6 +2075,16 @@ pub(super) async fn handle_call(
                         result
                     },
                 ));
+            }
+        };
+        let recording_session_id = match canonical_recording_session_id {
+            Ok(session_id) => session_id,
+            Err(message) => {
+                if let Some(lc) = lifecycle.as_deref() {
+                    lc.dispatch_failed("invalid_arguments");
+                    lc.dispatch_finished(false, Some(false), "invalid_arguments");
+                }
+                return McpOutcome::BadRequest(rpc_error(id, -32602, message));
             }
         };
         let invocation = match crate::ssh_resource_gateway::invoke(
@@ -2050,6 +2191,8 @@ pub(super) async fn handle_call(
     let job_terminal_continuation_app_admitted = server_mcp_apps_enabled && stateless_2026;
     let app_only_goal_plan_sync = goal_plan_app_admitted && params.name == "goal_plan_sync";
     let app_only_work_result_state = work_result_app_admitted && params.name == "work_result_state";
+    let app_only_work_result_send_message =
+        work_result_app_admitted && params.name == "work_result_send_message";
     let app_only_changes_file_diff = work_result_app_admitted && params.name == "changes_file_diff";
     let app_only_agent_continuation =
         agent_continuation_app_admitted && is_agent_continuation_app_tool_name(&params.name);
@@ -2061,6 +2204,7 @@ pub(super) async fn handle_call(
             .any(|spec| spec.name == params.name);
     let direct_denied = !app_only_goal_plan_sync
         && !app_only_work_result_state
+        && !app_only_work_result_send_message
         && !app_only_changes_file_diff
         && !app_only_agent_continuation
         && !app_only_job_terminal_continuation
@@ -2085,7 +2229,8 @@ pub(super) async fn handle_call(
     // tool identity. A few MCP-only validations still happen before the
     // shared ToolRuntime kernel; preserve those failed attempts in generic
     // telemetry without creating a second record for normal kernel calls.
-    let mut pre_kernel_model_ergonomics = ModelErgonomicsTimer::start(&params.name);
+    let mut pre_kernel_model_ergonomics =
+        ModelErgonomicsTimer::start_with_arguments(&params.name, &params.arguments);
     let artifact_presentation =
         resources::project_artifact_presentation_mode(&params.name, &params.arguments);
     let resource_tool_call = match resources::prepare_tool_call(
@@ -2138,9 +2283,30 @@ pub(super) async fn handle_call(
     // recording_session_id before the kernel sees any of these calls.
     if matches!(
         params.name.as_str(),
-        "goal_plan_sync" | "work_result_state" | "changes_file_diff"
+        "goal_plan_sync" | "work_result_state" | "work_result_send_message" | "changes_file_diff"
     ) {
         session_id = None;
+    } else {
+        session_id = match canonicalize_recording_session_id(runtime, session_id, auth) {
+            Ok(session_id) => session_id,
+            Err(message) => {
+                if let Some(lc) = lifecycle.as_deref() {
+                    lc.dispatch_failed("invalid_arguments");
+                    lc.dispatch_finished(false, Some(false), "invalid_arguments");
+                }
+                if let (Some(slot), Some(timer)) = (
+                    model_ergonomics_out.as_deref_mut(),
+                    pre_kernel_model_ergonomics.take(),
+                ) {
+                    *slot = Some(
+                        timer
+                            .finish()
+                            .record_for_pre_result_failure("invalid_arguments"),
+                    );
+                }
+                return McpOutcome::BadRequest(rpc_error(id, -32602, message));
+            }
+        };
     }
     let session_message_resolution = if stateless_2026 {
         match strip_stateless_session_message_resolution(&mut params.arguments) {
@@ -2231,6 +2397,7 @@ pub(super) async fn handle_call(
             ToolInvocationMetadata {
                 control,
                 ack_session_message_ids,
+                ack_ref,
                 session_message_resolution,
                 context_request,
             },
@@ -2324,7 +2491,12 @@ pub(super) async fn handle_call(
             mcp_runtime_tool_result_fallback(result, result_presentation)
         }
     };
-    if app_only_agent_continuation || app_only_job_terminal_continuation {
+    if app_only_work_result_state
+        || app_only_work_result_send_message
+        || app_only_changes_file_diff
+        || app_only_agent_continuation
+        || app_only_job_terminal_continuation
+    {
         // ChatGPT production has been observed to complete View-originated
         // tools/call server-side while not forwarding structuredContent back to
         // the View. Keep structuredContent canonical, but duplicate this bounded
@@ -2332,6 +2504,12 @@ pub(super) async fn handle_call(
         // These tools are ModelHidden/app-visible only, so ordinary model tool
         // results retain the compact text fallback.
         attach_app_tool_content_fallback(&mut result);
+    }
+    if app_enabled && params.name == "present_work_result" {
+        // Initial model-originated presentation keeps normal model content compact.
+        // The private MCP App result channel lets the mounted View recover the exact
+        // bounded Work Result when a Host omits structuredContent from tool-result.
+        attach_work_result_app_private_result(&mut result);
     }
     if app_only_agent_continuation {
         log_agent_continuation_app_result(

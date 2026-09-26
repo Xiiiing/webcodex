@@ -128,6 +128,10 @@ pub struct WindowActivityEventRecord {
     pub project: Option<String>,
     pub status: String,
     pub meaningful: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observed_job_ids: Vec<String>,
     pub recorder_gap_session_id: Option<String>,
     pub workflow_links: Vec<WindowWorkflowLinkRecord>,
     /// Bounded Code Mode composition object extracted from sanitized ActionAudit
@@ -146,6 +150,8 @@ pub struct WindowActivityEventRecord {
     pub window_transition_kind: Option<String>,
     pub response_streaming: Option<bool>,
     pub window_continuity_eligible: Option<bool>,
+    /// HTTP response status from the WebCodex handler, if recorded.
+    pub http_status: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

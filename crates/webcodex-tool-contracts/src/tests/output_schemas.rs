@@ -448,6 +448,15 @@ fn agent_identity_listing_readiness_schema_is_sparse_and_non_authoritative() {
         .unwrap()
         .iter()
         .any(|field| field == "production_auto_resume_available"));
+    assert!(agent["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "agent_continuation_ref"));
+    assert_eq!(
+        properties["agent_continuation_ref"]["anyOf"][0]["pattern"],
+        crate::AGENT_CONTINUATION_REF_PATTERN
+    );
     for forbidden in [
         "client_window",
         "client_window_key",
@@ -503,6 +512,26 @@ fn job_terminal_continuation_output_schemas_are_sparse_and_private_app_payload_i
     assert_eq!(automatic_message["maxLength"], 1024);
     let serialized = serde_json::to_string(&prepare).unwrap();
     assert!(!serialized.contains("binding_id"));
+}
+
+#[test]
+fn start_agent_task_attempt_schema_returns_ref_without_replacing_fence() {
+    let schema = output_schema_for_tool("start_agent_task_attempt");
+    let properties = schema["properties"]["output"]["properties"]
+        .as_object()
+        .unwrap();
+    assert!(properties.contains_key("attempt_fence"));
+    assert!(properties.contains_key("attempt_ref"));
+    assert!(properties["attempt_ref"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("Not a credential"));
+    let read = output_schema_for_tool("read_agent_task");
+    let latest_attempt = &read["properties"]["output"]["properties"]["task"]["properties"]
+        ["summary"]["properties"]["latest_attempt"]["anyOf"][0];
+    let read_properties = latest_attempt["properties"].as_object().unwrap();
+    assert!(!read_properties.contains_key("attempt_ref"));
+    assert!(!read_properties.contains_key("attempt_fence"));
 }
 
 #[test]
@@ -1906,7 +1935,7 @@ fn key_tool_output_schemas_include_expected_fields() {
         "auth_enabled",
         "configured_public_url",
         "effective_config",
-        "agents",
+        "runners",
         "projects",
         "jobs",
         "tools",
@@ -1917,6 +1946,13 @@ fn key_tool_output_schemas_include_expected_fields() {
             has_output_field("runtime_status", field),
             "runtime_status missing {field}"
         );
+    }
+    assert!(!has_output_field("runtime_status", "agents"));
+    for field in ["runners", "summary", "count"] {
+        assert!(has_output_field("list_runners", field));
+    }
+    for legacy in ["agents", "clients"] {
+        assert!(!has_output_field("list_runners", legacy));
     }
     for field in ["projects", "count", "recommended_for_smoke"] {
         assert!(

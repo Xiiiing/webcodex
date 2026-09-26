@@ -201,7 +201,9 @@ impl AppState {
                     )
                     .await
                     .ok();
-                    let active = observed.as_ref().and_then(runtime_shell::observed_active_jobs);
+                    let active = observed
+                        .as_ref()
+                        .and_then(runtime_shell::observed_active_jobs);
                     if active != Some(0) && !request.confirm_interrupt {
                         return Err(diagnostics::diagnostic_error(
                             "runtime_switch_jobs_confirmation_required",
@@ -299,6 +301,18 @@ impl AppState {
                 drop(slot);
                 return crate::platform::opener::url(
                     "https://github.com/yyjeqhc/webcodex/issues/new",
+                );
+            }
+            ResourceKind::Contributing => {
+                drop(slot);
+                return crate::platform::opener::url(
+                    "https://github.com/yyjeqhc/webcodex/blob/main/CONTRIBUTING.md",
+                );
+            }
+            ResourceKind::DesktopDevelopment => {
+                drop(slot);
+                return crate::platform::opener::url(
+                    "https://github.com/yyjeqhc/webcodex/blob/main/docs/DESKTOP_DEVELOPMENT.md",
                 );
             }
             ResourceKind::AppData => core.data_dir.clone(),
@@ -413,7 +427,7 @@ impl DesktopCore {
         &mut self,
         cancellation: &CancellationContext,
     ) -> DesktopResult<()> {
-        let identity = identity_from_config(&self.config)
+        let identity = runner_identity_from_config(&self.config)
             .ok_or_else(|| diagnostics::diagnostic_error("runtime_identity_unavailable"))?;
         self.adapter.ensure_binaries(cancellation).await?;
         runtime_selection::verify_resolved_files(self.adapter.binaries()?).await?;

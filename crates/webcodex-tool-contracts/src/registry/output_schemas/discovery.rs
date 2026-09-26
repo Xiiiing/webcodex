@@ -7,6 +7,25 @@ use super::common::{
 
 pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
     match name {
+        "current_window_activity" => Some(wrapped_output_schema(vec![
+            ("status", json!({"type":"string","enum":["available","unavailable"]})),
+            ("reason_code", schema_type("string", "Bounded reason when current Window, authenticated principal, runtime:read, or activity storage is unavailable.")),
+            ("events", json!({"type":"array","maxItems":50,"description":"Newest first, sanitized current-Window events after principal and current Project visibility filtering. No arguments, outputs, raw payloads, native paths, credentials, or principal identifiers.","items":{"type":"object","additionalProperties":false,"properties":{
+                "request_observed_at_ms":{"type":"integer"},
+                "response_handed_at_ms":{"type":"integer","description":"WebCodex response constructed and handed to HTTP framework / handler returned. No client, Host, ChatGPT, or model-continuation receipt is implied."},
+                "started_at_ms":{"type":"integer"},"ended_at_ms":{"type":"integer"},"duration_ms":{"type":"integer"},
+                "service_ms":{"type":"integer"},
+                "next_call_gap_ms":{"type":["integer","null"],"description":"Observed only from a later canonical meaningful call in this principal and Window; null means no serial gap was observed, never elapsed time."},
+                "cycle_ms":{"type":"integer"},"window_transition_kind":{"type":"string"},"response_streaming":{"type":"boolean"},
+                "method":{"type":"string"},"tool_name":{"type":"string"},"activity_presentation":{"type":"string"},"activity_kind":{"type":"string"},
+                "project":{"type":"string"},"status":{"type":"string"},"http_status":{"type":"integer"},"meaningful":{"type":"boolean"},
+                "server_trace_id":{"type":"string"},"workflow_sessions":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"workflow_session_id":{"type":"string"},"project":{"type":"string"},"relation":{"type":"string"}},"required":["workflow_session_id","relation"]}},
+                "code_mode_composition":open_object_schema("Validated bounded nested WebCodex Code Mode composition when available.")
+            },"required":["started_at_ms","ended_at_ms","duration_ms","method","status","meaningful","workflow_sessions"]}})),
+            ("summary", current_window_activity_summary_schema()),
+            ("active_requests", json!({"type":"array","maxItems":8,"items":{"type":"object","additionalProperties":false,"properties":{"server_trace_id":{"type":"string"},"tool_name":{"type":["string","null"]},"started_at_ms":{"type":"integer"}},"required":["server_trace_id","tool_name","started_at_ms"]}})),
+            ("truncated", schema_type("boolean", "Visible events from the bounded recent scan were omitted by the presentation or serialized byte bound; this is not a lifetime-history completeness claim.")),
+        ])),
         "runtime_status" => Some(wrapped_output_schema(vec![
             ("service", schema_type("string", "Runtime service name.")),
             (
@@ -75,8 +94,8 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
                 open_object_schema("Project counts from the Runner registry. Prefer projects.effective for model-facing status."),
             ),
             (
-                "agents",
-                open_object_schema("Runner counts and client summaries. Per-client host_context is bounded Runner-configured advisory data, not observed truth or authority. job_concurrency contains the static Runner limit plus caller-visible running and queued counts. Canonical top-level counts are count, online_count, and stale_count in full, compact, and summary_only output."),
+                "runners",
+                open_object_schema("Runner counts and a single clients collection using runner_instance_id and runner_protocol_generation; summary contains only aggregate counts. Omitted in focused compact/summary mode. Per-client host_context is bounded Runner-configured advisory data, not observed truth or authority. job_concurrency contains the static Runner limit plus caller-visible running and queued counts. Canonical top-level counts are count, online_count, and stale_count in full, compact, and summary_only output."),
             ),
             (
                 "jobs",
@@ -132,12 +151,12 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
         ])),
         "list_runners" => Some(wrapped_output_schema(vec![
             (
-                "agents",
-                array_schema(open_object_schema("Runner summary including bounded Runner-configured host_context advisory data, never authority or proof of current state, plus job_concurrency limit/running/queued facts."), "Legacy compatibility key containing Runner summaries."),
+                "runners",
+                array_schema(open_object_schema("Runner summary including bounded Runner-configured host_context advisory data, never authority or proof of current state, plus job_concurrency limit/running/queued facts."), "Canonical Runner collection; per-Runner identity uses runner_instance_id and runner_protocol_generation."),
             ),
             (
-                "clients",
-                array_schema(open_object_schema("Runner client summary including job_concurrency limit/running/queued facts."), "Runner client summaries."),
+                "summary",
+                open_object_schema("Aggregate count, online, offline, and stale counts; Runner entries appear only in runners."),
             ),
             ("count", schema_type("integer", "Runner/client count.")),
         ])),
@@ -285,6 +304,10 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             (
                 "execution",
                 execution_selection_schema(),
+            ),
+            (
+                "host_orchestration",
+                host_orchestration_schema(),
             ),
             (
                 "schema_version",
@@ -470,6 +493,62 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
     }
 }
 
+fn current_window_activity_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Descriptive factual metrics over the bounded visible event scan. Gap fields are WebCodex-observed serial request timing only; they do not identify Host cells, model turns, thinking time, frontend delay, network delay, or user delay.",
+        "additionalProperties": false,
+        "properties": {
+            "events_scanned": {"type":"integer"},
+            "meaningful_call_count": {"type":"integer"},
+            "observe_jobs_count": {"type":"integer"},
+            "observe_jobs_ratio_denominator": {"type":"integer"},
+            "observe_jobs_ratio": {"type":["number","null"]},
+            "handler_returned_count": {"type":"integer"},
+            "missing_handoff_count": {"type":"integer"},
+            "overlapping_call_count": {"type":"integer","description":"Count of persisted window_transition_kind=overlap facts; never inferred from a short gap."},
+            "serial_call_count": {"type":"integer"},
+            "observed_next_call_gap_count": {"type":"integer"},
+            "gaps_lt_1s": {"type":"integer","description":"Cumulative count of observed serial next-call gaps below 1 second."},
+            "gaps_lt_2s": {"type":"integer","description":"Cumulative count of observed serial next-call gaps below 2 seconds; includes gaps_lt_1s."},
+            "gaps_lt_5s": {"type":"integer","description":"Cumulative count of observed serial next-call gaps below 5 seconds; includes the lower less-than thresholds."},
+            "gaps_ge_5s": {"type":"integer","description":"Cumulative count of observed serial next-call gaps at least 5 seconds."},
+            "gaps_ge_10s": {"type":"integer","description":"Cumulative count of observed serial next-call gaps at least 10 seconds; a subset of gaps_ge_5s."},
+            "gaps_ge_30s": {"type":"integer","description":"Cumulative count of observed serial next-call gaps at least 30 seconds."},
+            "gaps_ge_120s": {"type":"integer","description":"Cumulative count of observed serial next-call gaps at least 120 seconds."},
+            "total_service_ms": {"type":"integer"},
+            "total_positive_observed_next_call_gap_ms": {"type":"integer"},
+            "max_service_ms": {"type":["integer","null"]},
+            "max_observed_next_call_gap_ms": {"type":["integer","null"]},
+            "returned_nested_code_mode_child_count": {"type":"integer"}
+        },
+        "required": [
+            "events_scanned",
+            "meaningful_call_count",
+            "observe_jobs_count",
+            "observe_jobs_ratio_denominator",
+            "observe_jobs_ratio",
+            "handler_returned_count",
+            "missing_handoff_count",
+            "overlapping_call_count",
+            "serial_call_count",
+            "observed_next_call_gap_count",
+            "gaps_lt_1s",
+            "gaps_lt_2s",
+            "gaps_lt_5s",
+            "gaps_ge_5s",
+            "gaps_ge_10s",
+            "gaps_ge_30s",
+            "gaps_ge_120s",
+            "total_service_ms",
+            "total_positive_observed_next_call_gap_ms",
+            "max_service_ms",
+            "max_observed_next_call_gap_ms",
+            "returned_nested_code_mode_child_count"
+        ]
+    })
+}
+
 fn tool_manifest_invocation_route_schema() -> Value {
     json!({
         "type": "object",
@@ -538,6 +617,34 @@ fn tool_manifest_invocation_route_schema() -> Value {
             "fallback",
             "tool_manifest_registers_host_tool",
             "discovery_effect"
+        ]
+    })
+}
+
+fn host_orchestration_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Static guidance-only Host-native orchestration hints derived from ToolDefinition. They grant no authority and do not change ToolCompositionPolicy, effects, permissions, retry, idempotency, or runtime scheduling.",
+        "additionalProperties": false,
+        "properties": {
+            "guidance_only": {"type": "boolean", "const": true},
+            "concurrency": {
+                "type": "string",
+                "enum": ["unspecified", "independent_parallel_read", "sequential"]
+            },
+            "native_batch_field": {
+                "anyOf": [
+                    {"type": "string", "maxLength": 64},
+                    {"type": "null"}
+                ]
+            },
+            "compound_preferred": {"type": "boolean"}
+        },
+        "required": [
+            "guidance_only",
+            "concurrency",
+            "native_batch_field",
+            "compound_preferred"
         ]
     })
 }

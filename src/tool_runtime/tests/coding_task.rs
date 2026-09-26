@@ -1007,6 +1007,7 @@ async fn coding_workflow_tracked_modified_is_nonblocking_and_allows_continued_ed
             new_text: Some("    println!(\"user-wip-plus-agent\");".to_string()),
             anchor_text: None,
             occurrence: None,
+            expected_match_count: None,
             line_scope: None,
         }],
         None,
@@ -1036,6 +1037,7 @@ async fn coding_workflow_tracked_modified_is_nonblocking_and_allows_continued_ed
             new_text: Some("    println!(\"user-wip-plus-agent\");".to_string()),
             anchor_text: None,
             occurrence: None,
+            expected_match_count: None,
             line_scope: None,
         }],
         None,
@@ -1506,7 +1508,6 @@ async fn finish_coding_task_emits_one_parser_ready_changes_presentation_in_full_
                 "tool": "present_work_result",
                 "arguments": {
                     "project": project,
-                    "session_id": session_id,
                 }
             })
         );

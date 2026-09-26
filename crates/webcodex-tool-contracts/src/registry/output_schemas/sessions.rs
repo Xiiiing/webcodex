@@ -52,7 +52,8 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
                     "True after the in-memory Session context/event commit. JSON ledger persistence may still be pending in the background writer.",
                 ),
             ),
-            ("session_id", schema_type("string", "Opaque session id.")),
+            ("session_id", schema_type("string", "Canonical wc_sess_* Workflow Session id.")),
+            ("session_ref", schema_type("string", "Server-issued principal-scoped ~sN selector for this exact Workflow Session. Selector only; use re-runs ordinary authorization and lifecycle checks.")),
             (
                 "project",
                 nullable_schema("string", "Optional project associated with the task."),
@@ -102,7 +103,8 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             ),
         ])),
         "session_summary" => Some(wrapped_output_schema(vec![
-            ("session_id", schema_type("string", "Opaque session id.")),
+            ("session_id", schema_type("string", "Canonical wc_sess_* Workflow Session id.")),
+            ("session_ref", schema_type("string", "Server-issued principal-scoped ~sN selector for this exact Workflow Session. Selector only; use re-runs ordinary authorization and lifecycle checks.")),
             (
                 "project",
                 nullable_schema("string", "Optional project associated with the task."),
@@ -282,8 +284,13 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
         "validation_summary" => Some(validation_summary_tool_output_schema()),
         "present_work_result" | "work_result_state" => Some(wrapped_output_schema(vec![(
             "work_result",
-            open_object_schema("Bounded Work Result for one exact project-scoped Workflow Session. Presentation and explicit App state reads expose live workspace, validation, review, and Session activity; after a non-blocking current-attempt finish_coding_task closeout they may also expose the retained sealed final_changes snapshot."),
-        )])),
+            open_object_schema("Bounded persistent card state for one exact Project and current client Window. Presentation and App refreshes expose the same bounded Window ActionAudit activity used by WebUI, including observe/diagnostic actions; Window collaboration is a read-only Operator/peer transcript independent of Sessions; linked Session evidence and sealed final_changes are optional."),
+        )])),        "work_result_send_message" => Some(wrapped_output_schema(vec![
+            ("success", schema_type("boolean", "Always true on success.")),
+            ("message_id", schema_type("string", "Created or replayed wc_msg_* message id.")),
+            ("replayed", schema_type("boolean", "True when the exact delivery key replayed an already retained message.")),
+            ("state_changed", schema_type("boolean", "True only when a new message was created.")),
+        ])),
         "changes_file_diff" => Some(wrapped_output_schema(vec![(
             "changes_file_diff",
             open_object_schema("Bounded lazy unified diff for one advertised path in the Work Result sealed final snapshot."),
@@ -468,6 +475,10 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             (
                 "session_id",
                 schema_type("string", "Business session id being handed off."),
+            ),
+            (
+                "session_ref",
+                schema_type("string", "Server-issued principal-scoped ~sN selector for the exact handed-off Session. It grants no authority and never retargets."),
             ),
             (
                 "project",
