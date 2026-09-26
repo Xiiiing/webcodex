@@ -31,6 +31,8 @@ These automated results have been confirmed for the current branch at this check
 - Runtime Console registry: 301 tests; Runner computer-use: 6 tests; CLI: 424 tests passed (including 7 environment adapter tests); packaging/release scripts: 306 tests.
 - Linux `cargo check` passed for Server, CLI, and Runner.
 
+After integration with upstream `2f5d34b4`, Web runtime coverage is 125 tests plus 2 build tests, the Runner registry has 304 passing tests, and Runtime Console HTTP has 47 passing tests. Web typecheck, build, `check:dist`, Linux Server/CLI/Runner compilation, and formatting were checked again. The source-deployment evidence below remains tied to its original revision.
+
 ## Linux source deployment evidence
 
 On 2026-09-26, Ubuntu 24.04.4 x64 was used for a local source deployment of version `0.4.3`, source `31940d7e8f5786b727735d121cde2738cf07668b`, with `git_dirty: false` on CLI, Server, Runner, and Desktop. This is a development snapshot, not an installer release.
@@ -107,6 +109,8 @@ A successful cross-compiled build or package inspection is useful packaging evid
 - Server Runtime Console HTTP：44 项；runtime status HTTP：4 项。
 - Runtime Console registry：301 项；Runner computer-use：6 项；CLI：424 项通过（其中包含 7 项 environment adapter 测试）；打包/Release scripts：306 项。
 - Linux 上 Server、CLI 和 Runner 的 `cargo check` 通过。
+
+合并上游 `2f5d34b4` 后，Web runtime 为 125 项测试和 2 项 build 测试，Runner registry 为 304 项通过，Runtime Console HTTP 为 47 项通过。已重新检查 Web typecheck、build、`check:dist`、Linux Server/CLI/Runner 编译及格式。下文源码部署证据仍对应原始部署修订。
 
 ### Linux 源码部署证据
 

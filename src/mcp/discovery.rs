@@ -35,6 +35,7 @@ pub(super) fn compact_tool(tool: &mut Value) {
     if let Some(schema) = tool.get_mut("inputSchema") {
         compact_input_descriptions(schema);
         compact_control_sidecar(schema);
+        compact_window_reply_sidecar(schema);
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
             for (field, property) in properties {
                 if let (Some(description), Some(Value::String(copy))) = (
@@ -74,6 +75,16 @@ pub(super) fn compact_tool(tool: &mut Value) {
         }
         compact_discovery_validation_annotations(schema);
     }
+}
+
+fn compact_window_reply_sidecar(schema: &mut Value) {
+    let Some(reply) = schema
+        .pointer_mut("/properties/window_reply")
+        .filter(|value| value.is_object())
+    else {
+        return;
+    };
+    *reply = serde_json::json!({"type": "object"});
 }
 
 fn compact_control_sidecar(schema: &mut Value) {
@@ -137,10 +148,6 @@ fn common_input_description(tool: &str, field: &str) -> Option<&'static str> {
             "Total runtime seconds; default 60, clamped to 3600.",
         ("cargo_check" | "cargo_test", "timeout_secs") =>
             "Total validation runtime seconds, clamped to 3600. Defaults vary per tool.",
-        ("run_process" | "run_script" | "run_skill_resource" | "cargo_check" | "cargo_test" | "go_test", "sync_wait_secs") =>
-            "Same-execution Job handoff grace; default 10s, clamped to 55s and timeout. Never extends runtime or retries.",
-        ("run_shell", "sync_wait_secs") =>
-            "Same-execution Job handoff grace; default 10s, clamped to 55s and timeout; controls return only. Named Session SSH unsupported.",
         ("run_process" | "run_shell", "assertion_name") =>
             "Validation label; reuse after a fix to correlate evidence. Inert unless execution is validation-like.",
         _ => return None,

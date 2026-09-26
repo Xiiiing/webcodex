@@ -65,7 +65,8 @@ use tools::{
     mcp_tools_list_payload_with_compact_and_app, mcp_tools_list_payload_with_features_for_auth,
     strip_recording_session_id, strip_stateless_ack_ref, strip_stateless_ack_session_message_ids,
     strip_stateless_context_request, strip_stateless_session_message_resolution,
-    take_last_mcp_host_file_import_trust_decision, HostFileImportTrustReason, McpToolCallParams,
+    strip_stateless_window_reply, take_last_mcp_host_file_import_trust_decision,
+    HostFileImportTrustReason, McpToolCallParams,
 };
 
 /// Hard upper bound on a single MCP JSON-RPC dispatch, applied in `mcp_post`.
@@ -155,19 +156,25 @@ fn finalize_mcp_tool_observability(
 
     // Keep the request active until its completed observation is durable. A
     // detector must never see neither the active call nor its completed work.
-    let evidence_recorded = if let (Some(audit), Some((event, audit_timing))) = (audit, audit_event)
-    {
-        audit.record_with_completion(
-            event,
-            audit_timing,
-            timing,
-            transition,
-            streaming,
-            continuity_eligible,
-        )
-    } else {
-        false
-    };
+    let evidence_recorded =
+        if let (Some(audit), Some((mut event, audit_timing))) = (audit, audit_event) {
+            if let Some(previous) = live_window_request
+                .as_ref()
+                .and_then(|guard| guard.previous_meaningful_call())
+            {
+                event.summary["previous_meaningful_call"] = json!(previous);
+            }
+            audit.record_with_completion(
+                event,
+                audit_timing,
+                timing,
+                transition,
+                streaming,
+                continuity_eligible,
+            )
+        } else {
+            false
+        };
     if let Some(active) = live_window_request.take() {
         active.complete(timing, continuity_eligible, evidence_recorded);
     }

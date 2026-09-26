@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeV2Client } from "../src/runtime-v2/api/client.js";
 import { RuntimeView } from "../src/runtime-v2/views/RuntimeView.js";
@@ -22,8 +22,9 @@ describe("Server-authorized Runner fleet", () => {
       { ...runner, client_id: "remote-C", computer_session_availability: false },
     ] });
     const { rerender } = render(<RuntimeView {...base} overview={overview} overviewAvailability="available" />);
-    expect(screen.getByText("remote-B")).toBeTruthy();
-    expect(screen.getByText("remote-C")).toBeTruthy();
+    const fleet = within(screen.getByRole("heading", { name: "Runner fleet" }).closest("section")!);
+    expect(fleet.getByText("remote-B")).toBeTruthy();
+    expect(fleet.getByText("remote-C")).toBeTruthy();
     expect(screen.getByText(/GUI session available/)).toBeTruthy();
     expect(screen.getByText(/GUI session unavailable/)).toBeTruthy();
     act(() => rerender(<RuntimeView {...base} overview={overview} overviewAvailability="stale" />));
@@ -34,6 +35,10 @@ describe("Server-authorized Runner fleet", () => {
   it("distinguishes an authorized empty fleet from an unavailable Server", () => {
     const { rerender } = render(<RuntimeView {...base} overview={runtimeOverview({ runners: [], runner_count: 0 })} overviewAvailability="available" />);
     expect(screen.getByText("No authorized Runners yet")).toBeTruthy();
+    rerender(<RuntimeView {...base} overview={null} overviewAvailability="loading" />);
+    const fleet = within(screen.getByRole("heading", { name: "Runner fleet" }).closest("section")!);
+    expect(fleet.getByText("Loading…")).toBeTruthy();
+    expect(screen.queryByText("No authorized Runners yet")).toBeNull();
     rerender(<RuntimeView {...base} overview={null} overviewAvailability="error" />);
     expect(screen.queryByText("No authorized Runners yet")).toBeNull();
     expect(screen.getAllByText("Runtime overview unavailable").length).toBeGreaterThan(0);
