@@ -7,8 +7,10 @@ import { ProjectsPanel } from "../projects/ProjectsPanel";
 import { ActivityPanel } from "../activity/ActivityPanel";
 import { ExtensionsPanel } from "../extensions/ExtensionsPanel";
 import { WorkspaceProvider, sameProjectPath, sameProject, mergeProjects, sessionTitle, projectName, displayProjectPath } from "./WorkspaceContext";
-import { ChatgptObservation, observationTime } from "./WorkspaceStatus";
+import { ChatgptObservation, observationTime, WorkspaceStatus } from "./WorkspaceStatus";
 import { DesktopMantineProvider } from "../../components/DesktopMantineProvider";
+import { Sidebar } from "../../components/Sidebar";
+import { Dashboard } from "../dashboard/Dashboard";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 const api = vi.hoisted(() => ({ prepareProjectUnregister: vi.fn(), unregisterProject: vi.fn(), runnerSettings: vi.fn(), updateRunnerSettings: vi.fn(), restartOwnedRunner: vi.fn(), addRunnerPlugin: vi.fn() }));
@@ -59,6 +61,30 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("product workspace task flows", () => {
+  it("shows no local Runner on a viewer while retaining raw stopped readiness", () => {
+    const viewer = { ...state, readiness: { ...state.readiness, runner: "stopped" as const },
+      topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" }, runner: { kind: "none" as const } } } as DesktopState;
+    render(wrap(<><WorkspaceStatus state={viewer} /><Sidebar state={viewer} navigation="home" setNavigation={vi.fn()} /></>, viewer));
+    expect(screen.getByRole("status")).toHaveTextContent("ServerRunning");
+    expect(screen.getByRole("status")).toHaveTextContent("Local RunnerNot configured");
+    expect(screen.getByRole("status")).not.toHaveTextContent("RunnerStopped");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Server Connection · Running");
+    expect(screen.getByRole("complementary")).not.toHaveTextContent("Runner · Stopped");
+    expect(viewer.readiness.runner).toBe("stopped");
+  });
+
+  it("routes viewer Add Project to setup without opening the local project picker", () => {
+    const viewer = { ...state, project: null, saved_projects: [], workspace_runner: null,
+      topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" }, runner: { kind: "none" as const } } } as DesktopState;
+    const onChooseProject = vi.fn(); const onChangeSetup = vi.fn();
+    render(wrap(<Dashboard state={viewer} refreshing={false} onRefresh={vi.fn()} onResumeRuntime={vi.fn()}
+      onChooseProject={onChooseProject} onChangeSetup={onChangeSetup} onNavigate={vi.fn()}
+      onStopQuickShare={vi.fn()} onStopRuntime={vi.fn()} />, viewer));
+    fireEvent.click(screen.getByRole("button", { name: "Add Project" }));
+    expect(onChangeSetup).toHaveBeenCalledTimes(1);
+    expect(onChooseProject).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["workspace_authentication_required", "User authentication is missing or expired. Restore your Server credential."],
     ["workspace_permission_denied", "This user does not have permission to view this Server data."],

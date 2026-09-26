@@ -956,7 +956,7 @@ jobs:
               npm run build --prefix apps/desktop
               export WEBCODEX_RELEASE_PLATFORM="$PLATFORM"
               export WEBCODEX_RELEASE_VERSION="$VERSION"
-              cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --release
+              cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --release --features tauri/custom-protocol
               desktop=target/release/webcodex-desktop
               test -x "$desktop"
               install -m 0755 "$desktop" native-input/artifacts/bin/webcodex-desktop
@@ -1014,7 +1014,7 @@ jobs:
           export WEBCODEX_RELEASE_VERSION="$VERSION"
           export WEBCODEX_BUILT_AT
           if [ "$PLATFORM" = darwin-arm64 ]; then arch=arm64; else arch=x86_64; fi
-          cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --release
+          cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --release --features tauri/custom-protocol
           desktop="target/release/webcodex-desktop"
           test -x "$desktop"
           install -m 0755 "$desktop" native-input/artifacts/bin/webcodex-desktop

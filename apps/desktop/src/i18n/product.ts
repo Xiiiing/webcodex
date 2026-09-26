@@ -15,6 +15,7 @@ export const PRODUCT_MESSAGES = {
   unregisterError: ["Unregister was not confirmed. Refresh the inventory before trying again; the Runner may be busy or the registration may have changed.", "尚未确认取消注册成功。请先刷新项目列表；Runner 可能正忙，或注册状态已变化。", "Entfernung nicht bestätigt. Vor einem neuen Versuch die Liste aktualisieren.", "Désinscription non confirmée. Actualisez la liste avant de réessayer.", "登録解除を確認できません。再試行前に一覧を更新してください。", "등록 해제를 확인하지 못했습니다. 다시 시도하기 전에 목록을 새로 고치세요."],
   runnerProjects: ["Projects on this Runner", "此 Runner 的项目", "Projekte auf diesem Runner", "Projets de ce Runner", "この Runner のプロジェクト", "이 Runner의 프로젝트"],
   serverConnection: ["Server Connection", "Server 连接", "Serververbindung", "Connexion au serveur", "サーバー接続", "서버 연결"],
+  localRunner: ["Local Runner", "本地 Runner", "Lokaler Runner", "Runner local", "ローカル Runner", "로컬 Runner"],
   screenRecording: ["Screen Recording", "屏幕录制", "Bildschirmaufnahme", "Enregistrement de l’écran", "画面収録", "화면 기록"],
   accessibility: ["Accessibility", "辅助功能", "Bedienungshilfen", "Accessibilité", "アクセシビリティ", "손쉬운 사용"],
   addInstructions: ["Add Instructions File", "添加指令文件", "Anweisungsdatei hinzufügen", "Ajouter un fichier d’instructions", "指示ファイルを追加", "지침 파일 추가"],
