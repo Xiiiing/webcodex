@@ -51,7 +51,9 @@ pub(crate) fn adaptive_runtime_tool_invocation_route_with_operator_extension(
     tool_name: &str,
     operator_extension_admitted: bool,
 ) -> (&'static str, Option<&'static str>) {
-    if operator_extension_admitted {
+    if operator_extension_admitted
+        || webcodex_tool_contracts::EXACT_MANIFEST_SPECIALIST_TOOL_NAMES.contains(&tool_name)
+    {
         return (
             TOOL_SURFACE_AVAILABILITY_GATEWAY,
             Some(ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME),
@@ -85,22 +87,22 @@ pub(crate) fn adaptive_runtime_gateway_target_route(
     }
 }
 
-/// GPT Actions derives its route from the same definition and Adaptive surface.
-/// GatewayOnly is a transport exposure exception, never an authority change.
+/// Frozen GPT Actions routing. This legacy adapter no longer inherits Adaptive
+/// Runtime additions or rank changes.
+#[cfg(feature = "legacy-gpt-actions")]
 pub(crate) fn gpt_action_gateway_target_route(target: &str) -> AdaptiveRuntimeGatewayTargetRoute {
-    let route = adaptive_runtime_gateway_target_route(target);
-    if route == AdaptiveRuntimeGatewayTargetRoute::Direct
-        && webcodex_tool_contracts::lookup_tool_definition(target).is_some_and(|definition| {
-            definition.gpt_action_exposure()
-                == webcodex_tool_contracts::ToolGptActionExposure::GatewayOnly
-        })
-    {
-        AdaptiveRuntimeGatewayTargetRoute::Gateway
+    if target == ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME {
+        return AdaptiveRuntimeGatewayTargetRoute::Recursive;
+    }
+    if !webcodex_tool_contracts::gpt_action_tool_supported(target) {
+        return AdaptiveRuntimeGatewayTargetRoute::Unknown;
+    }
+    if webcodex_tool_contracts::gpt_action_tool_is_direct(target) {
+        AdaptiveRuntimeGatewayTargetRoute::Direct
     } else {
-        route
+        AdaptiveRuntimeGatewayTargetRoute::Gateway
     }
 }
-
 /// Presentation route for one canonical SuggestedToolCall target. This is not
 /// authority: adapters resolve the route from their already-admitted model
 /// surface and the canonical target still runs through ordinary ToolRuntime
@@ -535,11 +537,12 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "legacy-gpt-actions")]
     #[test]
-    fn job_stop_gateway_only_policy_changes_actions_not_adaptive_route() {
+    fn job_stop_uses_gateway_on_adaptive_and_actions() {
         assert_eq!(
             adaptive_runtime_gateway_target_route("stop_job"),
-            AdaptiveRuntimeGatewayTargetRoute::Direct
+            AdaptiveRuntimeGatewayTargetRoute::Gateway
         );
         assert_eq!(
             gpt_action_gateway_target_route("stop_job"),
@@ -791,13 +794,14 @@ mod tests {
             &canonical_schema,
             &|target| suggested_tool_call_route(target, false),
         );
+        let current_call = &current_adaptive["output"]["changes"]["show_changes"]
+            ["diff_review_handoff"]["next_call"];
+        assert_eq!(current_call["tool"], ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME);
+        assert_eq!(current_call["arguments"]["tool"], "git_diff_hunks");
         assert_eq!(
-            current_adaptive["output"]["changes"]["show_changes"]["diff_review_handoff"]
-                ["next_call"],
-            canonical_call,
-            "current Adaptive direct routing must preserve the canonical nested call"
+            current_call["arguments"]["arguments"], canonical_call["arguments"],
+            "current Adaptive routing must gateway-wrap the exact specialist recovery call"
         );
-
         let synthetic_gateway_route = |target: &str| {
             if target == "git_diff_hunks" {
                 SuggestedToolCallRoute::Gateway(ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME)

@@ -190,6 +190,7 @@ export type ProjectGit = {
 };
 
 export type RunnerSummary = {
+  computer_session_availability?: boolean;
   protocol_compatibility?: "compatible" | "incompatible" | "unknown";
   build_alignment?: "exact" | "different_version" | "different_commit" | "dirty" | "unknown";
   client_id: string;
@@ -213,6 +214,11 @@ export type RunnerSummary = {
 };
 
 export type RuntimeOverview = {
+  effective_config?: {
+    auth: Record<string, boolean>;
+    mcp_host: { profile: string; host_budget_secs: number; initial_job_handoff_secs: number; max_sync_wait_secs: number; continuation_wait_secs: number };
+    tool_request_trace_mode: string;
+  };
   service?: string;
   version?: string;
   build_git_commit?: string;
@@ -249,6 +255,7 @@ export type WindowSummary = {
   last_project?: string;
   source: string;
   last_seen_at_ms: number;
+  first_seen_at_ms?: number;
   last_tool_call_at_ms?: number;
   last_meaningful_activity_at_ms?: number;
   last_activity_name?: string;
@@ -312,8 +319,10 @@ export type WindowJob = {
 
 export type WindowDetail = {
   client_window_key: string;
+  detail_level?: "primary" | "full";
   source: string;
   last_seen_at_ms: number;
+  first_seen_at_ms?: number;
   last_tool_call_at_ms?: number;
   last_meaningful_activity_at_ms?: number;
   active_count: number;

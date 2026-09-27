@@ -519,13 +519,59 @@ async fn work_result_window_card_needs_no_session_and_uses_all_window_activity()
     assert_eq!(work["collaboration"]["available"], false);
     assert_eq!(work["window_activity"]["events_observed"], 3);
     assert_eq!(work["window_activity"]["events_returned"], 3);
+    assert_eq!(work["window"]["key"], window.key());
+    assert_eq!(work["window"]["source"], window.source());
     let events = work["window_activity"]["events"].as_array().unwrap();
+    assert!(events
+        .iter()
+        .all(|event| event["server_trace_id"].is_string()));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["tool_name"] == "read_files")
+            .count(),
+        2
+    );
+    assert!(events
+        .iter()
+        .any(|event| event["tool_name"] == "runtime_status"));
     assert!(events
         .iter()
         .any(|event| event["meaningful"] == false && event["label"] == "Observed Runtime status"));
     assert!(events
         .iter()
         .any(|event| event["meaningful"] == true && event["ended_at_ms"] == 3_010));
+    let detail = runtime
+        .work_result_activity_detail(
+            project.clone(),
+            "work-result-1000".to_string(),
+            Some(&auth),
+            Some(&window),
+        )
+        .await;
+    assert!(detail.success, "{:?}", detail.error);
+    assert_eq!(
+        detail.output["activity_detail"]["server_trace_id"],
+        "work-result-1000"
+    );
+    assert_eq!(detail.output["activity_detail"]["tool_name"], "read_files");
+    assert_eq!(detail.output["activity_detail"]["project"], project);
+    assert_eq!(detail.output["activity_detail"]["service_ms"], 10);
+
+    let foreign_window = crate::client_window::ClientWindow::for_test("foreign-window");
+    let foreign_detail = runtime
+        .work_result_activity_detail(
+            work["project"].as_str().unwrap().to_string(),
+            "work-result-1000".to_string(),
+            Some(&auth),
+            Some(&foreign_window),
+        )
+        .await;
+    assert!(!foreign_detail.success);
+    assert_eq!(
+        foreign_detail.output["error_kind"],
+        "activity_detail_unavailable"
+    );
     assert_eq!(work["activity"]["last_activity_at_ms"], 3_010);
     assert_eq!(work["activity"]["last"]["label"], "Read project files");
 }

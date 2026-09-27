@@ -7,8 +7,9 @@
 #[cfg(feature = "workspace-checkpoints")]
 use super::tool_inputs::CheckpointValidationInput;
 use super::tool_inputs::{
-    default_true, ApplyFileChangeInput, CodingGuidanceProfile, ExecutionPurpose, ExecutionShell,
-    GoalLifecycleInput, SessionMode, WorkOnProjectMode,
+    default_true, deserialize_optional_coding_guidance_profile, ApplyFileChangeInput,
+    CodingGuidanceProfile, ExecutionPurpose, ExecutionShell, GoalLifecycleInput, SessionMode,
+    WorkOnProjectMode,
 };
 use crate::{lookup_tool_definition, model_visible_tool_names_csv};
 use schemars::JsonSchema;
@@ -338,8 +339,10 @@ pub struct SearchProjectTextsQuery {
     #[serde(default)]
     pub result_mode: Option<SearchResultMode>,
     #[schemars(extend("default" = 30))]
-    /// Optional search timeout in seconds. Server clamps the value to 1..120 (default 30). Out-of-range
-    /// values are accepted and clamped rather than rejected by schema.
+    /// Per-query execution ceiling in seconds. Server clamps the value to 1..120 (default 30).
+    /// A search_project_texts batch also shares one Server-owned absolute latency deadline, so the
+    /// effective query timeout is the smaller of this ceiling and the remaining batch budget. Queued
+    /// queries, bounded retries, and diagnostics do not reserve or reset that outer deadline.
     #[serde(default)]
     pub timeout_secs: Option<i64>,
 }
@@ -1339,6 +1342,22 @@ fn nullable_stdin_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema 
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GitReviewScopeInput {
+    /// Review the complete current workspace (tracked, staged, unstaged, and untracked state).
+    Workspace,
+    /// Review one exact committed range, resolved once to a single merge-base.
+    Committed {
+        #[schemars(length(min = 40, max = 40))]
+        #[schemars(regex(pattern = "^[0-9A-Fa-f]{40}$"))]
+        base_commit: String,
+        #[schemars(length(min = 40, max = 40))]
+        #[schemars(regex(pattern = "^[0-9A-Fa-f]{40}$"))]
+        head_commit: String,
+    },
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(
     tag = "tool",
@@ -1425,13 +1444,18 @@ pub enum ToolCall {
         /// title.
         #[schemars(length(min = 1, max = 4000))]
         instruction: String,
-        /// Model guidance only: direct (default), host_code_mode for Host-native orchestration,
-        /// or feature-gated code_mode for WebCodex nested orchestration. No tool admission,
-        /// authority, effects, or Session state changes; explicit resume may choose again.
-        /// Request
-        /// `context_request=["webcodex.workflow"]` when the current model context needs that guidance.
-        #[serde(default)]
-        guidance_profile: CodingGuidanceProfile,
+        /// Model guidance only. An explicit direct, host_code_mode, or feature-gated code_mode
+        /// always wins. When omitted on MCP, the configured MCP Host profile supplies the default;
+        /// omission on non-MCP/internal calls falls back to direct. No tool admission, authority,
+        /// effects, or Session state changes; explicit resume may choose again. On MCP, request
+        /// `_wc.context=["webcodex.workflow"]` when the current model context needs that guidance.
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_coding_guidance_profile",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "CodingGuidanceProfile")]
+        guidance_profile: Option<CodingGuidanceProfile>,
         #[schemars(extend("default" = true))]
         /// Whether startup should include a small bounded Skills/Plugins selection catalog. Defaults to
         /// true. Set false only when the caller's current model context already retains the relevant
@@ -1444,9 +1468,9 @@ pub enum ToolCall {
         /// remains bound to its exact final Project; in worktree mode the Runner re-observes that
         /// registered managed Project and its source provenance instead of creating a second worktree.
         /// Failure never guesses or creates a replacement Session. Supplying session_id does not prove this
-        /// model context still retains project instructions, workflow guidance, or extension metadata. A
-        /// fresh model context should request missing static guidance through context_request. This business
-        /// input is distinct from wrapper recording_session_id.
+        /// model context still retains project instructions, workflow guidance, or extension metadata. On
+        /// MCP, a fresh model context should request missing static guidance through `_wc.context`. This
+        /// business input is distinct from recorder provenance supplied through `_wc.record`.
         #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
         #[serde(default)]
         session_id: Option<String>,
@@ -1469,7 +1493,9 @@ pub enum ToolCall {
         /// detailed validation history.
         #[serde(default)]
         summary_only: bool,
-        /// Include bounded diff hunks in show_changes. Defaults to true.
+        /// Include bounded diff hunks in the full closeout show_changes payload. Defaults to true for
+        /// full closeout. summary_only never returns raw change provenance and therefore omits diff
+        /// generation regardless of this field.
         #[serde(default)]
         include_diff: Option<bool>,
         /// Defaults to true. When include_handoff=true, controls whether the nested handoff summary
@@ -1509,6 +1535,14 @@ pub enum ToolCall {
         #[serde(default)]
         #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
         session_id: Option<String>,
+    },
+
+    /// Work Result App-only lazy read of one completed call in the current
+    /// canonical Host Window. The Window identity is supplied only by Host sideband.
+    WorkResultActivityDetail {
+        project: String,
+        #[schemars(length(min = 1, max = 128))]
+        server_trace_id: String,
     },
 
     /// Work Result App-only collaboration write. The App fixes the business kind
@@ -1953,7 +1987,7 @@ pub enum ToolCall {
         /// Required exact Workflow Session. Every nested child remains a canonical ToolRuntime invocation in this same Session.
         #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
         session_id: String,
-        /// Experimental E2c source: E1 reads, at most one canonical apply_text_edits attempt, then cargo_check/cargo_test only after a successful known edit (including no-op). Use read_revision for guarded edits. Inspect source_state independently of execution success. Return Job handoffs to the outer workflow, never wait inside JS. No shell/process, nested Job observation, alternate writes, gateways, recursion or automatic whole-program retry.
+        /// Experimental E2c source: E1 reads, at most one canonical edit_project_files attempt, then cargo_check/cargo_test only after a successful known edit (including no-op). Use read_revision for guarded edits. Inspect source_state independently of execution success. Return Job handoffs to the outer workflow, never wait inside JS. No shell/process, nested Job observation, alternate writes, gateways, recursion or automatic whole-program retry.
         #[schemars(length(max = 65536))]
         source: String,
         /// Optional frontend decision deadline in milliseconds. Defaults to 5000, clamped to 1..30000. A short bounded drain preserves already-dispatched mutation/validation truth and exact Job continuations; timeout is not rollback or retry authority.
@@ -1999,12 +2033,10 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// Optional synchronous grace before durable Job handoff. Omit to use 10 seconds bounded by the
-        /// total timeout. Explicit values must be positive; values above 55 or above the effective timeout
-        /// are accepted and clamped to the smaller bound. It only controls how long the Server waits for
-        /// the already-started execution before exposing that same execution as a Job; it does not extend
-        /// the total runtime timeout or rerun work.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution Job handoff grace. The field remains accepted for
+        /// compatibility but is hidden from model discovery; Server transport policy and timeout_secs bound
+        /// the effective wait. It never extends command lifetime or reruns work.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
         /// Project-relative working directory. Omit, empty string, or '.' for the project root. Named
@@ -2174,12 +2206,10 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// Optional synchronous grace before durable Job handoff. Omit to use 10 seconds bounded by the
-        /// total timeout. Explicit values must be positive; values above 55 or above the effective timeout
-        /// are accepted and clamped to the smaller bound. It only controls how long the Server waits for
-        /// the already-started execution before exposing that same execution as a Job; it does not extend
-        /// the total runtime timeout or rerun work.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution Job handoff grace. The field remains accepted for
+        /// compatibility but is hidden from model discovery; Server transport policy and timeout_secs bound
+        /// the effective wait. It never extends command lifetime or reruns work.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
         /// Project-relative working directory. Omit, empty string, or '.' for the project root. Named
@@ -2213,9 +2243,10 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// same-execution durable Job handoff grace (default 10s), clamped by 55s and timeout; controls
-        /// return, not when the command is killed; named SSH unsupported.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution durable Job handoff grace. Hidden from model discovery;
+        /// Server transport policy and timeout_secs bound the effective wait. It controls return only, not
+        /// when the command is killed; named SSH remains unsupported.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
         /// Working directory contract: without a Session SSH resource, omit, empty string, or '.' selects
@@ -2523,6 +2554,35 @@ pub enum ToolCall {
         session_id: Option<String>,
     },
 
+    /// Primary bounded Git review workflow over one closed workspace or committed scope.
+    ReviewChanges {
+        /// Runner-registered project id.
+        project: String,
+        /// Closed review scope. Continuation calls must repeat this exact scope.
+        scope: GitReviewScopeInput,
+        /// Optional explicit wc_sess_* Workflow Session id. Snapshot reuse is fenced to this identity.
+        #[serde(default)]
+        session_id: Option<String>,
+        /// Optional project-relative paths to narrow diff paging.
+        #[serde(default)]
+        paths: Option<Vec<String>>,
+        /// Maximum hunks on each bounded diff page.
+        #[serde(default)]
+        max_hunks: Option<usize>,
+        /// Maximum complete lines per returned hunk.
+        #[serde(default)]
+        max_hunk_lines: Option<usize>,
+        /// Raw producer page budget, clamped by the same git_diff_hunks engine.
+        #[schemars(range(min = 0))]
+        #[serde(default)]
+        max_page_bytes: Option<usize>,
+        /// Opaque review_changes continuation. When present, metadata comes only from the exact retained
+        /// snapshot and the underlying diff page continues from the same fenced source.
+        #[schemars(length(max = 384))]
+        #[serde(default)]
+        continuation: Option<String>,
+    },
+
     /// Run `cargo fmt` in a Runner-registered Rust project.
     CargoFmt {
         /// Runner-registered project id.
@@ -2548,14 +2608,11 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// Optional synchronous grace in seconds. With check=true it controls only how long the caller
-        /// waits before the same execution is handed off as a Job; omission uses the Runtime early-handoff
-        /// default bounded by the effective timeout_secs. Explicit positive values above 55 or above the
-        /// effective timeout_secs are accepted and clamped to the smaller bound, and it never extends
-        /// timeout_secs or retries the validation. With check=false it is accepted for caller-shape
-        /// compatibility but ignored; ensure-format remains synchronous and timeout_secs remains the full
-        /// precheck-plus-mutation budget.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution Job handoff grace. With check=true the field remains
+        /// accepted but is hidden from model discovery; Server transport policy and timeout_secs bound the
+        /// effective wait. With check=false it is accepted for caller-shape compatibility but ignored;
+        /// ensure-format remains synchronous and timeout_secs remains the full precheck-plus-mutation budget.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
     },
@@ -2602,12 +2659,10 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// Optional synchronous grace in seconds. It controls only how long the caller waits before the
-        /// same execution is handed off as a Job. Omission uses the Runtime early-handoff default bounded
-        /// by the effective timeout_secs. Explicit positive values above 55 or above the effective
-        /// timeout_secs are accepted and clamped to the smaller bound. The submitted validation may still
-        /// be queued; this never extends timeout_secs, retries, or starts a second validation.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution Job handoff grace. Hidden from model discovery;
+        /// Server transport policy and the effective timeout_secs bound the wait. The submitted validation
+        /// may still be queued; this never extends timeout_secs, retries, or starts a second validation.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
     },
@@ -2670,12 +2725,10 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// Optional synchronous grace in seconds. It controls only how long the caller waits before the
-        /// same execution is handed off as a Job. Omission uses the Runtime early-handoff default bounded
-        /// by the effective timeout_secs. Explicit positive values above 55 or above the effective
-        /// timeout_secs are accepted and clamped to the smaller bound. The submitted validation may still
-        /// be queued; this never extends timeout_secs, retries, or starts a second validation.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution Job handoff grace. Hidden from model discovery;
+        /// Server transport policy and the effective timeout_secs bound the wait. The submitted validation
+        /// may still be queued; this never extends timeout_secs, retries, or starts a second validation.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
     },
@@ -2705,12 +2758,10 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// Optional synchronous grace in seconds. It controls only how long the caller waits before the
-        /// same execution is handed off as a Job. Omission uses the Runtime early-handoff default bounded
-        /// by the effective timeout_secs. Explicit positive values above 55 or above the effective
-        /// timeout_secs are accepted and clamped to the smaller bound. The submitted validation may still
-        /// be queued; this never extends timeout_secs, retries, or starts a second validation.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution Job handoff grace. Hidden from model discovery;
+        /// Server transport policy and the effective timeout_secs bound the wait. The submitted validation
+        /// may still be queued; this never extends timeout_secs, retries, or starts a second validation.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
     },
@@ -2804,12 +2855,10 @@ pub enum ToolCall {
         #[schemars(range(min = 1))]
         #[serde(default)]
         timeout_secs: Option<u64>,
-        /// Optional synchronous grace before durable Job handoff. Omit to use 10 seconds bounded by the
-        /// total timeout. Explicit values must be positive; values above 55 or above the effective timeout
-        /// are accepted and clamped to the smaller bound. It only controls how long the Server waits for
-        /// the already-started execution before exposing that same execution as a Job; it does not extend
-        /// the total runtime timeout or rerun work.
-        #[schemars(range(min = 1))]
+        /// Legacy caller override for same-execution Job handoff grace. The field remains accepted for
+        /// compatibility but is hidden from model discovery; Server transport policy and timeout_secs bound
+        /// the effective wait. It never extends command lifetime or reruns work.
+        #[schemars(skip)]
         #[serde(default)]
         sync_wait_secs: Option<u64>,
         /// Project-relative working directory. Omit, empty string, or '.' for the project root. Skill
@@ -3364,24 +3413,34 @@ pub enum ToolCall {
 
     /// Renew only the exact latest unexpired fenced AgentTaskAttempt.
     HeartbeatAgentTaskAttempt {
-        /// Canonical durable AgentTask id. It is not a credential or Connector Task id.
+        /// Server-issued ~ta selector for one exact task, attempt, assignee, fence, and generation.
+        /// Not a credential. Omit it when passing the explicit tuple.
+        #[schemars(regex(pattern = "^~ta[1-9][0-9]{0,18}$"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_ref: Option<String>,
+        /// Canonical durable AgentTask id. Required with the explicit tuple. Omit it when using attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_[A-Za-z0-9_-]{16}$"))]
-        task_id: String,
-        /// Exact durable AgentTaskAttempt id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// Exact durable AgentTaskAttempt id. Required with the explicit tuple. Omit it with attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_attempt_[A-Za-z0-9_-]{16}$"))]
-        attempt_id: String,
-        /// Explicit current durable Agent assignee. Agent identity does not grant Project or executor
-        /// authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+        /// Explicit current durable Agent assignee. Required with the explicit tuple. Agent identity does
+        /// not grant Project or executor authority. Omit it when using attempt_ref.
         #[schemars(regex(pattern = "^wc_dagent_[A-Za-z0-9_-]{16}$"))]
-        assignee_agent_id: String,
-        /// Opaque exact-Attempt freshness fence returned by start_agent_task_attempt. It is not a bearer
-        /// credential or idempotency key.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assignee_agent_id: Option<String>,
+        /// Opaque exact-Attempt freshness fence returned by start_agent_task_attempt. Required with the
+        /// explicit tuple. Not a bearer credential. Omit it when using attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_fence_[A-Za-z0-9_-]{21}[AQgw]$"))]
-        attempt_fence: String,
-        /// Exact current Attempt-local controller generation. Carrier replacement increments it without
-        /// creating a new Attempt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_fence: Option<String>,
+        /// Exact current Attempt-local controller generation. Required with the explicit tuple. Stale
+        /// generations fail closed. Omit it when using attempt_ref.
         #[schemars(range(min = 1))]
-        attempt_controller_generation: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_controller_generation: Option<i64>,
         /// Optional exact consumed A4b agent_task_attempt Wake proving this model-turn lineage. It grants
         /// no Task, Project, Runner, Goal, Session, or Endpoint authority and must be paired with
         /// active_turn_consume_token.
@@ -3398,24 +3457,34 @@ pub enum ToolCall {
 
     /// Commit exact fenced terminal AgentTaskAttempt truth with independent keyed replay.
     CompleteAgentTaskAttempt {
-        /// Canonical durable AgentTask id. It is not a credential or Connector Task id.
+        /// Server-issued ~ta selector for one exact task, attempt, assignee, fence, and generation.
+        /// Not a credential. Omit it when passing the explicit tuple.
+        #[schemars(regex(pattern = "^~ta[1-9][0-9]{0,18}$"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_ref: Option<String>,
+        /// Canonical durable AgentTask id. Required with the explicit tuple. Omit it when using attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_[A-Za-z0-9_-]{16}$"))]
-        task_id: String,
-        /// Exact durable AgentTaskAttempt id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// Exact durable AgentTaskAttempt id. Required with the explicit tuple. Omit it with attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_attempt_[A-Za-z0-9_-]{16}$"))]
-        attempt_id: String,
-        /// Explicit current durable Agent assignee. Agent identity does not grant Project or executor
-        /// authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+        /// Explicit current durable Agent assignee. Required with the explicit tuple. Agent identity does
+        /// not grant Project or executor authority. Omit it when using attempt_ref.
         #[schemars(regex(pattern = "^wc_dagent_[A-Za-z0-9_-]{16}$"))]
-        assignee_agent_id: String,
-        /// Opaque exact-Attempt freshness fence returned by start_agent_task_attempt. It is not a bearer
-        /// credential or idempotency key.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assignee_agent_id: Option<String>,
+        /// Opaque exact-Attempt freshness fence returned by start_agent_task_attempt. Required with the
+        /// explicit tuple. Not a bearer credential. Omit it when using attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_fence_[A-Za-z0-9_-]{21}[AQgw]$"))]
-        attempt_fence: String,
-        /// Exact current Attempt-local controller generation. Carrier replacement increments it without
-        /// creating a new Attempt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_fence: Option<String>,
+        /// Exact current Attempt-local controller generation. Required with the explicit tuple. Stale
+        /// generations fail closed. Omit it when using attempt_ref.
         #[schemars(range(min = 1))]
-        attempt_controller_generation: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_controller_generation: Option<i64>,
         /// Terminal AgentTask outcome. In A3, failed completion is terminal; only lease expiry before
         /// completion permits a later Attempt.
         outcome: String,
@@ -4030,8 +4099,8 @@ pub enum ToolCall {
         /// Optional one shared bounded wait (a maximum), never a minimum sleep or multiplied by item count.
         /// Omission or any item without a token returns an immediate observation/baseline. Values above 100
         /// seconds are clamped to 100. With tokens, wake_on selects early wake behavior; updates never
-        /// extend the deadline. Runtime accepts explicit waits up to 100 seconds, while model-facing
-        /// continuations recommend 55 seconds to stay below common MCP Host deadlines. Use terminal waits
+        /// extend the deadline. Runtime accepts explicit waits up to 100 seconds; MCP transport may clamp
+        /// that wait further using the effective Server-side Host timing profile. Use terminal waits
         /// when further useful progress depends on terminal outcome; otherwise defer observation while
         /// independent work continues.
         #[schemars(range(min = 1))]
@@ -4603,9 +4672,9 @@ pub enum ToolCall {
 
     /// Apply a bounded transactional batch of edit/create/delete/rename file
     /// changes via the owning Runner. Whole-file and positional changes carry
-    /// a model-facing read revision; globally unique local exact edits may omit
-    /// it. Every change is preflighted before the first mutation. `dry_run` computes the full plan without writing. Model/API
+    /// a model-facing read revision from read_files. Every change is preflighted before the first mutation. `dry_run` computes the full plan without writing. Model/API
     /// exposure is derived from the canonical ToolDefinition surface.
+    #[serde(rename = "edit_project_files")]
     ApplyTextEdits {
         /// Runner-registered project id.
         project: String,
@@ -5039,8 +5108,8 @@ pub enum ToolCall {
     /// secrets, full env, or stdout/stderr. It returns service metadata,
     /// Project config status, Runner summaries, and Job counts.
     RuntimeStatus {
-        /// When true, return compact runtime observability with service/version, build revision, tool/job
-        /// counts, Runner health summary, and project effective/server status. Defaults to false.
+        /// True selects sparse health, Project/Job counts and protocol/build/source alignment without
+        /// inventories. Canonical/API default is false (full diagnostics); MCP defaults omission to true.
         #[serde(default)]
         compact: bool,
         /// Alias for compact=true. Returns the same compact runtime observability shape. Defaults to false.
@@ -5504,6 +5573,7 @@ impl ToolCall {
             Self::FinishCodingTask { .. } => "finish_coding_task",
             Self::PresentWorkResult { .. } => "present_work_result",
             Self::WorkResultState { .. } => "work_result_state",
+            Self::WorkResultActivityDetail { .. } => "work_result_activity_detail",
             Self::WorkResultSendMessage { .. } => "work_result_send_message",
             Self::ChangesFileDiff { .. } => "changes_file_diff",
             Self::SessionSummary { .. } => "session_summary",
@@ -5558,6 +5628,7 @@ impl ToolCall {
             Self::GitStatus { .. } => "git_status",
             Self::GitDiffHunks { .. } => "git_diff_hunks",
             Self::GitReviewSummary { .. } => "git_review_summary",
+            Self::ReviewChanges { .. } => "review_changes",
             Self::GitLog { .. } => "git_log",
             Self::CargoFmt { .. } => "cargo_fmt",
             Self::CargoCheck { .. } => "cargo_check",
@@ -5657,7 +5728,7 @@ impl ToolCall {
             Self::ArtifactUploadChunk { .. } => "artifact_upload_chunk",
             Self::ArtifactUploadFinish { .. } => "artifact_upload_finish",
             Self::ArtifactUploadAbort { .. } => "artifact_upload_abort",
-            Self::ApplyTextEdits { .. } => "apply_text_edits",
+            Self::ApplyTextEdits { .. } => "edit_project_files",
             Self::LspStatus { .. } => "lsp_status",
             Self::DocumentSymbols { .. } => "document_symbols",
             Self::DocumentDiagnostics { .. } => "document_diagnostics",
@@ -5710,6 +5781,7 @@ impl ToolCall {
             | Self::GitStatus { session_id, .. }
             | Self::GitDiffHunks { session_id, .. }
             | Self::GitReviewSummary { session_id, .. }
+            | Self::ReviewChanges { session_id, .. }
             | Self::GitLog { session_id, .. }
             | Self::CargoFmt { session_id, .. }
             | Self::CargoCheck { session_id, .. }
@@ -5766,6 +5838,7 @@ impl ToolCall {
             // evidence. An optional Session selector is association evidence only.
             Self::PresentWorkResult { .. }
             | Self::WorkResultState { .. }
+            | Self::WorkResultActivityDetail { .. }
             | Self::WorkResultSendMessage { .. }
             | Self::ChangesFileDiff { .. }
             | Self::SessionHandoffState { .. } => None,
@@ -5858,6 +5931,7 @@ impl ToolCall {
             | Self::GitStatus { project, .. }
             | Self::GitDiffHunks { project, .. }
             | Self::GitReviewSummary { project, .. }
+            | Self::ReviewChanges { project, .. }
             | Self::GitLog { project, .. }
             | Self::CargoFmt { project, .. }
             | Self::CargoCheck { project, .. }
@@ -5917,6 +5991,7 @@ impl ToolCall {
             Self::FinishCodingTask { project, .. }
             | Self::PresentWorkResult { project, .. }
             | Self::WorkResultState { project, .. }
+            | Self::WorkResultActivityDetail { project, .. }
             | Self::WorkResultSendMessage { project, .. }
             | Self::ChangesFileDiff { project, .. } => Some(project.as_str()),
             Self::UpdateSessionContext { project, .. }

@@ -372,6 +372,7 @@ mod tests {
     fn register_envelope_with_instance(client_id: &str, instance_id: &str) -> RunnerEnvelope {
         RunnerEnvelope::Register {
             payload: RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -397,6 +398,7 @@ mod tests {
                         structured_file_delete: true,
                         apply_text_edit_occurrence: false,
                         apply_text_edit_line_scope: false,
+                        apply_text_edit_range: false,
                         apply_text_edit_expected_match_count: false,
                         apply_text_edit_local_guard_without_sha: false,
                         apply_patch: false,
@@ -435,6 +437,7 @@ mod tests {
                         skill_management: false,
                         browser_observe: false,
                         browser_control: false,
+                        browser_element_action_admission: false,
                         browser_launch: false,
                         computer_observe: false,
                         computer_application_discovery: false,
@@ -887,6 +890,7 @@ mod tests {
 
         ws.send(TungsteniteMessage::Text(
             RunnerEnvelope::RuntimeMetadata {
+                computer_session_availability: None,
                 tool_providers: provider_status(),
                 mcp_gateway_providers: Some(vec![crate::mcp_gateway::McpGatewayProvider {
                     provider_id: "blender".to_string(),

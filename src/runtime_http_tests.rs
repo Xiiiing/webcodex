@@ -203,6 +203,11 @@ fn build_projects_router(
     db: Arc<crate::Database>,
     runtime: Arc<ToolRuntime>,
 ) -> Router {
+    #[cfg(feature = "legacy-gpt-actions")]
+    let legacy_gpt_action_router = Router::with_path("actions/{tool_name}").post(gpt_action_invoke);
+    #[cfg(not(feature = "legacy-gpt-actions"))]
+    let legacy_gpt_action_router = Router::new();
+
     Router::new()
         .hoop(affix_state::inject(config))
         .hoop(affix_state::inject(db))
@@ -212,7 +217,7 @@ fn build_projects_router(
                 .hoop(crate::AuthMiddleware)
                 .push(Router::with_path("tools/list").post(tools_list))
                 .push(Router::with_path("tools/call").post(tools_call))
-                .push(Router::with_path("actions/{tool_name}").post(gpt_action_invoke))
+                .push(legacy_gpt_action_router)
                 .push(
                     Router::with_path("artifacts/import")
                         .post(import_conversation_files_to_project),
@@ -260,6 +265,7 @@ async fn register_import_agent_with_capabilities(
     registry
         .register(crate::test_support::current_runner_registration(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -588,6 +594,7 @@ fn http_runtime_status_after_runner_registration_fits_default_worker_stack() {
             .expect("realistic current Runner policy fixture");
             let mut registration =
                 crate::test_support::current_runner_registration(RunnerRegisterRequest {
+                    computer_session_availability: None,
                     process_started_at: Some(1),
                     build: Some(RunnerBuildInfo {
                         version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -1176,7 +1183,7 @@ fn extract_tool_call_accepts_explicit_checkpoint_restore_params() {
 #[test]
 fn extract_tool_call_accepts_explicit_apply_text_edits_params() {
     let (tool, params) = extract_tool_call(&json!({
-        "tool": "apply_text_edits",
+        "tool": "edit_project_files",
         "params": {
             "project": "agent:special:test",
             "dry_run": true,
@@ -1190,7 +1197,7 @@ fn extract_tool_call_accepts_explicit_apply_text_edits_params() {
     }))
     .unwrap();
 
-    assert_eq!(tool, "apply_text_edits");
+    assert_eq!(tool, "edit_project_files");
     assert_eq!(params["project"], "agent:special:test");
     assert_eq!(params["dry_run"], true);
     let changes = params["changes"].as_array().unwrap();
@@ -2092,6 +2099,7 @@ async fn oauth_tools_call(
     (status, body, challenge)
 }
 
+#[cfg(feature = "legacy-gpt-actions")]
 async fn oauth_action_call(
     service: &Service,
     token: &str,
@@ -2367,6 +2375,7 @@ async fn oauth2_tools_call_unknown_tool_fails_closed() {
     assert_oauth_scope_rejected(status, &body, challenge.as_deref(), None);
 }
 
+#[cfg(feature = "legacy-gpt-actions")]
 #[tokio::test]
 async fn gpt_action_direct_and_gateway_admission_fail_closed() {
     let (_tmp, service) = phase2_service();
@@ -2470,6 +2479,7 @@ async fn gpt_action_direct_and_gateway_admission_fail_closed() {
     }
 }
 
+#[cfg(feature = "legacy-gpt-actions")]
 #[tokio::test]
 async fn gpt_action_suggested_call_projection_preserves_canonical_generic_result() {
     let (_tmp, service) = phase2_service();
@@ -2526,6 +2536,7 @@ async fn gpt_action_suggested_call_projection_preserves_canonical_generic_result
     assert_eq!(recovery["success"], true, "{recovery}");
 }
 
+#[cfg(feature = "legacy-gpt-actions")]
 #[tokio::test]
 async fn oauth2_gpt_action_direct_scope_outcomes_match_mcp_direct_policy() {
     let (_tmp, service, token) = phase2_oauth_service("project:read");
@@ -2579,6 +2590,7 @@ async fn oauth2_gpt_action_direct_scope_outcomes_match_mcp_direct_policy() {
     );
 }
 
+#[cfg(feature = "legacy-gpt-actions")]
 #[tokio::test]
 async fn gpt_action_direct_cannot_bypass_project_owner_authority() {
     use crate::runner_protocol::{RunnerProjectSummary, RunnerRegisterRequest};
@@ -2594,6 +2606,7 @@ async fn gpt_action_direct_cannot_bypass_project_owner_authority() {
     registry
         .register(crate::test_support::current_runner_registration(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -2661,6 +2674,7 @@ async fn gpt_action_direct_cannot_bypass_project_owner_authority() {
     assert!(!rendered.contains("alice"));
 }
 
+#[cfg(feature = "legacy-gpt-actions")]
 #[tokio::test]
 async fn gpt_action_direct_still_obeys_permission_gate() {
     use crate::tool_runtime::permissions::{AuthorityMode, PermissionEvaluator};
@@ -2695,6 +2709,7 @@ async fn gpt_action_direct_still_obeys_permission_gate() {
     );
 }
 
+#[cfg(feature = "legacy-gpt-actions")]
 #[tokio::test]
 async fn gpt_action_file_import_rewrites_host_shape_and_keeps_provenance_private() {
     let root = tempfile::tempdir().unwrap();
@@ -2766,10 +2781,15 @@ async fn http_tools_list_includes_phase4_edit_tools() {
     ] {
         assert!(!names.iter().any(|n| n == removed));
     }
-    assert!(names.iter().any(|n| n == "write_project_file"));
+    for hidden in webcodex_tool_contracts::EXACT_MANIFEST_SPECIALIST_TOOL_NAMES {
+        assert!(
+            !names.iter().any(|n| n == hidden),
+            "exact-manifest specialist leaked into ordinary tools/list: {hidden}"
+        );
+    }
     assert_eq!(body["count"], names.len());
     let tools = body["tools"].as_array().unwrap();
-    for name in ["read_files", "run_shell", "write_project_file"] {
+    for name in ["read_files", "run_shell", "edit_project_files"] {
         let tool = tools
             .iter()
             .find(|tool| tool["name"] == name)

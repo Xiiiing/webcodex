@@ -27,6 +27,10 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             ("truncated", schema_type("boolean", "Visible events from the bounded recent scan were omitted by the presentation or serialized byte bound; this is not a lifetime-history completeness claim.")),
         ])),
         "runtime_status" => Some(wrapped_output_schema(vec![
+            ("mcp_host", open_object_schema("Sparse status: effective MCP Host profile.")),
+            ("compatibility", open_object_schema("Sparse fleet protocol, build/source alignment and mixed-build evidence; no per-Runner rows.")),
+            ("connection", open_object_schema("Sparse process, transport and Project registry states without timestamps.")),
+
             ("service", schema_type("string", "Runtime service name.")),
             (
                 "mcp_compact_schemas",
@@ -53,13 +57,26 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
                             },
                             "required": ["shared_key_enabled", "anonymous_enabled", "oauth2_enabled", "oauth2_shared_key_bridge_enabled"]
                         },
+                        "mcp_host": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "description": "Effective Server-side MCP Host timing policy. This adapts MCP waiting only; it is not a command runtime timeout or Runner configuration.",
+                            "properties": {
+                                "profile": {"type": "string", "enum": ["direct", "host_code_mode"]},
+                                "host_budget_secs": {"type": "integer", "minimum": 1},
+                                "initial_job_handoff_secs": {"type": "integer", "minimum": 1},
+                                "max_sync_wait_secs": {"type": "integer", "minimum": 1},
+                                "continuation_wait_secs": {"type": "integer", "minimum": 1}
+                            },
+                            "required": ["profile", "host_budget_secs", "initial_job_handoff_secs", "max_sync_wait_secs", "continuation_wait_secs"]
+                        },
                         "tool_request_trace_mode": {
                             "type": "string",
                             "enum": ["off", "metadata", "full"],
                             "description": "Effective bounded tool-request trace mode; no trace paths, request bodies, headers, or environment values are exposed."
                         }
                     },
-                    "required": ["auth", "tool_request_trace_mode"]
+                    "required": ["auth", "mcp_host", "tool_request_trace_mode"]
                 }),
             ),
             ("version", schema_type("string", "Runtime version.")),
@@ -91,11 +108,11 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             ),
             (
                 "projects",
-                open_object_schema("Project counts from the Runner registry. Prefer projects.effective for model-facing status."),
+                open_object_schema("Project counts from the Runner registry; sparse returns count, online_count and status. Full includes effective and runner_registered."),
             ),
             (
                 "runners",
-                open_object_schema("Runner counts and a single clients collection using runner_instance_id and runner_protocol_generation; summary contains only aggregate counts. Omitted in focused compact/summary mode. Per-client host_context is bounded Runner-configured advisory data, not observed truth or authority. job_concurrency contains the static Runner limit plus caller-visible running and queued counts. Canonical top-level counts are count, online_count, and stale_count in full, compact, and summary_only output."),
+                open_object_schema("Sparse fleet returns aggregate counts only. Full includes a single clients collection using runner_instance_id and runner_protocol_generation; summary contains only aggregate counts. Omitted in focused compact/summary mode. Per-client host_context is bounded Runner-configured advisory data, not observed truth or authority. job_concurrency contains the static Runner limit plus caller-visible running and queued counts. Canonical top-level counts are count, online_count, and stale_count in full, compact, and summary_only output."),
             ),
             (
                 "jobs",

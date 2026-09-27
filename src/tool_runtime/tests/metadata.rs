@@ -50,6 +50,12 @@ async fn runner_observability_has_one_collection_and_preserves_health_across_mod
         assert!(result.success, "{:?}", result.error);
         assert!(result.output.get("agents").is_none());
         assert!(result.output["runners"]["summary"].get("clients").is_none());
+        if arguments.get("compact").is_some() || arguments.get("summary_only").is_some() {
+            assert!(result.output["runners"].get("clients").is_none());
+            assert_eq!(result.output["runners"]["count"], 1);
+            assert_eq!(result.output["runners"]["online_count"], 1);
+            continue;
+        }
         let clients = result.output["runners"]["clients"].as_array().unwrap();
         assert_eq!(clients.len(), 1);
         for key in [
@@ -67,10 +73,6 @@ async fn runner_observability_has_one_collection_and_preserves_health_across_mod
         }
         assert!(clients[0].get("agent_instance_id").is_none());
         assert!(clients[0].get("agent_protocol_generation").is_none());
-        if arguments.get("compact").is_some() || arguments.get("summary_only").is_some() {
-            assert!(clients[0].get("owner").is_none());
-            assert!(clients[0].get("policy").is_none());
-        }
     }
     for arguments in [
         json!({"client_id":"projection-runner", "compact":true}),
@@ -82,10 +84,9 @@ async fn runner_observability_has_one_collection_and_preserves_health_across_mod
         assert!(result.success);
         assert!(result.output.get("runners").is_none());
         assert!(result.output.get("agents").is_none());
-        assert_eq!(
-            result.output["focus"]["runner_instance_id"],
-            "projection-instance"
-        );
+        assert_eq!(result.output["focus"]["client_id"], "projection-runner");
+        assert_eq!(result.output["focus"]["job_concurrency"]["limit"], 4);
+        assert!(result.output["focus"].get("runner_instance_id").is_none());
         assert!(result.output["focus"].get("agent_instance_id").is_none());
     }
     for arguments in [
@@ -202,6 +203,7 @@ fn list_runners_call() -> ToolCall {
 
 fn metadata_agent_registration(client_id: &str) -> RunnerRegisterRequest {
     crate::test_support::current_runner_registration(RunnerRegisterRequest {
+        computer_session_availability: None,
         process_started_at: None,
         build: None,
         job_concurrency_limit: None,
@@ -233,6 +235,7 @@ async fn register_computer_target_for_auth(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -274,6 +277,7 @@ async fn register_application_target_for_auth(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -312,6 +316,7 @@ async fn register_display_target_for_auth(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -349,6 +354,7 @@ async fn register_pointer_target_for_auth(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -413,6 +419,7 @@ async fn register_clipboard_target_for_auth(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -451,6 +458,7 @@ async fn register_agent_projects_for_auth(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
+                computer_session_availability: None,
                 process_started_at: None,
                 build: None,
                 job_concurrency_limit: None,
@@ -476,6 +484,7 @@ async fn register_agent_projects_for_auth(
                         structured_file_delete: false,
                         apply_text_edit_occurrence: false,
                         apply_text_edit_line_scope: false,
+                        apply_text_edit_range: false,
                         apply_text_edit_expected_match_count: false,
                         apply_text_edit_local_guard_without_sha: false,
                         apply_patch: false,
@@ -514,6 +523,7 @@ async fn register_agent_projects_for_auth(
                         skill_management: false,
                         browser_observe: false,
                         browser_control: false,
+                        browser_element_action_admission: false,
                         browser_launch: false,
                         computer_observe: false,
                         computer_application_discovery: false,
@@ -1295,6 +1305,7 @@ async fn repository_knowledge_association_revalidates_identity_availability_and_
     let replacement = runtime
         .runner_registry
         .register(RunnerRegisterRequest {
+            computer_session_availability: None,
             process_started_at: None,
             build: None,
             job_concurrency_limit: None,
@@ -1373,6 +1384,7 @@ async fn replacement_runner_pending_inventory_has_zero_project_routing_authority
     let replacement = runtime
         .runner_registry
         .register(RunnerRegisterRequest {
+            computer_session_availability: None,
             process_started_at: None,
             build: None,
             job_concurrency_limit: None,
@@ -1551,6 +1563,7 @@ async fn replacement_runner_removed_project_never_inherits_old_authority() {
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
+            computer_session_availability: None,
             process_started_at: None,
             build: None,
             job_concurrency_limit: None,
@@ -1765,6 +1778,7 @@ async fn runtime_status_shell_profiles_summary_is_sanitized() {
     let _ = (secret_env_value, secret_script);
     registry
         .register(crate::runner_protocol::RunnerRegisterRequest {
+            computer_session_availability: None,
             process_started_at: None,
             build: None,
             job_concurrency_limit: None,
@@ -2088,18 +2102,21 @@ fn runtime_status_input_schema_exposes_compact_flags() {
         json!(["off", "metadata", "full"])
     );
 
-    let openapi = crate::openapi::build_openapi_spec();
-    let action = &openapi["paths"]["/api/actions/runtime_status"]["post"];
-    assert_eq!(action["operationId"], "runtime_status");
-    let action_properties = action["requestBody"]["content"]["application/json"]["schema"]
-        ["properties"]
-        .as_object()
-        .unwrap();
-    for field in ["compact", "summary_only"] {
-        assert!(
-            action_properties.contains_key(field),
-            "runtime_status Action missing {field}"
-        );
+    #[cfg(feature = "legacy-gpt-actions")]
+    {
+        let openapi = crate::openapi::build_openapi_spec();
+        let action = &openapi["paths"]["/api/actions/runtime_status"]["post"];
+        assert_eq!(action["operationId"], "runtime_status");
+        let action_properties = action["requestBody"]["content"]["application/json"]["schema"]
+            ["properties"]
+            .as_object()
+            .unwrap();
+        for field in ["compact", "summary_only"] {
+            assert!(
+                action_properties.contains_key(field),
+                "runtime_status Action missing {field}"
+            );
+        }
     }
 }
 
@@ -2370,9 +2387,7 @@ async fn tool_manifest_recommends_default_remote_coding_loop() {
         "import_conversation_files_to_project",
         "project_artifact",
         "show_changes",
-        "apply_text_edits",
-        "apply_unified_diff",
-        "write_project_file",
+        "edit_project_files",
         "cargo_check",
         "cargo_test",
         "git_diff_hunks",
@@ -2391,7 +2406,8 @@ async fn tool_manifest_recommends_default_remote_coding_loop() {
             "recommended_flows should not rank retired edit tool {tool}: {serialized}"
         );
     }
-    // The edit flow must expose only the canonical unified-diff mutation, never retired patch names.
+    // Ordinary edit routing exposes one read-native editor; exact-name mutation
+    // specialists remain discoverable only through exact tool_manifest lookup.
     let edit_tools = result.output["recommended_flows"]
         .as_array()
         .unwrap()
@@ -2401,8 +2417,17 @@ async fn tool_manifest_recommends_default_remote_coding_loop() {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    assert!(edit_tools.iter().any(|tool| tool == "apply_unified_diff"));
-    assert!(edit_tools.iter().any(|tool| tool == "apply_patch"));
+    assert!(edit_tools.iter().any(|tool| tool == "edit_project_files"));
+    for specialist in ["apply_patch", "apply_unified_diff", "write_project_file"] {
+        assert!(
+            !edit_tools.iter().any(|tool| tool == specialist),
+            "ordinary edit flow must not rank exact specialist {specialist}: {edit_tools:?}"
+        );
+        assert!(
+            !serialized.contains(&format!("\"{specialist}\"")),
+            "ordinary recommended flows must not expose exact specialist {specialist}: {serialized}"
+        );
+    }
     for removed in ["apply_patch_checked", "validate_patch"] {
         assert!(
             !edit_tools.iter().any(|tool| tool == removed),
@@ -2430,6 +2455,19 @@ async fn runtime_status_with_no_projects_returns_configured_false() {
     assert!(out["pid"].is_i64());
     assert_eq!(out["authority"]["mode"], "trusted_agent");
     assert_eq!(out["authority"]["human_approval_required"], false);
+    let session_store = &out["session_store"];
+    assert_eq!(
+        session_store["max_sessions"],
+        session_store["hot_session_capacity_target"]
+    );
+    assert_eq!(session_store["retained_sessions"], 0);
+    assert_eq!(session_store["active_sessions"], 0);
+    assert_eq!(session_store["closed_sessions"], 0);
+    assert_eq!(session_store["hot_sessions"], 0);
+    assert_eq!(session_store["cold_sessions"], 0);
+    assert_eq!(session_store["historical_session_retention_limit"], 100);
+    assert_eq!(session_store["capacity_evictions"], 0);
+
     assert_eq!(out["projects"]["mode"], "runner_registered");
     assert_eq!(out["projects"]["count"], 0);
     assert!(out["projects"].get("configured").is_none());
@@ -2480,15 +2518,14 @@ async fn runtime_status_uses_agent_projects_as_effective() {
 
 #[tokio::test]
 async fn runtime_status_includes_build_metadata() {
+    let _env = crate::test_support::TestEnvGuard::new();
     let runtime = test_runtime();
     let result = runtime.dispatch(runtime_status_call()).await;
     assert!(result.success, "{:?}", result.error);
     assert!(result.output.get("runtime_exposure").is_none());
     assert_eq!(
         result.output["mcp_compact_schemas"],
-        crate::model_surface::effective_mcp_compact_schemas(
-            crate::config::mcp_compact_schemas_override(),
-        )
+        runtime.runtime_info.mcp_compact_schemas
     );
     let build = &result.output["build"];
     assert!(build.is_object());
@@ -2525,7 +2562,7 @@ async fn runtime_status_preserves_allowlisted_effective_config_across_projection
     let config_object = config.as_object().expect("effective_config object");
     assert_eq!(
         config_object.len(),
-        2,
+        3,
         "effective_config must stay allowlisted"
     );
     assert_eq!(config["tool_request_trace_mode"], "full");
@@ -2535,6 +2572,19 @@ async fn runtime_status_preserves_allowlisted_effective_config_across_projection
     assert_eq!(auth["anonymous_enabled"], true);
     assert_eq!(auth["oauth2_enabled"], true);
     assert_eq!(auth["oauth2_shared_key_bridge_enabled"], true);
+    let mcp_host = config["mcp_host"]
+        .as_object()
+        .expect("effective MCP Host policy");
+    assert_eq!(
+        mcp_host.len(),
+        5,
+        "effective MCP Host facts must stay allowlisted"
+    );
+    assert_eq!(mcp_host["profile"], "direct");
+    assert_eq!(mcp_host["host_budget_secs"], 60);
+    assert_eq!(mcp_host["initial_job_handoff_secs"], 10);
+    assert_eq!(mcp_host["max_sync_wait_secs"], 55);
+    assert_eq!(mcp_host["continuation_wait_secs"], 55);
 
     let focused = runtime
         .dispatch(
@@ -2562,33 +2612,59 @@ async fn runtime_status_preserves_allowlisted_effective_config_across_projection
             .dispatch(ToolCall::from_tool_name("runtime_status", arguments).unwrap())
             .await;
         assert!(compact.success, "{:?}", compact.error);
-        assert_eq!(compact.output["effective_config"], *config);
-        assert_eq!(compact.output["auth_enabled"], full.output["auth_enabled"]);
+        assert!(compact.output.get("effective_config").is_none());
+        assert!(compact.output.get("auth_enabled").is_none());
+        assert!(compact.output.get("configured_public_url").is_none());
         assert_eq!(
-            compact.output["configured_public_url"],
-            full.output["configured_public_url"]
+            compact.output["mcp_host"]["profile"],
+            config["mcp_host"]["profile"]
         );
     }
 }
 
-#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn runtime_status_reports_effective_mcp_host_budget_override() {
+    let runtime = test_runtime().with_mcp_host_policy(
+        crate::mcp_host::McpHostConfig {
+            profile: crate::mcp_host::McpHostProfile::HostCodeMode,
+            host_budget_secs: Some(9),
+        }
+        .runtime_policy(),
+    );
+
+    let result = runtime.dispatch(runtime_status_call()).await;
+    assert!(result.success, "{:?}", result.error);
+    let mcp_host = &result.output["effective_config"]["mcp_host"];
+    assert_eq!(mcp_host["profile"], "host_code_mode");
+    assert_eq!(mcp_host["host_budget_secs"], 9);
+    assert_eq!(mcp_host["initial_job_handoff_secs"], 4);
+    assert_eq!(mcp_host["max_sync_wait_secs"], 4);
+    assert_eq!(mcp_host["continuation_wait_secs"], 4);
+}
+
 #[tokio::test]
 async fn runtime_status_reports_effective_mcp_compact_schema_policy() {
-    let mut env = crate::test_support::TestEnvGuard::new();
-    env.remove("WEBCODEX_MCP_COMPACT_SCHEMAS");
-    let runtime = test_runtime();
+    // Production-style capture: build each Runtime while its env guard is held,
+    // then drop the guard so no process-global env lock is held across the
+    // async requests below. The reported value is the startup snapshot.
+    let runtime_false = {
+        let mut env = crate::test_support::TestEnvGuard::new();
+        env.set("WEBCODEX_MCP_COMPACT_SCHEMAS", "false");
+        runtime_with_info(RuntimeInfo::from_env())
+    };
+    let runtime_true = {
+        let mut env = crate::test_support::TestEnvGuard::new();
+        env.set("WEBCODEX_MCP_COMPACT_SCHEMAS", "true");
+        runtime_with_info(RuntimeInfo::from_env())
+    };
+    // Both guards are dropped now; the snapshots outlive the env mutations.
 
-    let default = runtime.dispatch(runtime_status_call()).await;
-    assert!(default.success, "{:?}", default.error);
-    assert_eq!(default.output["mcp_compact_schemas"], true);
-    assert!(default.output.get("runtime_exposure").is_none());
-
-    env.set("WEBCODEX_MCP_COMPACT_SCHEMAS", "false");
-    let full = runtime.dispatch(runtime_status_call()).await;
+    let full = runtime_false.dispatch(runtime_status_call()).await;
+    assert!(full.success, "{:?}", full.error);
     assert_eq!(full.output["mcp_compact_schemas"], false);
+    assert!(full.output.get("runtime_exposure").is_none());
 
-    env.set("WEBCODEX_MCP_COMPACT_SCHEMAS", "true");
-    let compact = runtime.dispatch(runtime_status_call()).await;
+    let compact = runtime_true.dispatch(runtime_status_call()).await;
     assert_eq!(compact.output["mcp_compact_schemas"], true);
 }
 
@@ -2626,67 +2702,45 @@ async fn runtime_status_compact_and_summary_only_return_sanitized_summary() {
             .await;
         assert!(result.success, "{:?}", result.error);
         let summary = &result.output;
-        assert_eq!(summary["compact"], true, "arguments: {arguments}");
-        assert_eq!(
-            summary["mcp_compact_schemas"],
-            crate::model_surface::effective_mcp_compact_schemas(
-                crate::config::mcp_compact_schemas_override(),
-            ),
-            "arguments: {arguments}"
-        );
-        assert!(summary["effective_config"].is_object());
-        assert_eq!(summary["auth_enabled"], false);
-        assert!(summary["configured_public_url"].is_null());
         for pointer in [
             "/service",
             "/version",
             "/build/git_commit",
             "/build/git_dirty",
-            "/tools/count",
             "/jobs/active_count",
+            "/jobs/recovering_count",
+            "/jobs/lost_after_reconcile_count",
             "/runners/count",
             "/runners/online_count",
             "/runners/stale_count",
-            "/runners/summary/online",
-            "/projects/effective/status",
-            "/projects/effective/count",
-            "/projects/runner_registered/count",
-            "/projects/runner_registered/online_count",
-            "/connection_layers/runner_process/status",
-            "/connection_layers/server_transport/status",
-            "/connection_layers/server_registration/status",
-            "/connection_layers/project_registry/status",
-            "/connection_layers/last_successful_tool_call/status",
+            "/projects/count",
+            "/projects/online_count",
+            "/projects/status",
+            "/connection/runner_process",
+            "/connection/server_transport",
+            "/connection/project_registry",
+            "/mcp_host/profile",
+            "/compatibility/protocol",
         ] {
             assert!(
                 summary.pointer(pointer).is_some(),
-                "compact runtime_status should include {pointer}: {summary:?}"
+                "missing {pointer}: {summary}"
             );
         }
-        assert_eq!(summary["service"], "webcodex");
-        assert_eq!(summary["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(summary["runners"]["summary"]["count"], 1);
-        assert_eq!(summary["runners"]["summary"]["online"], 1);
         assert_eq!(summary["runners"]["count"], 1);
         assert_eq!(summary["runners"]["online_count"], 1);
-        assert_eq!(summary["runners"]["stale_count"], 0);
-        assert!(summary["runners"].get("offline_count").is_none());
-        assert_eq!(summary["projects"]["effective"]["count"], 1);
-        assert_eq!(summary["projects"]["effective"]["status"], "ok");
-        assert!(summary["tools"].get("names").is_none());
-        assert!(
-            summary
-                .pointer("/runners/clients/0/policy/allowed_roots")
-                .is_none(),
-            "compact runtime_status must not include full client policy"
-        );
-        assert!(
-            summary
-                .pointer("/runners/clients/0/shell_profiles")
-                .is_none(),
-            "compact runtime_status must not include shell profile details"
-        );
-
+        assert_eq!(summary["projects"]["count"], 1);
+        assert_eq!(summary["projects"]["status"], "ok");
+        for field in [
+            "authority",
+            "effective_config",
+            "tools",
+            "auth_enabled",
+            "configured_public_url",
+        ] {
+            assert!(summary.get(field).is_none(), "{field}");
+        }
+        assert!(summary["runners"].get("clients").is_none());
         let serialized = serde_json::to_string(summary).unwrap();
         for forbidden in [
             "tools.names",
@@ -2721,6 +2775,7 @@ async fn runtime_status_does_not_expose_tokens_or_secrets() {
         quic: Some(Arc::new(std::sync::Mutex::new(
             crate::config::QuicServerConfig::default().runtime_status(),
         ))),
+        ..RuntimeInfo::default()
     };
     let runtime = runtime_with_info(info);
     let result = runtime.dispatch(runtime_status_call()).await;
@@ -2786,6 +2841,7 @@ async fn runtime_status_quic_enabled_error_is_sanitized() {
         quic: Some(status),
         oauth2_enabled: false,
         oauth2_shared_key_bridge_enabled: false,
+        ..RuntimeInfo::default()
     });
     let result = runtime.dispatch(runtime_status_call()).await;
     assert!(result.success);
@@ -2817,6 +2873,7 @@ async fn runtime_status_quic_started_reports_listen_and_alpn() {
         quic: Some(status),
         oauth2_enabled: false,
         oauth2_shared_key_bridge_enabled: false,
+        ..RuntimeInfo::default()
     });
     let result = runtime.dispatch(runtime_status_call()).await;
     assert!(result.success);
@@ -2839,6 +2896,7 @@ async fn runtime_status_auth_enabled_reflects_runtime_info() {
         quic: Some(Arc::new(std::sync::Mutex::new(
             crate::config::QuicServerConfig::default().runtime_status(),
         ))),
+        ..RuntimeInfo::default()
     });
     let result = runtime.dispatch(runtime_status_call()).await;
     assert!(result.success);
@@ -2853,6 +2911,7 @@ async fn runtime_status_auth_enabled_reflects_runtime_info() {
         quic: Some(Arc::new(std::sync::Mutex::new(
             crate::config::QuicServerConfig::default().runtime_status(),
         ))),
+        ..RuntimeInfo::default()
     });
     let result = runtime.dispatch(runtime_status_call()).await;
     assert!(result.success);
@@ -2884,6 +2943,29 @@ fn runtime_info_from_env_reads_effective_server_config() {
     let info = RuntimeInfo::from_env();
     assert!(!info.oauth2_enabled);
     assert!(!info.oauth2_shared_key_bridge_enabled);
+
+    // MCP settings follow the same capture-once rule: a RuntimeInfo resolves
+    // the effective env exactly once, at construction.
+    env.set("WEBCODEX_MCP_COMPACT_SCHEMAS", "false");
+    env.set("WEBCODEX_MCP_APPS_ENABLED", "false");
+    env.set("WEBCODEX_MCP_TEXT_JSON_COMPAT", "false");
+    let frozen = RuntimeInfo::from_env();
+    assert!(!frozen.mcp_compact_schemas);
+    assert!(!frozen.mcp_apps_enabled);
+    assert!(!frozen.mcp_text_json_compat_enabled);
+
+    // Mutating the environment must NOT mutate an already-built snapshot; only
+    // a new construction reads the new values.
+    env.set("WEBCODEX_MCP_COMPACT_SCHEMAS", "true");
+    env.set("WEBCODEX_MCP_APPS_ENABLED", "true");
+    env.set("WEBCODEX_MCP_TEXT_JSON_COMPAT", "true");
+    assert!(!frozen.mcp_compact_schemas);
+    assert!(!frozen.mcp_apps_enabled);
+    assert!(!frozen.mcp_text_json_compat_enabled);
+    let refreshed = RuntimeInfo::from_env();
+    assert!(refreshed.mcp_compact_schemas);
+    assert!(refreshed.mcp_apps_enabled);
+    assert!(refreshed.mcp_text_json_compat_enabled);
 }
 
 #[tokio::test]
@@ -3057,7 +3139,7 @@ async fn runtime_status_includes_sanitized_policy_summary() {
 }
 
 #[tokio::test]
-async fn external_provider_discovery_cannot_change_public_tool_or_openapi_surface() {
+async fn external_provider_discovery_cannot_change_public_tool_surface() {
     use crate::runner_protocol::{
         ClaudeCodeProviderStatus, RunnerPolicySummary, ToolProvidersStatus,
     };
@@ -3066,8 +3148,8 @@ async fn external_provider_discovery_cannot_change_public_tool_or_openapi_surfac
         .iter()
         .map(|spec| spec.name.clone())
         .collect::<BTreeSet<_>>();
-    let openapi_before = crate::openapi::build_openapi_spec();
-    let operation_ids_before = openapi_before["paths"]
+    #[cfg(feature = "legacy-gpt-actions")]
+    let operation_ids_before = crate::openapi::build_openapi_spec()["paths"]
         .as_object()
         .unwrap()
         .values()
@@ -3075,9 +3157,9 @@ async fn external_provider_discovery_cannot_change_public_tool_or_openapi_surfac
         .collect::<BTreeSet<_>>();
     // Snapshot a model-visible tool's schema as the baseline that external
     // provider discovery must not perturb.
-    let write_schema_before = before
+    let edit_schema_before = before
         .iter()
-        .find(|spec| spec.name == "write_project_file")
+        .find(|spec| spec.name == "edit_project_files")
         .unwrap()
         .input_schema
         .clone();
@@ -3129,22 +3211,25 @@ async fn external_provider_discovery_cannot_change_public_tool_or_openapi_surfac
     assert_eq!(
         after
             .iter()
-            .find(|spec| spec.name == "write_project_file")
+            .find(|spec| spec.name == "edit_project_files")
             .unwrap()
             .input_schema,
-        write_schema_before
+        edit_schema_before
     );
-    let openapi_after = crate::openapi::build_openapi_spec();
-    let operation_ids_after = openapi_after["paths"]
-        .as_object()
-        .unwrap()
-        .values()
-        .map(|path| path["post"]["operationId"].as_str().unwrap().to_string())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(operation_ids_after, operation_ids_before);
-    let serialized = serde_json::to_string(&openapi_after).unwrap();
-    for internal in ["Edit", "Read", "Bash", "Write", "FutureTool"] {
-        assert!(!serialized.contains(&format!("\"{internal}\"")));
+    #[cfg(feature = "legacy-gpt-actions")]
+    {
+        let openapi_after = crate::openapi::build_openapi_spec();
+        let operation_ids_after = openapi_after["paths"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|path| path["post"]["operationId"].as_str().unwrap().to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(operation_ids_after, operation_ids_before);
+        let serialized = serde_json::to_string(&openapi_after).unwrap();
+        for internal in ["Edit", "Read", "Bash", "Write", "FutureTool"] {
+            assert!(!serialized.contains(&format!("\"{internal}\"")));
+        }
     }
 }
 

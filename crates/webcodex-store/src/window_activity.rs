@@ -43,6 +43,7 @@ impl Database {
         let sql = format!(
             "SELECT e.client_window_key,
                     MAX(e.client_window_source),
+                    MIN(e.window_ended_at_ms),
                     MAX(e.window_ended_at_ms),
                     MAX(CASE WHEN e.action_name = 'toolsCall' THEN e.window_ended_at_ms END),
                     MAX(CASE WHEN e.window_meaningful = 1 THEN e.window_ended_at_ms END),
@@ -68,11 +69,12 @@ impl Database {
             out.push(WindowActivitySummaryRecord {
                 client_window_key: row.get(0)?,
                 client_window_source: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                last_seen_at_ms: row.get(2)?,
-                last_tool_call_at_ms: row.get(3)?,
-                last_meaningful_activity_at_ms: row.get(4)?,
-                linked_session_count: usize::try_from(row.get::<_, i64>(5)?).unwrap_or(usize::MAX),
-                recorder_gap_count: usize::try_from(row.get::<_, i64>(6)?).unwrap_or(usize::MAX),
+                first_seen_at_ms: row.get(2)?,
+                last_seen_at_ms: row.get(3)?,
+                last_tool_call_at_ms: row.get(4)?,
+                last_meaningful_activity_at_ms: row.get(5)?,
+                linked_session_count: usize::try_from(row.get::<_, i64>(6)?).unwrap_or(usize::MAX),
+                recorder_gap_count: usize::try_from(row.get::<_, i64>(7)?).unwrap_or(usize::MAX),
             });
         }
         Ok(out)
@@ -116,6 +118,7 @@ impl Database {
             Some((kind, id)) => conn
                 .query_row(
                     "SELECT e.client_window_key, MAX(e.client_window_source),
+                            MIN(e.window_ended_at_ms),
                             MAX(e.window_ended_at_ms),
                             MAX(CASE WHEN e.action_name = 'toolsCall' THEN e.window_ended_at_ms END),
                             MAX(CASE WHEN e.window_meaningful = 1 THEN e.window_ended_at_ms END),
@@ -135,6 +138,7 @@ impl Database {
             None => conn
                 .query_row(
                     "SELECT e.client_window_key, MAX(e.client_window_source),
+                            MIN(e.window_ended_at_ms),
                             MAX(e.window_ended_at_ms),
                             MAX(CASE WHEN e.action_name = 'toolsCall' THEN e.window_ended_at_ms END),
                             MAX(CASE WHEN e.window_meaningful = 1 THEN e.window_ended_at_ms END),
@@ -194,6 +198,61 @@ impl Database {
         collect_window_event_rows(&conn, &mut rows, None)
     }
 
+    /// Exact bounded lookup used by App-only lazy Window detail reads.
+    /// The caller still owns principal and Project visibility authorization.
+    pub fn get_window_activity_event_by_trace(
+        &self,
+        window_key: &str,
+        principal: Option<(&str, &str)>,
+        server_trace_id: &str,
+    ) -> anyhow::Result<Option<WindowActivityEventRecord>> {
+        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        let select = "SELECT e.event_id, e.client_window_key, e.client_window_source,
+                    e.server_trace_id, e.window_started_at_ms, e.window_ended_at_ms,
+                    e.duration_ms, e.action_name, e.operation, e.project, e.status,
+                    e.window_meaningful, e.recorder_gap_session_id,
+                    e.principal_correlation_kind, e.principal_correlation_id,
+                    e.request_observed_at_ms, e.response_handed_at_ms,
+                    e.window_transition_kind, e.response_streaming,
+                    e.window_continuity_eligible, e.http_status, e.ids_json
+             FROM action_events e";
+        let mut records = match principal {
+            Some((kind, id)) => {
+                let sql = format!(
+                    "{select}
+                     WHERE e.client_window_key = ?1
+                       AND e.server_trace_id = ?2
+                       AND e.window_started_at_ms IS NOT NULL
+                       AND e.window_ended_at_ms IS NOT NULL
+                       AND e.principal_correlation_kind = ?3
+                       AND e.principal_correlation_id = ?4
+                     ORDER BY e.event_id DESC
+                     LIMIT 1"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                collect_window_events(
+                    &conn,
+                    &mut stmt,
+                    params![window_key, server_trace_id, kind, id],
+                    None,
+                )?
+            }
+            None => {
+                let sql = format!(
+                    "{select}
+                     WHERE e.client_window_key = ?1
+                       AND e.server_trace_id = ?2
+                       AND e.window_started_at_ms IS NOT NULL
+                       AND e.window_ended_at_ms IS NOT NULL
+                     ORDER BY e.event_id DESC
+                     LIMIT 1"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                collect_window_events(&conn, &mut stmt, params![window_key, server_trace_id], None)?
+            }
+        };
+        Ok(records.pop())
+    }
     /// Goal liveness needs the latest meaningful work even after thousands of
     /// transport-only App polls. Reuse the action ledger, with a bounded page of
     /// meaningful events plus the newest observation; never maintain another clock.
@@ -461,11 +520,12 @@ fn window_summary_from_row(
     Ok(WindowActivitySummaryRecord {
         client_window_key: row.get(0)?,
         client_window_source: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-        last_seen_at_ms: row.get(2)?,
-        last_tool_call_at_ms: row.get(3)?,
-        last_meaningful_activity_at_ms: row.get(4)?,
-        linked_session_count: usize::try_from(row.get::<_, i64>(5)?).unwrap_or(usize::MAX),
-        recorder_gap_count: usize::try_from(row.get::<_, i64>(6)?).unwrap_or(usize::MAX),
+        first_seen_at_ms: row.get(2)?,
+        last_seen_at_ms: row.get(3)?,
+        last_tool_call_at_ms: row.get(4)?,
+        last_meaningful_activity_at_ms: row.get(5)?,
+        linked_session_count: usize::try_from(row.get::<_, i64>(6)?).unwrap_or(usize::MAX),
+        recorder_gap_count: usize::try_from(row.get::<_, i64>(7)?).unwrap_or(usize::MAX),
     })
 }
 
@@ -742,6 +802,27 @@ mod tests {
             rows[0].observed_job_ids,
             vec!["wc_job_observed_456".to_string()]
         );
+    }
+
+    #[test]
+    fn window_summary_tracks_first_seen_at() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::open(&tmp.path().join("window-first-seen.db")).unwrap();
+        seed_session(&db);
+        append(&db, event("first", "wf", "alice", "agent:r:p", 1_000), &[]);
+        append(&db, event("later", "wf", "alice", "agent:r:p", 5_000), &[]);
+
+        let summary = db
+            .get_window_activity_summary("wf", Some(("username", "alice")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.first_seen_at_ms, 1_001);
+        assert_eq!(summary.last_seen_at_ms, 5_001);
+
+        let list = db
+            .list_window_activity_summaries(Some(("username", "alice")), 20)
+            .unwrap();
+        assert_eq!(list[0].first_seen_at_ms, 1_001);
     }
 
     #[test]

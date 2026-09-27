@@ -21,7 +21,7 @@ belongs so those boundaries do not leak into unrelated mechanical friction.
 
 ### Bounded bulk exact edits
 
-For repetitive mechanical changes in an explicit file, `apply_text_edits` accepts
+For repetitive mechanical changes in an explicit file, `edit_project_files` accepts
 `replace_exact` with `expected_match_count=N` (1..=1024) and a current
 `expected_read_revision`. The Runner replaces every fully contained exact match
 only when the observed count equals N. `occurrence` selects one match and cannot
@@ -34,7 +34,7 @@ Servers reject bulk requests before dispatch to an older Runner that lacks it;
 requests without the field keep their existing admission and unique-match behavior.
 
 For nontrivial bulk changes, read the file and revision, optionally call
-`apply_text_edits(dry_run=true)`, inspect the bounded `match_count` and
+`edit_project_files(dry_run=true)`, inspect the bounded `match_count` and
 `match_ranges`, then send an independent actual request with the still-valid
 guard. The actual request resolves all matches and fences again. A simple,
 obvious bulk edit may be applied directly. Dry-run creates no future mutation
@@ -181,7 +181,7 @@ Runtime Project identity remains canonical as `agent:<client_id>:<project_id>`. 
 
 Resolving a `project_ref` must always look up the pinned canonical identity and then run the ordinary current Project resolution/authorization path again. The ref is not a credential, bearer token or capability. If the canonical Project disappears, becomes invisible, loses stable identity, or the same canonical address is later registered for a different root, the old ref fails closed. Never recycle or silently retarget an issued ref. Discovery/bootstrap may expose both `project_ref` and canonical identity; ordinary hot-path results should not repeat them when no model decision depends on that duplication.
 
-The same typed durable-reference layer may issue a principal-scoped `session_ref` such as `~s1` for one exact Workflow Session incarnation. Canonical `wc_sess_*` remains authoritative for Session persistence, audit, diagnostics and internal joins. Business `session_id` and wrapper `recording_session_id` remain separate semantic roles, but either may explicitly carry an already-issued Session ref. Runtime canonicalizes the selector before the role-specific authorization/dispatch path: business targeting still reruns Project visibility, Session authority, lifecycle and guards, while recorder provenance still reruns its independent recorder authorization and never supplies business authority. A Session ref never creates ambient or sticky recorder state. Bootstrap, discovery and handoff may expose both identities, while ordinary hot-path results should avoid redundant duplication.
+The same typed durable-reference layer may issue a principal-scoped `session_ref` such as `~s1` for one exact Workflow Session incarnation. Canonical `wc_sess_*` remains authoritative for Session persistence, audit, diagnostics and internal joins. Business `session_id` and MCP envelope `_wc.record` remain separate semantic roles, but either may explicitly carry an already-issued Session ref. Runtime canonicalizes the selector before the role-specific authorization/dispatch path: business targeting still reruns Project visibility, Session authority, lifecycle and guards, while recorder provenance still reruns its independent recorder authorization and never supplies business authority. A Session ref never creates ambient or sticky recorder state. Bootstrap, discovery and handoff may expose both identities, while ordinary hot-path results should avoid redundant duplication.
 
 ### Agent continuation selectors
 
@@ -435,3 +435,23 @@ Current tool work should proceed in this order:
 Do not skip directly to pruning or composition just because a trace contains many
 tool calls. First determine whether the extra calls are real model decisions or
 avoidable contract friction.
+
+### Runtime status projections
+
+Canonical `runtime_status` and HTTP/API omission retain full diagnostic output.
+MCP supplies `compact=true` only when the argument is omitted, for both direct
+and `call_runtime_tool` calls. Use `compact=false` (without `summary_only=true`)
+for full diagnostics. `summary_only=true` is still an alias for sparse status.
+Discovery schema compaction does not control result projection.
+
+Sparse fleet status reports Server identity, MCP Host profile, Runner/Project
+counts, active/running/queued/recovering/lost-after-reconcile Job counts,
+protocol/build/source alignment, and connection states. Exact `client_id`
+focus limits these observations to that caller-visible Runner, including its
+protocol generation and shared Job concurrency. It does not return fleet rows,
+capabilities, provider inventories, authority, auth configuration or timestamps.
+Full mode retains those diagnostic facts. Both modes use the same canonical
+Job counting and compatibility rules; sparse status branches before full
+inventory/configuration JSON construction.
+
+Measured costs and direct-surface decisions: [model-call economy audit](model-call-economy-audit.md).

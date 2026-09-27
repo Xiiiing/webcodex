@@ -101,69 +101,10 @@ fn code_mode_exec_mutating_is_not_a_tool_call_without_feature() {
 }
 
 #[test]
-fn apply_text_edits_shorthand_normalizes_once_to_canonical_call() {
-    let revision = 3817291045227_u64;
-    let call = ToolCall::from_tool_name(
-        "apply_text_edits",
-        json!({
-            "project": "agent:special:demo",
-            "changes": [{
-                "path": "src/lib.rs",
-                "old_text": "old",
-                "new_text": "new",
-                "expected_read_revision": revision
-            }]
-        }),
-    )
-    .unwrap();
-    let ToolCall::ApplyTextEdits { changes, .. } = call else {
-        panic!("expected apply_text_edits");
-    };
-    assert_eq!(changes.len(), 1);
-    let change = &changes[0];
-    assert_eq!(change.kind, ApplyFileChangeKind::Edit);
-    assert_eq!(change.path, "src/lib.rs");
-    assert!(change.to_path.is_none());
-    assert!(change.content.is_none());
-    assert_eq!(change.expected_read_revision, Some(revision));
-    assert_eq!(change.edits.len(), 1);
-    let edit = &change.edits[0];
-    assert_eq!(edit.kind, ApplyTextEditKind::ReplaceExact);
-    assert_eq!(edit.old_text.as_deref(), Some("old"));
-    assert_eq!(edit.new_text.as_deref(), Some("new"));
-    assert!(edit.anchor_text.is_none());
-    assert!(edit.occurrence.is_none());
-    assert!(edit.line_scope.is_none());
-
-    let canonical = ToolCall::from_tool_name(
-        "apply_text_edits",
-        json!({
-            "project": "agent:special:demo",
-            "changes": [{
-                "kind": "edit",
-                "path": "src/lib.rs",
-                "edits": [{"kind": "replace_exact", "old_text": "old", "new_text": "new"}]
-            }]
-        }),
-    )
-    .unwrap();
-    let ToolCall::ApplyTextEdits { changes, .. } = canonical else {
-        panic!("expected canonical apply_text_edits");
-    };
-    assert_eq!(changes[0].kind, ApplyFileChangeKind::Edit);
-    assert_eq!(changes[0].edits[0].kind, ApplyTextEditKind::ReplaceExact);
-    assert_eq!(changes[0].edits[0].old_text.as_deref(), Some("old"));
-    assert_eq!(changes[0].edits[0].new_text.as_deref(), Some("new"));
-
-    for invalid in [
-        json!({"project":"agent:special:demo","changes":[{"path":"src/lib.rs","old_text":"old","new_text":"new","unknown":true}]}),
-        json!({"project":"agent:special:demo","changes":[{"path":"src/lib.rs","old_text":"old","new_text":"new","occurrence":2}]}),
-        json!({"project":"agent:special:demo","changes":[{"path":"src/lib.rs","old_text":"old","new_text":"new","expected_read_revision":revision,"line_scope":{"start_line":10,"end_line":20}}]}),
-        json!({"project":"agent:special:demo","changes":[{"kind":"edit","path":"src/lib.rs","old_text":"old","new_text":"new"}]}),
-        json!({"project":"agent:special:demo","changes":[{"path":"new.rs","content":"fn main() {}"}]}),
-    ] {
-        assert!(ToolCall::from_tool_name("apply_text_edits", invalid).is_err());
-    }
+fn edit_project_files_rejects_retired_shorthand() {
+    assert!(ToolCall::from_tool_name("edit_project_files", json!({
+        "project":"demo","changes":[{"path":"a","old_text":"old","new_text":"new","expected_read_revision":123}]
+    })).is_err());
 }
 
 #[test]
@@ -227,15 +168,56 @@ fn start_agent_task_endpoint_continuation_parses_ref_or_explicit_tuple() {
         }),
     )
     .is_err());
-    assert!(ToolCall::from_tool_name(
+    let heartbeat_by_ref = ToolCall::from_tool_name(
         "heartbeat_agent_task_attempt",
+        json!({"attempt_ref": "~ta1"}),
+    )
+    .unwrap();
+    assert!(matches!(
+        heartbeat_by_ref,
+        ToolCall::HeartbeatAgentTaskAttempt {
+            attempt_ref: Some(ref selector),
+            task_id: None,
+            attempt_fence: None,
+            active_turn_wake_id: None,
+            active_turn_consume_token: None,
+            ..
+        } if selector == "~ta1"
+    ));
+    let completion_by_ref = ToolCall::from_tool_name(
+        "complete_agent_task_attempt",
         json!({
             "attempt_ref": "~ta1",
+            "outcome": "succeeded",
+            "completion_key": "completion-by-ref"
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        completion_by_ref,
+        ToolCall::CompleteAgentTaskAttempt {
+            attempt_ref: Some(ref selector),
+            task_id: None,
+            attempt_id: None,
+            assignee_agent_id: None,
+            attempt_fence: None,
+            attempt_controller_generation: None,
+            ref outcome,
+            ref completion_key,
+            ..
+        } if selector == "~ta1" && outcome == "succeeded" && completion_key == "completion-by-ref"
+    ));
+    assert!(ToolCall::from_tool_name(
+        "start_agent_task_coding_run",
+        json!({
+            "attempt_ref": "~ta1",
+            "project": "agent:special:task-project",
             "task_id": "wc_agent_task_ERERERERERERERER",
             "attempt_id": "wc_agent_task_attempt_IiIiIiIiIiIiIiIi",
             "assignee_agent_id": "wc_dagent_MzMzMzMzMzMzMzMz",
             "attempt_fence": "wc_agent_task_fence_RERERERERERERERERERERA",
-            "attempt_controller_generation": 1
+            "attempt_controller_generation": 1,
+            "provider_id": "codex"
         }),
     )
     .is_err());
@@ -1347,7 +1329,13 @@ fn from_tool_name_unknown_tool_lists_available_tools_and_hint() {
     );
     // Should list at least a couple of known tool names.
     assert!(err.contains("show_changes"));
-    assert!(err.contains("apply_unified_diff"));
+    assert!(err.contains("edit_project_files"));
+    for hidden in EXACT_MANIFEST_SPECIALIST_TOOL_NAMES {
+        assert!(
+            !err.contains(hidden),
+            "ordinary unknown-tool hints must not advertise hidden specialist {hidden}: {err}"
+        );
+    }
     // Must not leak secret/config artifacts.
     let lower = err.to_lowercase();
     for forbidden in [
@@ -2271,19 +2259,18 @@ fn job_terminal_continuation_calls_require_explicit_wait_and_private_view_fence(
 
 #[test]
 fn guidance_profile_defaults_and_schema_follow_compiled_availability() {
-    use crate::tool_inputs::CodingGuidanceProfile;
     let base = json!({"project": "agent:profile:demo", "instruction": "inspect the project"});
     let default = ToolCall::from_tool_name("work_on_project", base.clone()).unwrap();
     assert!(matches!(
         default,
         ToolCall::WorkOnProject {
-            guidance_profile: CodingGuidanceProfile::Direct,
+            guidance_profile: None,
             ..
         }
     ));
     let schema = crate::request_schema::input_schema_for_tool("work_on_project");
     let property = &schema["properties"]["guidance_profile"];
-    assert_eq!(property["default"], "direct");
+    assert!(property.get("default").is_none());
     assert!(!schema["required"]
         .as_array()
         .unwrap()

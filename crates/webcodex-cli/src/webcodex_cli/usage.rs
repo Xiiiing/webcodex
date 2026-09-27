@@ -5,6 +5,11 @@ Quick trial:\n\
   share                         Temporarily share one project; ends when the command exits\n\
   (no command)                  Interactive Git repo shortcut for `share` on Linux/macOS\n\n\
 Daily self-hosted setup:\n\
+  environment configure         Create or join an environment; optionally select local projects\n\
+  environment add-project       Add a project using this machine's existing Runner identity\n\
+  environment status|doctor     View the authorized fleet and diagnose this machine\n\
+  See `webcodex environment --help` for services, invitations, recovery and upgrades.\n\n\
+Advanced component commands:\n\
   server                        Configure and operate the Server\n\
   controller                    WSL/Linux terminal control plane for Server, Runner, and Tunnel\n\
   pairing create                Create a one-time login code\n\
@@ -37,24 +42,30 @@ Options:\n\
 
 pub(crate) fn controller_usage() -> &'static str {
     "Usage: webcodex controller <COMMAND> [OPTIONS]\n\n\
-WSL/Linux terminal control plane for a local WebCodex Server + Runner + optional OpenAI Tunnel.\n\n\
+WSL/Linux terminal control plane for a local or remote WebCodex Server, local Runner, and optional local OpenAI Tunnel.\n\n\
 Commands:\n\
   init       Create controller.toml with local defaults\n\
   run        Run the Controller in the foreground and own child processes\n\
   install    Install and optionally start the systemd user service\n\
   start      Start the installed systemd user service\n\
-  status     Read live Controller/component state over the Unix socket\n\
-  doctor     Validate configuration, binaries, loopback Server address, and Tunnel credentials\n\
-  stop       Stop the installed systemd user service\n\
-  restart    Restart the Controller service, or one component: server|runner|tunnel\n\
-  logs       Read bounded in-memory Controller/component logs\n\n\
+  status     Show live runtime state or installed systemd user-service state\n\
+  doctor     Validate topology, config, binaries, Runner target, and Tunnel credentials\n\
+  stop       Stop a foreground Controller or installed systemd user service\n\
+  restart    Restart the systemd Controller/foreground runtime, or one managed component\n\
+  logs       Read live in-memory logs, falling back to the systemd user journal\n\
+  uninstall  Stop/disable/remove only the Controller systemd user service (--confirm)\n\
+  project    List, register, or unregister projects through an online Runner\n\n\
+Project commands: project list | project register PATH | project remove ID-OR-PATH\n\
+  --user-token-file PATH   User API credential [default: matching Runner connection's webcodex-user-token]\n\
+  All project commands require the configured Runner online; no local registry fallback.\n\n\
 Common options:\n\
   --config PATH   Controller config [default: ~/.config/webcodex/controller.toml]\n\
   --service-file PATH      systemd user unit [default: ~/.config/systemd/user/webcodex-controller.service]\n\
   --environment-file PATH  optional service environment file [default: ~/.config/webcodex/controller.env]\n\
   --overwrite     Replace an existing managed Controller unit during install\n\
   --no-start      Install/enable the unit without starting it\n\
-  --json          Machine-readable output for status/doctor\n\
+  --confirm       Required by controller uninstall\n\
+  --json          Machine-readable output for status/doctor/project\n\
   -h, --help      Print help and exit\n\n\
 Controller V0 does not modify Desktop and uses existing Server, Runner, and Tunnel process contracts.\n"
 }
@@ -419,13 +430,13 @@ For start/stop/restart/logs/uninstall, --service-file PATH targets a custom mana
 }
 
 pub(crate) fn server_tunnel_usage() -> &'static str {
-    "Usage: webcodex server tunnel --provider openai --env-file PATH --json --stop-on-stdin-eof\n\n\
+    "Usage: webcodex server tunnel --provider openai --env-file PATH --json [--stop-on-stdin-eof]\n\n\
 Run the canonical OpenAI Secure Tunnel for an already-running local WebCodex Server.\n\n\
 Options:\n\
   --provider openai          Required provider; regular Cloudflare remains a separate future contract\n\
   --env-file PATH            Local Server env file used for loopback address and bootstrap authority\n\
   --json                     Emit the safe machine readiness event\n\
-  --stop-on-stdin-eof        Stop when the owning integration closes stdin\n\
+  --stop-on-stdin-eof        Stop when the owning integration closes stdin (default: keep running)\n\
   -h, --help                 Print help and exit\n\n\
 The Tunnel exposes only the local Server MCP endpoint and authenticates it with the effective Server bootstrap credential (process environment overrides the env file). The ready event contains only provider/readiness/clipboard metadata; credentials are never printed.\n"
 }

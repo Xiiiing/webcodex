@@ -64,6 +64,7 @@ pub(crate) struct ToolInvocationMetadata {
     pub(crate) ack_session_message_ids: Vec<String>,
     pub(crate) ack_ref: Option<String>,
     pub(crate) session_message_resolution: Option<ToolCallSessionMessageResolution>,
+    pub(crate) window_reply: Option<super::window_collaboration::ToolCallWindowReply>,
     pub(crate) context_request: Vec<String>,
 }
 
@@ -234,6 +235,25 @@ fn check_session_message_resolution_scope(
 }
 
 impl ToolRuntime {
+    #[cfg(feature = "experimental-code-mode")]
+    pub(crate) fn call_tool_with_context_and_return_timing<'a>(
+        &'a self,
+        request: ToolCallRequest,
+        context: ToolCallContext<'a>,
+        return_timing: super::return_timing::ToolReturnTimingPolicy,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            self.call_tool_with_invocation_metadata_and_return_timing(
+                request,
+                context,
+                ToolInvocationMetadata::default(),
+                ToolProtocolCapabilities::default(),
+                return_timing,
+            )
+            .await
+        })
+    }
+
     pub(crate) fn call_tool_with_context<'a>(
         &'a self,
         request: ToolCallRequest,
@@ -302,14 +322,43 @@ impl ToolRuntime {
         &'a self,
         request: ToolCallRequest,
         context: ToolCallContext<'a>,
+        invocation_metadata: ToolInvocationMetadata,
+        capabilities: ToolProtocolCapabilities,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallOutcome> + Send + 'a>> {
+        self.call_tool_with_invocation_metadata_and_return_timing(
+            request,
+            context,
+            invocation_metadata,
+            capabilities,
+            super::return_timing::ToolReturnTimingPolicy::unconstrained(),
+        )
+    }
+
+    fn call_tool_with_invocation_metadata_and_return_timing<'a>(
+        &'a self,
+        request: ToolCallRequest,
+        context: ToolCallContext<'a>,
         mut invocation_metadata: ToolInvocationMetadata,
         capabilities: ToolProtocolCapabilities,
+        return_timing: super::return_timing::ToolReturnTimingPolicy,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallOutcome> + Send + 'a>> {
         // MCP enters the kernel here directly rather than through
         // call_tool_with_context, so give it the same bounded adapter future.
         Box::pin(async move {
-            let telemetry =
+            let mut telemetry =
                 ModelErgonomicsTimer::start_with_arguments(&request.tool_name, &request.arguments);
+            if let Some(telemetry) = telemetry.as_mut() {
+                telemetry.invocation =
+                    super::model_ergonomics_telemetry::invocation::InvocationFacts::from_metadata(
+                        &invocation_metadata,
+                        context.session_id.is_some(),
+                    );
+                telemetry.resolve_work_on_project_guidance_profile(
+                    self.mcp_host_policy,
+                    matches!(context.transport, ToolTransport::Mcp),
+                );
+            }
+            let tool_name = request.tool_name.clone();
             let mut control = invocation_metadata
                 .control
                 .take()
@@ -320,6 +369,7 @@ impl ToolRuntime {
                     context,
                     invocation_metadata,
                     capabilities,
+                    return_timing,
                     &mut control,
                 )
                 .await;
@@ -327,6 +377,17 @@ impl ToolRuntime {
                 control.decorate(&mut outcome);
             }
             outcome.model_ergonomics = telemetry.map(ModelErgonomicsTimer::finish);
+            if let (Some(completion), Some(result)) =
+                (&mut outcome.model_ergonomics, &outcome.result)
+            {
+                completion.job_convergence = self.job_convergence_record(
+                    &tool_name,
+                    result,
+                    &outcome.correlation,
+                    context.auth,
+                    context.window,
+                );
+            }
             outcome
         })
     }
@@ -337,8 +398,26 @@ impl ToolRuntime {
         context: ToolCallContext<'_>,
         invocation_metadata: ToolInvocationMetadata,
         capabilities: ToolProtocolCapabilities,
+        return_timing: super::return_timing::ToolReturnTimingPolicy,
         control: &mut Option<super::control_sidecar::ControlExecution>,
     ) -> ToolCallOutcome {
+        // Admit before any tool-specific await or side effect. The permit is
+        // retained through the complete call, including direct SSH effects.
+        let _maintenance_permit = match self.runner_registry.admit_runtime_call().await {
+            Ok(permit) => permit,
+            Err(message) => {
+                return ToolCallOutcome {
+                    success: false,
+                    result: None,
+                    error_status: Some(ToolCallErrorStatus::InvalidArguments {
+                        message: message.to_string(),
+                    }),
+                    project: None,
+                    model_ergonomics: None,
+                    correlation: Default::default(),
+                }
+            }
+        };
         if let Some(control) = control.as_ref() {
             if let Err(outcome) = control.validate(
                 &request.tool_name,
@@ -350,6 +429,7 @@ impl ToolRuntime {
             }
         }
         let ack_ref = invocation_metadata.ack_ref.clone();
+        let window_reply = invocation_metadata.window_reply.clone();
         let mut recorder_metadata =
             ToolCallRecorderMetadata::from_business_arguments(&request.arguments);
         recorder_metadata.ack_session_message_ids = invocation_metadata.ack_session_message_ids;
@@ -391,7 +471,7 @@ impl ToolRuntime {
         }
         if matches!(
             request.tool_name.as_str(),
-            "work_result_state" | "work_result_send_message"
+            "work_result_state" | "work_result_activity_detail" | "work_result_send_message"
         ) && !capabilities.work_result_app
         {
             return ToolCallOutcome {
@@ -570,6 +650,12 @@ impl ToolRuntime {
             if super::tool_definition::is_model_visible_tool_name(&request.tool_name) {
                 let peer_project = outcome.project.clone();
                 if let Some(result) = outcome.result.as_mut() {
+                    self.add_window_model_reply_sidecar(
+                        result,
+                        context.auth,
+                        context.window,
+                        window_reply.as_ref(),
+                    );
                     if request.tool_name != "present_work_result" {
                         self.add_window_operator_projection(
                             result,
@@ -991,6 +1077,7 @@ impl ToolRuntime {
                     memory_surface: capabilities.memory_surface,
                 },
                 capabilities,
+                return_timing,
             )
             .await;
         if result.success {
@@ -1156,6 +1243,12 @@ impl ToolRuntime {
             }
         }
         if super::tool_definition::is_model_visible_tool_name(&request.tool_name) {
+            self.add_window_model_reply_sidecar(
+                &mut result,
+                context.auth,
+                context.window,
+                window_reply.as_ref(),
+            );
             let peer_project = correlation
                 .resolved_project
                 .as_deref()
@@ -1342,6 +1435,7 @@ mod tests {
             crate::tool_runtime::sessions::TOOL_CALL_RECORDING_SESSION_ID_FIELD,
             crate::tool_runtime::sessions::TOOL_CALL_ACK_SESSION_MESSAGE_IDS_FIELD,
             crate::tool_runtime::sessions::TOOL_CALL_SESSION_MESSAGE_RESOLUTION_FIELD,
+            crate::tool_runtime::window_collaboration::TOOL_CALL_WINDOW_REPLY_FIELD,
             crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD,
         ] {
             assert!(!business_object.contains_key(wrapper));

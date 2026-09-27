@@ -5,6 +5,65 @@ export type RuntimeLanguage = "en" | "zh-CN";
 export const LANGUAGE_STORAGE_KEY = "webcodex.runtime.language.v1";
 
 export const RUNTIME_ZH_TEXT: Record<string, string> = {
+  "Some linked Sessions are not available in this view.": "此视图仅展示部分已关联的 Session。",
+  "Copy unavailable; select the text to copy.": "无法自动复制，请选中文字复制。",
+  "This Session is linked to the Window but has no retained calls.": "此 Session 已关联到窗口，但没有保留的调用记录。",
+  "Last synced": "上次同步",
+  "Server configuration": "服务器配置",
+  "Effective server parameters. Credentials are never displayed.": "服务器当前生效的配置参数，不展示凭据。",
+  "Configuration is unavailable from this server version.": "此服务器版本未提供配置信息。",
+  "Request tracing": "请求跟踪",
+  "seconds": "秒",
+  "Shared key authentication": "共享密钥认证",
+  "Anonymous access": "匿名访问",
+  "OAuth2 authentication": "OAuth2 认证",
+  "OAuth2 shared key bridge": "OAuth2 共享密钥桥接",
+  "MCP host profile": "MCP 主机配置",
+  "Host request budget": "主机请求预算",
+  "Initial job handoff wait": "首次任务交接等待",
+  "Maximum synchronous wait": "同步等待上限",
+  "Continuation wait": "后续等待时长",
+
+  "Some running calls are not shown.": "运行中调用仅显示部分记录。",
+  "Conversation refresh failed; previous messages retained.": "对话刷新失败，保留上次加载的消息。",
+  "Messages unavailable. Refresh to retry.": "消息暂不可用，请刷新重试。",
+  "Connected in this browser": "已在此浏览器连接",
+  "Not connected in this browser": "未在此浏览器连接",
+  "Open conversation": "打开对话",
+  "Connect as this Agent to open its inbox.": "连接此 Agent 后查看收件箱。",
+  "Acknowledge": "确认收到",
+  "Send as": "发送身份",
+  "Write a message\u2026": "输入消息…",
+  "Select or create a conversation.": "选择或创建一个对话。",
+  "Recipients (optional)": "收件人（可选）",
+  "Participants": "参与者",
+  "Shared conversations visible to your account.": "当前账号可见的共享对话。",
+  "Select or create an Agent to get started.": "选择或创建一个 Agent 开始使用。",
+  "Edit profile": "编辑资料",
+  "Connect as this Agent": "连接此 Agent",
+  "Connect to read and acknowledge messages or send as this Agent. This does not start a model.": "连接后可查看、确认消息，或以此 Agent 身份发送消息；连接不会启动模型。",
+  "Browser connection": "浏览器连接",
+  "connections": "个连接",
+  "Connections": "连接数",
+  "pending messages": "条待处理消息",
+  "Pending messages": "待处理消息",
+  "Profile": "资料",
+  "All conversations": "全部对话",
+  "Inbox": "收件箱",
+  "Agent workspace": "Agent 工作区",
+  "Current Window": "当前窗口",
+  "Session activity": "会话活动",
+  "Finding linked Windows…": "正在查找关联窗口…",
+  "Could not load Session activity.": "无法加载会话活动。",
+  "Choose a Window for this Session": "选择要查看的关联窗口",
+  "View Session record": "查看会话记录",
+  "Check branch": "查看分支",
+  "Git status unavailable": "无法读取 Git 状态",
+  "Detached HEAD": "分离的 HEAD",
+  "Active Windows": "活跃窗口",
+  "View activity": "查看活动",
+  "Build diagnostics": "构建诊断",
+  "No Runners connected": "暂无已连接的运行器",
   "Observation scope": "观测范围",
   "Window activity refresh failed; showing previous observations.": "窗口活动刷新失败，正在显示之前的观测记录。",
   "Last Project": "最近项目",
@@ -834,6 +893,9 @@ Object.assign(RUNTIME_ZH_TEXT, {
   "Adding project…": "正在添加项目…",
   "Cancel": "取消",
   "Runtime overview unavailable": "运行时概览不可用",
+  "No authorized Runners yet": "暂无获授权的 Runner",
+  "GUI session available": "GUI 会话可用",
+  "GUI session unavailable": "GUI 会话不可用",
   "This credential sees only its observation principal's Windows within currently authorized Projects. Global Window observation requires an administrator Runtime credential.": "当前凭证只能查看其观察主体在当前已授权项目内的窗口。全局窗口观察需要管理员运行时凭证。",
   "Window inventory is bounded; not all observed Windows are loaded.": "窗口清单受返回范围限制，未加载全部已观察窗口。",
   "Linked Session inventory is bounded; additional relations are not loaded.": "关联会话清单受返回范围限制，更多关系尚未加载。",
@@ -1090,6 +1152,26 @@ Object.assign(RUNTIME_ZH_TEXT, {
   "Projects": "项目",
   "All projects": "全部项目",
   "No Window activity": "暂无窗口活动"
+});
+
+Object.assign(RUNTIME_ZH_TEXT, {
+  "Machine": "机器",
+  "Directory": "目录",
+  "Project address": "项目地址",
+  "Latest activity": "最近活动"
+});
+
+Object.assign(RUNTIME_ZH_TEXT, {
+  "Loading recent activity…": "正在加载最近活动…",
+  "Loading history…": "正在加载历史记录…"
+});
+
+Object.assign(RUNTIME_ZH_TEXT, {
+  "First active": "首次活跃"
+});
+
+Object.assign(RUNTIME_ZH_TEXT, {
+  "Duration": "耗时"
 });
 
 export function translate(source: string, language: RuntimeLanguage = "en"): string {
