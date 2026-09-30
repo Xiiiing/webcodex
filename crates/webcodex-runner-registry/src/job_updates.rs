@@ -3,8 +3,8 @@ use super::access_control::{
 };
 use super::jobs::{
     append_log_limited, assert_active_instance_locked, command_preview, is_final_job_status,
-    job_view, notify_job_update, observe_job_terminal, parse_job_lifecycle, process_preview,
-    refresh_job_status_locked, script_preview, select_log_lines,
+    job_view, notify_job_heartbeat, notify_job_update, observe_job_terminal, parse_job_lifecycle,
+    process_preview, refresh_job_status_locked, script_preview, select_log_lines,
 };
 use super::reconciliation::validate_stream_snapshot;
 use super::requests::{
@@ -25,9 +25,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use webcodex_core::runner_operation::{
-    RunnerInvocationMetadata, RunnerJobOperation, RunnerJobProcessOperation,
-    RunnerJobScriptOperation, RunnerJobShellOperation, RunnerJobSkillResourceOperation,
-    RunnerJobValidationOperation, RunnerOperation,
+    RunnerInvocationMetadata, RunnerJobBuildOperation, RunnerJobOperation,
+    RunnerJobProcessOperation, RunnerJobScriptOperation, RunnerJobShellOperation,
+    RunnerJobSkillResourceOperation, RunnerJobValidationOperation, RunnerOperation,
 };
 use webcodex_core::runner_protocol::{
     validate_process_argv, validate_script_request, validation_infrastructure_failure_code,
@@ -80,6 +80,12 @@ pub struct JobLogWait {
     /// Whether the job changed relative to the supplied `after_observation_token`.
     /// Always false when no `after_observation_token` was provided.
     pub changed: bool,
+    /// Whether a semantic/log/activity/lifecycle/recovery change happened after
+    /// the supplied observation token. False for a sequence-only heartbeat.
+    pub meaningful_changed: bool,
+    /// Whether the only observed revision advance since the supplied token was
+    /// sequence-only liveness traffic.
+    pub heartbeat_changed: bool,
     /// Whether the job is terminal per the canonical job terminal definition.
     pub terminal: bool,
 }
@@ -90,9 +96,32 @@ impl Default for JobLogWait {
             wait_outcome: JobLogWaitOutcome::Immediate,
             waited_ms: 0,
             changed: false,
+            meaningful_changed: false,
+            heartbeat_changed: false,
             terminal: false,
         }
     }
+}
+
+fn observation_change_flags(
+    job: &ShellJobRecord,
+    after: Option<&webcodex_core::job_observation::JobObservationToken>,
+) -> (bool, bool, bool) {
+    let Some(token) = after else {
+        return (false, false, false);
+    };
+    let parent_changed = !token.matches_parent(&job.job_id, &job.observation.epoch);
+    let revision = job.observation.revision.load(Ordering::Relaxed);
+    let changed = parent_changed || token.revision != revision;
+    let meaningful_changed = changed
+        && (parent_changed
+            || job
+                .observation
+                .last_meaningful_revision
+                .load(Ordering::Relaxed)
+                > token.revision);
+    let heartbeat_changed = changed && !meaningful_changed;
+    (changed, meaningful_changed, heartbeat_changed)
 }
 
 pub const MAX_JOB_TELEMETRY_SNAPSHOTS: usize = 9;
@@ -206,7 +235,7 @@ fn frozen_shell_job_log_projection(
         let mut view = job_view(job);
         view.observation_token = webcodex_core::job_observation::JobObservationToken::new_baseline(
             job.job_id.clone(),
-            job.observation.epoch.to_string(),
+            &job.observation.epoch,
             job.observation.revision.load(Ordering::Relaxed),
         )
         .ok()
@@ -279,7 +308,7 @@ fn frozen_shell_job_log_projection(
     let mut view = job_view(job);
     view.observation_token = webcodex_core::job_observation::JobObservationToken::new(
         job.job_id.clone(),
-        job.observation.epoch.to_string(),
+        &job.observation.epoch,
         job.observation.revision.load(Ordering::Relaxed),
         stdout.next_line as u64,
         stderr.next_line as u64,
@@ -456,7 +485,7 @@ fn validate_test_count_evidence(
         return Ok(());
     };
     let cargo_test = job.validation.as_ref().is_some_and(|metadata| {
-        metadata.tool == "cargo_test" && metadata.kind == "test" && metadata.no_run != Some(true)
+        metadata.adapter == "cargo_test" && metadata.kind == "test" && metadata.no_run != Some(true)
     });
     if !cargo_test || !lifecycle.is_terminal() || !update.finished || !evidence.is_valid() {
         return invalid_progress("test_count_evidence_invalid");
@@ -609,6 +638,7 @@ pub struct ShellJobStartMetadata {
 
 #[derive(Debug, Clone)]
 pub enum StructuredJobExecution {
+    ProjectBuild(webcodex_core::project_build::ProjectBuildPlan),
     Process(ShellProcessArgv),
     DetachedProcess(ShellProcessArgv),
     Script(ShellScriptPayload),
@@ -798,6 +828,10 @@ impl RunnerRegistry {
             structured_execution.as_ref(),
             Some(StructuredJobExecution::SkillResource(_))
         );
+        let project_build_request = matches!(
+            structured_execution.as_ref(),
+            Some(StructuredJobExecution::ProjectBuild(_))
+        );
         if explicit_shell.is_some()
             && (structured_execution.is_some()
                 || !validation_steps.is_empty()
@@ -836,6 +870,33 @@ impl RunnerRegistry {
         let (safe_command_preview, structured_metadata, job_kind) = match structured_execution
             .as_ref()
         {
+            Some(StructuredJobExecution::ProjectBuild(plan)) => {
+                if !plan.is_valid() || structured_stdin.is_some() {
+                    return Err("invalid typed project build Job plan".to_string());
+                }
+                validate_process_argv(&plan.process)?;
+                validate_structured_job_common(
+                    normalized_job_cwd.as_deref(),
+                    None,
+                    timeout_secs,
+                    PROCESS_TIMEOUT_MAX_SECS,
+                )?;
+                let preview = process_preview(
+                    &plan.process.executable,
+                    plan.process.args.iter().map(String::as_str),
+                );
+                let safe = ShellJobStructuredExecutionMetadata {
+                    execution_source: "project_build".to_string(),
+                    language: None,
+                    script_bytes: None,
+                    arg_count: plan.process.args.len(),
+                    stdin_present: false,
+                    validation_identity: None,
+                    validation_tool: None,
+                    assertion_name: None,
+                };
+                (preview, Some(safe), "project_build")
+            }
             Some(StructuredJobExecution::Process(process)) => {
                 validate_process_argv(process)?;
                 validate_structured_job_common(
@@ -1014,6 +1075,16 @@ impl RunnerRegistry {
             structured_execution: structured_metadata.clone(),
         };
         let job_operation = match structured_execution {
+            Some(StructuredJobExecution::ProjectBuild(plan)) => {
+                RunnerJobOperation::StartBuild(RunnerJobBuildOperation {
+                    job_id: job_id.clone(),
+                    cwd: normalized_job_cwd.clone(),
+                    process: plan.process,
+                    provenance: plan.provenance,
+                    timeout_secs,
+                    context: job_context,
+                })
+            }
             Some(StructuredJobExecution::Process(process)) => {
                 RunnerJobOperation::StartProcess(RunnerJobProcessOperation {
                     job_id: job_id.clone(),
@@ -1125,6 +1196,11 @@ impl RunnerRegistry {
                 "capability_unavailable: runner {client_id} does not support structured_execution_jobs"
             ));
         }
+        if project_build_request && !runner.runner_features.supports(RunnerFeature::ProjectBuild) {
+            return Err(
+                "capability_unavailable: upgrade target Runner for project_build_v1".to_string(),
+            );
+        }
         if javascript_script_request
             && !runner
                 .runner_features
@@ -1183,6 +1259,33 @@ impl RunnerRegistry {
                 "agent_capability_unavailable: runner {} does not support ssh_shell",
                 client_id
             ));
+        }
+        if validation
+            .as_ref()
+            .is_some_and(|v| v.project_validation.is_some())
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectValidation)
+        {
+            return Err(
+                "capability_unavailable: upgrade target Runner for project_validation_v1".into(),
+            );
+        }
+        // Recheck at admission, not only during the earlier planning round trip:
+        // a replacement/older Runner must never reinterpret new filters or counts.
+        let project_test_options = validation
+            .as_ref()
+            .and_then(|metadata| metadata.project_validation.as_ref())
+            .is_some_and(|provenance| provenance.request.test.is_some());
+        let go_test_filter = validation_steps.iter().any(|step| {
+            step.is_structured_go_test_json() && step.args.get(2).is_some_and(|arg| arg == "-run")
+        });
+        if (project_test_options || go_test_filter)
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectValidationTestOptions)
+        {
+            return Err("capability_unavailable: upgrade target Runner for project_validation_test_options_v1".into());
         }
         if !validation_steps.is_empty()
             && !runner
@@ -1269,7 +1372,7 @@ impl RunnerRegistry {
         }
         if validation
             .as_ref()
-            .is_some_and(|metadata| metadata.tool == "go_test")
+            .is_some_and(|metadata| metadata.adapter == "go_test")
             && !runner
                 .runner_features
                 .supports(RunnerFeature::StructuredGoTestTool)
@@ -1412,10 +1515,15 @@ impl RunnerRegistry {
         if job.visibility == ShellJobVisibility::CleanupPending {
             return Err(format!("structured job cleanup is pending: {job_id}"));
         }
-        // A terminal update may race the sync-wait deadline. Keep terminal
-        // records hidden so the initiating structured tool call returns its
-        // terminal result instead of handing off an already-finished Job.
-        if !job.lifecycle.is_terminal() {
+        // A conclusive terminal update may race the sync-wait deadline. Keep
+        // those records hidden so the initiating structured tool call returns
+        // the terminal result without leaving a redundant public Job. An
+        // outcome_unknown terminal is different: the initiating result cannot
+        // safely authorize a retry, so preserve the same durable Job as the
+        // recovery identity instead of discarding the only reconciliation handle.
+        let publish_terminal_recovery = job.lifecycle.is_terminal()
+            && job.command_execution_state == Some(ShellCommandExecutionState::OutcomeUnknown);
+        if !job.lifecycle.is_terminal() || publish_terminal_recovery {
             let view = job_view(job);
             if view.observation_token.is_none() {
                 return Err(format!(
@@ -1717,6 +1825,40 @@ impl RunnerRegistry {
         Ok(job_view(job))
     }
 
+    /// Resolve one observability-only Project anchor for an exact Job set under
+    /// one registry snapshot. Every Job must be Public, caller-visible, and carry
+    /// the same non-empty immutable Project id; otherwise attribution fails closed.
+    /// This never refreshes lifecycle state and never grants Project authority.
+    pub async fn common_job_project_for_auth(
+        &self,
+        auth: Option<&crate::RunnerAccess>,
+        job_ids: &[&str],
+    ) -> Option<String> {
+        if job_ids.is_empty() {
+            return None;
+        }
+        let inner = self.inner.lock().await;
+        let mut common: Option<String> = None;
+        for job_id in job_ids {
+            let job = inner.jobs_by_id.get(*job_id)?;
+            if job.visibility != ShellJobVisibility::Public
+                || !shell_job_visible_to_auth(auth, &inner, job)
+            {
+                return None;
+            }
+            let project = job.project_id.as_deref()?.trim();
+            if project.is_empty() {
+                return None;
+            }
+            match common.as_deref() {
+                None => common = Some(project.to_string()),
+                Some(existing) if existing == project => {}
+                Some(_) => return None,
+            }
+        }
+        common
+    }
+
     pub async fn list_jobs(&self, limit: Option<usize>) -> Vec<ShellJobInfo> {
         self.list_jobs_for_auth(None, limit).await
     }
@@ -1892,7 +2034,7 @@ impl RunnerRegistry {
                 .filter_map(|id| {
                     let job = inner.jobs_by_id.get(*id)?;
                     if job.visibility != ShellJobVisibility::Public
-                        || !shell_job_visible_to_auth(auth, &inner, job)
+                        || !shell_job_visible_to_auth(auth, inner, job)
                     {
                         return None;
                     }
@@ -2115,11 +2257,8 @@ impl RunnerRegistry {
             {
                 return Err(format!("unknown shell job: {}", job_id));
             }
-            let revision = job.observation.revision.load(Ordering::Relaxed);
-            let changed = after.as_ref().is_some_and(|token| {
-                !token.matches_parent(&job.job_id, &job.observation.epoch)
-                    || token.revision != revision
-            });
+            let (changed, meaningful_changed, heartbeat_changed) =
+                observation_change_flags(job, after.as_ref());
             let terminal = job.lifecycle.is_terminal();
             if wait_secs.is_none() || after.is_none() || changed || terminal {
                 let wait_outcome = if changed {
@@ -2137,6 +2276,8 @@ impl RunnerRegistry {
                     wait_outcome,
                     waited_ms,
                     changed,
+                    meaningful_changed,
+                    heartbeat_changed,
                     terminal,
                 };
                 return Ok(frozen_shell_job_log_projection(
@@ -2163,11 +2304,8 @@ impl RunnerRegistry {
             {
                 return Err(format!("unknown shell job: {}", job_id));
             }
-            let revision = job.observation.revision.load(Ordering::Relaxed);
-            let changed = after.as_ref().is_some_and(|token| {
-                !token.matches_parent(&job.job_id, &job.observation.epoch)
-                    || token.revision != revision
-            });
+            let (changed, meaningful_changed, heartbeat_changed) =
+                observation_change_flags(job, after.as_ref());
             let terminal = job.lifecycle.is_terminal();
             if changed || terminal {
                 let wait = JobLogWait {
@@ -2178,6 +2316,8 @@ impl RunnerRegistry {
                     },
                     waited_ms,
                     changed,
+                    meaningful_changed,
+                    heartbeat_changed,
                     terminal,
                 };
                 return Ok(frozen_shell_job_log_projection(
@@ -2210,11 +2350,8 @@ impl RunnerRegistry {
                 {
                     return Err(format!("unknown shell job: {}", job_id));
                 }
-                let revision = job.observation.revision.load(Ordering::Relaxed);
-                let changed = after.as_ref().is_some_and(|token| {
-                    !token.matches_parent(&job.job_id, &job.observation.epoch)
-                        || token.revision != revision
-                });
+                let (changed, meaningful_changed, heartbeat_changed) =
+                    observation_change_flags(job, after.as_ref());
                 let terminal = job.lifecycle.is_terminal();
                 let wait = JobLogWait {
                     wait_outcome: if terminal {
@@ -2226,6 +2363,8 @@ impl RunnerRegistry {
                     },
                     waited_ms,
                     changed,
+                    meaningful_changed,
+                    heartbeat_changed,
                     terminal,
                 };
                 return Ok(frozen_shell_job_log_projection(
@@ -2602,8 +2741,15 @@ impl RunnerRegistry {
             if let Some(sequence) = incoming_seq {
                 job.last_update_seq = sequence;
             }
-            if public_mutation_signature(job) != before {
-                notify_job_update(job);
+            let after = public_mutation_signature(job);
+            if after != before {
+                let mut without_sequence = after.clone();
+                without_sequence.last_update_seq = before.last_update_seq;
+                if without_sequence == before {
+                    notify_job_heartbeat(job);
+                } else {
+                    notify_job_update(job);
+                }
             }
             remove_cleanup_terminal =
                 job.visibility == ShellJobVisibility::CleanupPending && job.lifecycle.is_terminal();

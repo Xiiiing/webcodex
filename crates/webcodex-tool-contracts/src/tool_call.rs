@@ -276,6 +276,18 @@ impl SearchPatternMode {
     }
 }
 
+/// App-only inspection of a pinned Work Result file snapshot.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkResultFilesRequest {
+    #[serde(default)]
+    pub snapshot_id: Option<String>,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReadFilesItem {
@@ -389,12 +401,24 @@ impl ObserveJobsItem {
     }
 }
 
+/// Transient terminal readiness condition for one exact Job set.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JobReadinessMode {
+    Any,
+    All,
+}
+
+/// Explicit Host wait bound, independent of generic execution handoff slices.
+pub const MAX_JOB_READINESS_WAIT_SECS: u64 = 45;
+
 /// Which observable changes may end a bounded batch Job wait early.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ObserveJobsWakeOn {
     #[default]
     Change,
+    MeaningfulChange,
     Terminal,
     AllTerminal,
 }
@@ -830,7 +854,62 @@ impl BrowserKeyCall {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserBatchOperation {
+    Click {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+    },
+    InputText {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        #[schemars(length(min = 1, max = 4096))]
+        text: String,
+    },
+    SelectOption {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Exact native option value or trimmed visible option text.
+        #[schemars(length(min = 1, max = 4096))]
+        option: String,
+    },
+    SetValue {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Exact native form-control value, for example 2027-06 for input[type=month].
+        #[schemars(length(min = 1, max = 4096))]
+        value: String,
+    },
+    UploadFile {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Authorized Runner project containing the file to upload.
+        #[schemars(length(min = 1, max = 512))]
+        project: String,
+        /// Project-relative path to one existing regular file.
+        #[schemars(length(min = 1, max = 4096))]
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrowserActToolCall {
+    Batch {
+        #[schemars(length(min = 1, max = 128))]
+        client_id: String,
+        #[schemars(regex(pattern = "^browser_[A-Za-z0-9_-]{16,64}$"))]
+        browser_id: String,
+        #[schemars(regex(pattern = "^page_[A-Za-z0-9_-]{16,64}$"))]
+        page_id: String,
+        #[schemars(length(min = 1, max = 32))]
+        operations: Vec<BrowserBatchOperation>,
+    },
+
     Launch {
         #[schemars(length(min = 1, max = 128))]
         client_id: String,
@@ -996,6 +1075,7 @@ impl BrowserActToolCall {
             Self::SelectOption { .. } => "select_option",
             Self::SetValue { .. } => "set_value",
             Self::UploadFile { .. } => "upload_file",
+            Self::Batch { .. } => "batch",
             Self::Key { .. } => "key",
             Self::ClearDiagnostics { .. } => "clear_diagnostics",
             Self::ClosePage { .. } => "close_page",
@@ -1427,9 +1507,13 @@ pub enum ToolCall {
         path: Option<String>,
         #[schemars(extend("default" = "checkout"))]
         #[schemars(with = "Option<WorkOnProjectMode>")]
-        /// Optional bootstrap mode. Omitted or checkout preserves existing behavior exactly. worktree is
-        /// supported only with client_id + path and asks the Runner to create/recover an isolated managed
-        /// detached worktree, register it as an ordinary Project, then start the Workflow Session.
+        /// Optional bootstrap mode. Omitted or checkout preserves existing behavior exactly. With an
+        /// existing registered Project, worktree is the canonical model-facing path: the Server reauthorizes
+        /// that Project and derives the authoritative Runner/source checkout before asking the Runner to create
+        /// an isolated managed detached worktree. client_id + path remains a compatibility/bootstrap form and
+        /// keeps ordinary path authority checks. The managed destination is always Runner-owned and is never
+        /// supplied by the caller. The new worktree is registered as an ordinary Project before its fresh
+        /// Workflow Session starts.
         #[serde(default)]
         mode: Option<String>,
         /// Optional Git ref only for mode=worktree. The Runner resolves it inside the source repository to
@@ -1464,14 +1548,19 @@ pub enum ToolCall {
         /// substitutes for plugin_tool describe before invocation.
         #[serde(default = "default_true")]
         include_extension_catalog: bool,
-        /// Optional explicit Workflow Session to continue exactly. It must be active and accessible and
-        /// remains bound to its exact final Project; in worktree mode the Runner re-observes that
-        /// registered managed Project and its source provenance instead of creating a second worktree.
-        /// Failure never guesses or creates a replacement Session. Supplying session_id does not prove this
+        /// Optional explicit Workflow Session to continue exactly: canonical wc_sess_* or server-issued
+        /// principal-scoped session_ref (~sN). It must be active and accessible and
+        /// remains bound to its exact Project. Creating a managed worktree from an existing source Project is
+        /// a fresh-Session transition: omit session_id, then continue using the returned managed Project/ref
+        /// and its Session. A source Session is never retargeted to the new Project. The legacy client_id +
+        /// path worktree form may re-observe an already registered managed Project on exact resume. Failure
+        /// never guesses or creates a replacement Session. Supplying session_id does not prove this
         /// model context still retains project instructions, workflow guidance, or extension metadata. On
         /// MCP, a fresh model context should request missing static guidance through `_wc.context`. This
         /// business input is distinct from recorder provenance supplied through `_wc.record`.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         #[serde(default)]
         session_id: Option<String>,
     },
@@ -1521,20 +1610,28 @@ pub enum ToolCall {
         /// Required exact runtime Project input. It is independently resolved and authorized on every call.
         #[schemars(length(min = 1, max = 512))]
         project: String,
-        /// Optional exact project-scoped Workflow Session association for compatibility.
+        /// Optional exact project-scoped Workflow Session (canonical wc_sess_* or server-issued ~sN)
+        /// for authorized Server Job state.
         /// Omit it when the Window has not created or resumed a Workflow Session.
         #[serde(default)]
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: Option<String>,
     },
 
     /// App-only read of the same Window card projection. Optional Session identity
-    /// is association evidence only and is deliberately excluded from generic recording.
+    /// selects authorized Server Job state and is deliberately excluded from generic recording.
     WorkResultState {
         project: String,
         #[serde(default)]
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: Option<String>,
+        /// Explicit file page or lazy diff; omission keeps lightweight card state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        files: Option<WorkResultFilesRequest>,
     },
 
     /// Work Result App-only lazy read of one completed call in the current
@@ -1552,7 +1649,9 @@ pub enum ToolCall {
         project: String,
         /// Optional exact work context explicitly linked to the current Window; never the recipient.
         #[serde(default)]
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: Option<String>,
         #[schemars(length(min = 1, max = 8000))]
         message: String,
@@ -1590,7 +1689,9 @@ pub enum ToolCall {
         project: String,
         /// Required explicit active, project-scoped Workflow Session id. Unknown ids fail without creating
         /// a Session.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Complete replacement execution context. `{}` clears all defaults. The context cannot store
         /// environment variables, credentials, SSH host/configuration, keys, passwords, connections, or
@@ -1745,7 +1846,9 @@ pub enum ToolCall {
     /// Session-store snapshot and return an opaque assignment fence.
     GetSessionAssignment {
         /// Required coordinator/business Workflow Session containing the exact todo.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Required exact open todo id. No implicit or recent-message inference is used.
         #[schemars(regex(pattern = "^wc_msg_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
@@ -1757,7 +1860,9 @@ pub enum ToolCall {
     /// no history. Optional waiting is one bounded wait, never a subscription.
     ObserveSessionMessages {
         /// Required explicit Workflow Session whose message-state delta is observed.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Optional opaque Session-bound durable observation token returned by an earlier
         /// observe_session_messages call.
@@ -1948,7 +2053,9 @@ pub enum ToolCall {
         /// Required Project target. Nested JavaScript tool calls cannot select or override Project authority.
         project: String,
         /// Required exact Workflow Session. Nested JavaScript tool calls remain bound to this Session and record canonical evidence there.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Bounded JavaScript orchestration source. tools.<name>(args) returns a Promise for admitted read-only tools; use direct primitives for simple one-step observations, Promise.all only for independent observations, and sequential adaptive follow-ups inside the cell. Filter and synthesize raw child results before text(value); emit distilled evidence, not raw-result dumps, before reaching the outer-output limit. Project/Session are outer-bound. No shell, filesystem, network, Node, Deno, WebAssembly, mutation, validation, Jobs, plugins, or MCP are exposed.
         #[schemars(length(max = 65536))]
@@ -1967,7 +2074,9 @@ pub enum ToolCall {
         /// Required Project target. Nested JavaScript tool calls cannot select or override Project authority.
         project: String,
         /// Required exact Workflow Session. Every nested child remains a canonical ToolRuntime invocation in this same Session.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Experimental E2a JavaScript orchestration source. Admitted tools are the E1 read-only set plus cargo_check and cargo_test. Structured validators may hand off the same execution as ordinary Jobs; no mutation, shell, generic process, Job observation, plugins/MCP, or recursive Code Mode is exposed.
         #[schemars(length(max = 65536))]
@@ -1985,7 +2094,9 @@ pub enum ToolCall {
         /// Required Project target. Nested JavaScript tool calls cannot select or override Project authority.
         project: String,
         /// Required exact Workflow Session. Every nested child remains a canonical ToolRuntime invocation in this same Session.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Experimental E2c source: E1 reads, at most one canonical edit_project_files attempt, then cargo_check/cargo_test only after a successful known edit (including no-op). Use read_revision for guarded edits. Inspect source_state independently of execution success. Return Job handoffs to the outer workflow, never wait inside JS. No shell/process, nested Job observation, alternate writes, gateways, recursion or automatic whole-program retry.
         #[schemars(length(max = 65536))]
@@ -2733,8 +2844,58 @@ pub enum ToolCall {
         sync_wait_secs: Option<u64>,
     },
 
-    /// Run canonical structured `go test -json` validation with an optional
-    /// bounded project-relative package scope.
+    /// Run one portable project build. The Runner resolves the nearest supported
+    /// Rust/Go recipe, plans canonical argv, and admits one typed build Job.
+    ProjectBuild {
+        /// Exact registered Runner Project.
+        project: String,
+        #[serde(default)]
+        session_id: Option<String>,
+        /// Project-relative directory; Runner resolves the nearest recipe root.
+        #[serde(default)]
+        cwd: Option<String>,
+        /// Omission means auto. Rust and Go are supported; Node/Python return unavailable.
+        #[serde(default)]
+        adapter: Option<webcodex_core::project_build::ProjectBuildAdapter>,
+        /// Optional bounded Cargo package selectors or project-relative Go package patterns.
+        #[serde(default)]
+        scope: Option<webcodex_core::project_build::ProjectBuildScope>,
+        /// Total build execution budget, default 1800 seconds, clamped to 7 days.
+        /// Host handoff timing never extends this budget or starts a second build.
+        #[serde(default)]
+        #[schemars(range(min = 1))]
+        timeout_secs: Option<u64>,
+    },
+
+    /// Run portable read-only project validation. The Runner resolves the nearest
+    /// supported Rust/Go recipe and admits one canonical structured validation Job.
+    ProjectValidate {
+        /// Exact registered Runner Project.
+        project: String,
+        #[serde(default)]
+        session_id: Option<String>,
+        /// Project-relative directory; nearest recipe root is resolved on Runner.
+        #[serde(default)]
+        cwd: Option<String>,
+        action: webcodex_core::project_validation::ProjectValidationAction,
+        /// Omission means auto. Rust and Go are supported; Node/Python return unavailable.
+        #[serde(default)]
+        adapter: Option<webcodex_core::project_validation::ProjectValidationAdapter>,
+        /// Optional portable package scope. Rust check/test map packages to repeated Cargo -p selectors;
+        /// Go check/test map packages to bounded project-relative package patterns. Formatting with package
+        /// scope is not supported.
+        #[serde(default)]
+        scope: Option<webcodex_core::project_validation::ProjectValidationScope>,
+        /// Test-only selector and count postconditions. Rust uses a libtest substring;
+        /// Go uses native -run regexp. Omission preserves unfiltered positive-test proof.
+        #[serde(default)]
+        test: Option<webcodex_core::project_validation::ProjectValidationTestOptions>,
+        /// Total execution budget, clamped to 3600 seconds. Host grace never starts another execution.
+        #[serde(default)]
+        #[schemars(range(min = 1))]
+        timeout_secs: Option<u64>,
+    },
+
     GoTest {
         /// Runner-registered project id.
         project: String,
@@ -2997,7 +3158,9 @@ pub enum ToolCall {
     /// This is Runtime/Store workflow composition only; it does not establish any Host carrier.
     PrepareGoalWorkflow {
         /// Exact Workflow Session independently re-authorized before durable admission.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Fixed durable completion intent; the Server does not evaluate natural-language conditions.
         /// At most 8 conditions, each additionally bounded to 512 UTF-8 bytes.
@@ -3180,7 +3343,9 @@ pub enum ToolCall {
         goal_id: String,
         /// Exact Workflow Session id. The target Session is independently re-authorized before association;
         /// the correlation never grants Session or Project authority.
-        #[schemars(regex(pattern = "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"))]
+        #[schemars(regex(
+            pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
+        ))]
         session_id: String,
         /// Caller-generated Goal-to-Workflow-Session association key. Exact retry replays; changed reuse
         /// fails closed.
@@ -3367,24 +3532,34 @@ pub enum ToolCall {
         /// CodingAgentRun authority.
         #[schemars(length(min = 1))]
         project: String,
-        /// Canonical durable AgentTask id. It is not a credential or Connector Task id.
+        /// Server-issued ~ta selector for one exact task, attempt, assignee, fence, and generation.
+        /// Not authority. Omit it when passing the explicit tuple; Project and provider remain explicit.
+        #[schemars(regex(pattern = "^~ta[1-9][0-9]{0,18}$"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_ref: Option<String>,
+        /// Canonical durable AgentTask id. Required with the explicit tuple; omit with attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_[A-Za-z0-9_-]{16}$"))]
-        task_id: String,
-        /// Exact durable AgentTaskAttempt id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// Exact durable AgentTaskAttempt id. Required with the explicit tuple; omit with attempt_ref.
         #[schemars(regex(pattern = "^wc_agent_task_attempt_[A-Za-z0-9_-]{16}$"))]
-        attempt_id: String,
-        /// Explicit current durable Agent assignee. Agent identity does not grant Project or executor
-        /// authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+        /// Exact current Agent assignee. Required with the explicit tuple; omit with attempt_ref.
+        /// Agent identity does not grant Project or executor authority.
         #[schemars(regex(pattern = "^wc_dagent_[A-Za-z0-9_-]{16}$"))]
-        assignee_agent_id: String,
-        /// Opaque exact-Attempt freshness fence returned by start_agent_task_attempt. It is not a bearer
-        /// credential or idempotency key.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assignee_agent_id: Option<String>,
+        /// Exact Attempt fence. Required with the explicit tuple; omit with attempt_ref.
+        /// Not a bearer credential or idempotency key.
         #[schemars(regex(pattern = "^wc_agent_task_fence_[A-Za-z0-9_-]{21}[AQgw]$"))]
-        attempt_fence: String,
-        /// Exact current Attempt-local controller generation. Carrier replacement increments it without
-        /// creating a new Attempt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_fence: Option<String>,
+        /// Exact Attempt controller generation. Required with the explicit tuple; omit with attempt_ref.
+        /// Stale selectors never select a newer controller or Attempt.
         #[schemars(range(min = 1))]
-        attempt_controller_generation: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_controller_generation: Option<i64>,
         /// Logical Runner-advertised CodingAgent provider. The Server binds its exact provider instance;
         /// callers cannot supply provider_instance_id.
         #[schemars(length(min = 1, max = 64))]
@@ -3594,8 +3769,9 @@ pub enum ToolCall {
         idempotency_key: String,
     },
 
-    /// Compatibility name for server-local continuation Endpoint rotation.
-    /// Attach a current Host/Client Endpoint to a durable Agent.
+    /// Frozen GPT Actions spelling only; absent from the default canonical parser.
+    /// This exception retires with the legacy adapter, not with a schema refresh.
+    #[cfg(feature = "legacy-gpt-actions")]
     AttachAgentEndpoint {
         /// Canonical durable Agent id owned by the current communication principal.
         #[schemars(regex(pattern = "^wc_dagent_[A-Za-z0-9_-]{16}$"))]
@@ -4107,13 +4283,14 @@ pub enum ToolCall {
         #[serde(default, deserialize_with = "deserialize_observe_jobs_wait_secs")]
         wait_secs: Option<u64>,
         #[schemars(extend("default" = "change"))]
-        /// Bounded-wait wake policy. change (default) returns on any observable change. terminal waits for
-        /// any Job to be terminal; use it for one Job or when any terminal result unblocks progress.
-        /// all_terminal waits for every Job in a predetermined set needed before progress. Both coalesce
-        /// non-terminal log/progress/activity updates and return immediately on any item error or at the
-        /// shared deadline. Deadline returns timeout even when changed=true; deltas remain relative to the
-        /// caller's original tokens. No token means immediate baseline; no wait_secs means immediate
-        /// observation.
+        /// Bounded-wait wake policy. change (default) returns on any observable change.
+        /// meaningful_change suppresses sequence-only heartbeat revisions but still wakes for log,
+        /// lifecycle, progress, activity and recovery changes. terminal waits for any Job to be terminal;
+        /// use it for one Job or when any terminal result unblocks progress. all_terminal waits for every
+        /// Job in a predetermined set needed before progress. Terminal policies coalesce non-terminal
+        /// updates and all policies return immediately on any item error or at the shared deadline.
+        /// Deadline returns timeout even when changed=true; deltas remain relative to the caller's
+        /// original tokens. No token means immediate baseline; no wait_secs means immediate observation.
         #[serde(default)]
         wake_on: ObserveJobsWakeOn,
         /// Opt-in projection for proven successful structured validation Jobs. Removes routine
@@ -4123,6 +4300,23 @@ pub enum ToolCall {
         #[serde(default)]
         #[schemars(extend("default" = false))]
         summary_only: bool,
+    },
+
+    /// Wait transiently in the current Host activation for an exact Job set.
+    WaitForJobReadiness {
+        /// Exact public Job IDs. Stable deduplication preserves first occurrence order;
+        /// the resulting set must contain 1..8 Jobs. Every target is re-authorized before waiting.
+        #[schemars(length(min = 1, max = 8))]
+        job_ids: Vec<String>,
+        /// Use any when one terminal Job can unlock a useful dependent branch; use all only at a
+        /// true join point where every blocked dependency is required.
+        mode: JobReadinessMode,
+        /// Explicit bounded wait, 1..45 seconds. Choose the largest safe value from the remaining
+        /// Host activation budget after its return guard; no fixed 10/15/20-second slice is preferred.
+        /// Progress never extends the absolute deadline. After deadline, recompute ready work and the
+        /// blocked set instead of mechanically repeating the same wait.
+        #[schemars(range(min = 1, max = 45))]
+        wait_secs: u64,
     },
 
     /// Arm one caller-owned durable one-shot terminal attention for an exact
@@ -5122,9 +5316,14 @@ pub enum ToolCall {
         client_id: Option<String>,
     },
 
-    /// Admin-only bounded read of one Server-hosted full tool-request trace.
+    /// Admin-only diagnostic query or exact retained metadata/full trace read.
+    /// Omit trace_ref to query calls by time/Project/tool/Window; supply it to
+    /// read an event page, or add payload_index for one retained full payload.
     ReadToolTrace {
-        trace_ref: String,
+        #[serde(default)]
+        trace_ref: Option<String>,
+        #[serde(default)]
+        query: Option<crate::tool_inputs::ToolTraceQuery>,
         #[serde(default)]
         offset: Option<usize>,
         #[serde(default)]
@@ -5372,7 +5571,7 @@ fn canonicalize_process_argv_alias(name: &str, arguments: &mut Value) -> Result<
     };
     if let Some(canonical) = object.get("args") {
         if canonical != &alias {
-            return Err("ambiguous compatibility alias: args and argv differ".to_string());
+            return Err("ambiguous input alias: args and argv differ".to_string());
         }
     } else {
         object.insert("args".to_string(), alias);
@@ -5395,11 +5594,12 @@ impl ToolCall {
         Self::from_tool_name_with_normalization(name, arguments).map(|(call, _)| call)
     }
 
-    /// Returns a stable code only when a documented compatibility alias was used.
+    /// Returns a stable code only when an explicit ergonomic input alias was
+    /// normalized to avoid a mechanical retry. This is not API compatibility.
     pub fn from_tool_name_with_normalization(
         name: &str,
         arguments: Value,
-    ) -> Result<(Self, Option<&'static str>), String> {
+    ) -> Result<(Self, Option<crate::ToolInputNormalizationCode>), String> {
         validate_model_facing_assertion_name(name, &arguments)?;
         validate_model_facing_result_expectation(name, &arguments)?;
         if name == "create_project"
@@ -5450,8 +5650,8 @@ impl ToolCall {
         }
         let mut arguments = strip_tool_call_expectation_metadata(arguments);
         validate_run_shell_login(name, &arguments)?;
-        let normalization =
-            canonicalize_process_argv_alias(name, &mut arguments)?.then_some("argv_to_args");
+        let normalization = canonicalize_process_argv_alias(name, &mut arguments)?
+            .then_some(crate::ToolInputNormalizationCode::ArgvToArgs);
         canonicalize_cargo_check_packages(name, &mut arguments)?;
         if name == "tool_manifest" {
             if let Some(object) = arguments.as_object_mut() {
@@ -5633,6 +5833,8 @@ impl ToolCall {
             Self::CargoFmt { .. } => "cargo_fmt",
             Self::CargoCheck { .. } => "cargo_check",
             Self::CargoTest { .. } => "cargo_test",
+            Self::ProjectBuild { .. } => "project_build",
+            Self::ProjectValidate { .. } => "project_validate",
             Self::GoTest { .. } => "go_test",
             Self::ReadFiles { .. } => "read_files",
             Self::SkillLoad { .. } => "skill_load",
@@ -5673,6 +5875,7 @@ impl ToolCall {
             Self::ListAgentIdentities { .. } => "list_agent_identities",
             Self::UpdateAgentIdentity { .. } => "update_agent_identity",
             Self::RotateAgentContinuationEndpoint { .. } => "rotate_agent_continuation_endpoint",
+            #[cfg(feature = "legacy-gpt-actions")]
             Self::AttachAgentEndpoint { .. } => "attach_agent_endpoint",
             Self::PresentAgentContinuation { .. } => "present_agent_continuation",
             Self::AgentContinuationBind { .. } => "agent_continuation_bind",
@@ -5700,6 +5903,7 @@ impl ToolCall {
             Self::RunJob { .. } => "run_job",
             Self::StopJob { .. } => "stop_job",
             Self::ObserveJobs { .. } => "observe_jobs",
+            Self::WaitForJobReadiness { .. } => "wait_for_job_readiness",
             Self::WaitForJobTerminal { .. } => "wait_for_job_terminal",
             Self::PresentJobTerminalContinuation { .. } => "present_job_terminal_continuation",
             Self::JobTerminalContinuationBind { .. } => "job_terminal_continuation_bind",
@@ -5786,6 +5990,8 @@ impl ToolCall {
             | Self::CargoFmt { session_id, .. }
             | Self::CargoCheck { session_id, .. }
             | Self::CargoTest { session_id, .. }
+            | Self::ProjectBuild { session_id, .. }
+            | Self::ProjectValidate { session_id, .. }
             | Self::GoTest { session_id, .. }
             | Self::ReadFiles { session_id, .. }
             | Self::SkillLoad { session_id, .. }
@@ -5885,6 +6091,7 @@ impl ToolCall {
             | Self::RunDetachedProcess { cwd, .. }
             | Self::RunScript { cwd, .. }
             | Self::RunSkillResource { cwd, .. }
+            | Self::ProjectBuild { cwd, .. }
                 if cwd.is_none() =>
             {
                 *cwd = execution_context.default_cwd.clone();
@@ -5936,6 +6143,8 @@ impl ToolCall {
             | Self::CargoFmt { project, .. }
             | Self::CargoCheck { project, .. }
             | Self::CargoTest { project, .. }
+            | Self::ProjectBuild { project, .. }
+            | Self::ProjectValidate { project, .. }
             | Self::GoTest { project, .. }
             | Self::ReadFiles { project, .. }
             | Self::SkillLoad { project, .. }

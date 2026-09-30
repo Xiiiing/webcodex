@@ -171,7 +171,7 @@ WEBCODEX_MCP_HOST_BUDGET_SECS=55
 
 `WEBCODEX_MCP_HOST_BUDGET_SECS` 表示 Host 侧单次 MCP call / composition 的预算，不是 command runtime。工具的 `timeout_secs` 仍表示真实 execution lifetime，可以远大于 Host budget。WebCodex 不会根据 `clientInfo`、User-Agent 或 Host 产品名自动推断 profile。
 
-`host_code_mode` 表示外部 MCP Host 提供的 orchestration，与 WebCodex experimental internal Code Mode 及其自身 nested-execution 防护不是同一个概念。`runtime_status` 会在 `effective_config.mcp_host` 中报告最终生效的非敏感 policy。
+`host_code_mode` 表示外部 MCP Host 提供的 orchestration，与 WebCodex experimental internal Code Mode 及其自身 nested-execution 防护不是同一个概念。`runtime_status.effective_config.mcp_host` 报告的是非敏感的**部署默认值**。同服混用时，在每个客户端连接上配置 `X-WebCodex-MCP-Profile`，并可用 `X-WebCodex-MCP-Budget-Secs` 缩短等待预算；不是模型工具参数。详见 [MCP 客户端策略](MCP.zh-CN.md#同一-server-的客户端策略)。省略 header 才使用部署默认值，不按品牌自动识别。
 
 ### Tool invocation trace
 
@@ -382,14 +382,20 @@ Plugin discovery 重启 Runner。
 
 ## OAuth2
 
-Server 没有公网 origin 时 OAuth2 仍默认关闭。使用 `webcodex server init --public-url https://your-domain.example` 时，初始化会写入 public URL、以该 URL 作为 issuer 启用 OAuth，并为普通 hosted connect 启用 shared-key OAuth bridge。手工维护 env 时等价配置为：
+Server 没有公网 origin 时 OAuth2 仍默认关闭。使用 `webcodex server init --public-url https://your-domain.example` 时，初始化会写入 public URL，并以该 URL 作为 issuer 启用 OAuth。跨该 public boundary 的 direct shared-key auth 与 shared-key OAuth bridge 默认仍关闭；如需有意启用，必须额外传入 `--allow-remote-shared-key`。
+
+手工维护 env 且有意启用 remote shared-key auth 与 shared-key OAuth bridge 时，配置为：
 
 ```text
 WEBCODEX_PUBLIC_URL=https://your-domain.example
 WEBCODEX_OAUTH2_ENABLED=true
 WEBCODEX_OAUTH2_ISSUER=https://your-domain.example
+WEBCODEX_SHARED_KEY_ENABLED=true
+WEBCODEX_SHARED_KEY_REMOTE_ENABLED=true
 WEBCODEX_OAUTH2_SHARED_KEY_BRIDGE=true
 ```
+
+如果配置了 direct shared-key auth，同时启用的 QUIC Runner listener 绑定到非 loopback 地址，也必须使用同一个 remote opt-in；QUIC 默认监听地址为 `0.0.0.0:8443`。
 
 普通仓库机器不需要 managed login，直接使用 MCP 客户端要求的精确 callback：
 

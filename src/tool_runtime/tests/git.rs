@@ -3281,6 +3281,9 @@ fn assert_git_diff_hunks_sparse_recovery_calls_parse(recovery: &Value) {
                 .keys()
                 .all(|key| key == "next_call" || (lane == "current_hunk" && key == "reason_code")));
             if let Some(call) = value.get("next_call") {
+                assert_eq!(call["follow_up_kind"], "mechanically_followable");
+                webcodex_tool_contracts::test_support::validate_generated_tool_call_against_registered_input_schema(call)
+                    .expect("git_diff_hunks recovery next_call must pass registered inputSchema");
                 ToolCall::from_tool_name(call["tool"].as_str().unwrap(), call["arguments"].clone())
                     .expect("each recovery lane must parse directly");
             }
@@ -3289,6 +3292,9 @@ fn assert_git_diff_hunks_sparse_recovery_calls_parse(recovery: &Value) {
 }
 
 fn assert_git_diff_hunks_recovery_call_parses(recovery: &Value) {
+    assert_eq!(recovery["follow_up_kind"], "mechanically_followable");
+    webcodex_tool_contracts::test_support::validate_generated_tool_call_against_registered_input_schema(recovery)
+        .expect("git_diff_hunks generated follow-up must pass registered inputSchema");
     let tool = recovery["tool"]
         .as_str()
         .expect("recovery tool must be a string");
@@ -6495,7 +6501,7 @@ async fn show_changes_with_session_id_returns_session_block_and_records_call() {
             runtime
                 .dispatch_with_auth(
                     ToolCall::ReadFiles {
-                        project: project,
+                        project,
                         items: vec![crate::tool_runtime::ReadFilesItem {
                             path: "README.md".to_string(),
                             start_line: None,
@@ -7827,6 +7833,43 @@ async fn run_show_changes_via_agent(
     task.await.unwrap()
 }
 
+async fn run_show_changes_for_presentation_via_agent(
+    runtime: &ToolRuntime,
+    client_id: &str,
+    project: String,
+) -> ToolResult {
+    let runtime_for_task = runtime.clone();
+    let task = tokio::spawn(async move {
+        runtime_for_task
+            .workspace_metadata_for_presentation(project)
+            .await
+    });
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !task.is_finished() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "show_changes_for_presentation did not finish within 10 seconds for client {client_id}"
+        );
+        if let Some(req) = probe_patch_agent_request(runtime, client_id).await {
+            assert_eq!(req.kind, "run_internal_posix_script");
+            assert!(req.command.is_empty());
+            let payload = req
+                .script
+                .as_ref()
+                .expect("show_changes_for_presentation must carry a typed internal script");
+            assert_eq!(
+                payload.language,
+                crate::runner_protocol::ShellScriptLanguage::Sh
+            );
+            assert!(payload.args.is_empty());
+            complete_agent_request_by_running_locally(runtime, client_id, req).await;
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+    task.await.unwrap()
+}
+
 fn framed_block(kind: char, body: &str, metadata: &str) -> String {
     crate::tool_runtime::git::framed_show_changes_test_block(kind, body, metadata)
 }
@@ -8392,6 +8435,28 @@ async fn show_changes_real_git_repo_include_diff_true_matches_schema() {
     assert_eq!(result.output["clean"], false);
     assert!(result.output["hunk_count"].as_u64().unwrap_or(0) > 0);
     assert_show_changes_envelope_matches_schema("git include_diff=true", &result);
+}
+
+#[tokio::test]
+async fn show_changes_presentation_preserves_staging_without_eager_diff() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    commit_file(tmp.path(), "README.md", "hello\n", "initial");
+    std::fs::write(tmp.path().join("README.md"), "hello\nstaged\n").unwrap();
+    let (exit_code, _, stderr, _) = run_command_sync("git add README.md", tmp.path(), 30);
+    assert_eq!(exit_code, 0, "git add failed: {stderr}");
+
+    let runtime = test_runtime();
+    let project = register_runner_project_at_path(&runtime, "grp", "demo", tmp.path()).await;
+    let result = run_show_changes_for_presentation_via_agent(&runtime, "grp", project).await;
+
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(result.output["clean"], false);
+    assert_eq!(result.output["files"][0]["path"], "README.md");
+    assert_eq!(result.output["files"][0]["staged"], true);
+    assert_eq!(result.output["hunk_count"].as_u64().unwrap_or(0), 0);
+    assert!(result.output["hunks"].as_array().is_none_or(Vec::is_empty));
+    assert!(!result.output.to_string().contains("+staged"));
 }
 
 #[tokio::test]

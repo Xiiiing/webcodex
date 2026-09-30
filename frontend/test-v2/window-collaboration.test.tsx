@@ -11,7 +11,7 @@ const transcript = { available: true, can_send: true, messages: [
 ], truncated: false };
 
 describe("Window collaboration", () => {
-  it("polls only while visible and refreshes immediately on return", async () => {
+  it("polls only while visible and coalesces refresh events on return", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
@@ -39,7 +39,13 @@ describe("Window collaboration", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
       expect(post).toHaveBeenCalledTimes(3);
       visibility = "visible";
-      await act(async () => { fireEvent(document, new Event("visibilitychange")); });
+      await act(async () => {
+        fireEvent(document, new Event("visibilitychange"));
+        fireEvent(window, new Event("focus"));
+        fireEvent(window, new Event("online"));
+      });
+      expect(post).toHaveBeenCalledTimes(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
       expect(post).toHaveBeenCalledTimes(4);
     } finally {
       view.unmount();
@@ -67,6 +73,14 @@ describe("Window collaboration", () => {
     view.unmount();
   });
 
+  it("explains collaboration scope failures instead of silently disabling input", async () => {
+    const post = vi.fn(async () => ({ ok: false, status: 403, data: null }));
+    const view = render(<WindowCollaboration client={{ post } as unknown as RuntimeV2Client} windowKey="exact-window" selectedSessionId="" language="en" onUnauthorized={vi.fn()} />);
+    expect(await screen.findByText(/session:collaborate is required/)).toBeTruthy();
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(true);
+    view.unmount();
+  });
+
   it("ignores a read that resolves after the page becomes hidden but before the visibility event", async () => {
     let visibility: DocumentVisibilityState = "visible";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
@@ -84,7 +98,7 @@ describe("Window collaboration", () => {
 
     visibility = "visible";
     fireEvent(document, new Event("visibilitychange"));
-    expect(reads).toHaveLength(2);
+    await waitFor(() => expect(reads).toHaveLength(2));
     await act(async () => { reads[1].resolve({ ok: true, status: 200, data: transcript }); });
     expect(screen.getByText("Review done")).toBeTruthy();
     view.unmount();

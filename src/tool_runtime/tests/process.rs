@@ -326,6 +326,14 @@ async fn model_argv_alias_executes_canonical_process_and_returns_success_hint() 
     )
     .await;
     let outcome = task.await.unwrap();
+    let completion = outcome.model_ergonomics.as_ref().unwrap();
+    let record = completion
+        .record_for_tool_result(outcome.result.as_ref().unwrap())
+        .unwrap();
+    assert_eq!(
+        record.input_normalization_code,
+        Some(webcodex_tool_contracts::ToolInputNormalizationCode::ArgvToArgs)
+    );
     let result = outcome.result.unwrap();
     assert!(result.success, "{result:?}");
     assert_eq!(
@@ -1187,6 +1195,74 @@ async fn run_process_fast_terminal_jobs_project_back_without_visible_duplicates(
 }
 
 #[tokio::test]
+async fn run_process_fast_outcome_unknown_preserves_visible_recovery_job() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = test_runtime().with_structured_execution_sync_wait(Duration::from_millis(250));
+    let project = register_process_job_agent(&runtime, "process-fast-unknown", temp.path()).await;
+    let auth = auth_context(None, true);
+    let (task, request) = dispatch_process_until_request(
+        &runtime,
+        "process-fast-unknown",
+        process_call(project, None),
+        auth.clone(),
+    )
+    .await;
+    assert_eq!(request.kind, "start_process_job");
+    let job_id = request.job_id.clone().expect("structured process Job id");
+    update_process_job(
+        &runtime,
+        "process-fast-unknown",
+        &request,
+        "lost",
+        Some(ShellCommandExecutionState::OutcomeUnknown),
+        None,
+        Some("partial process output\n"),
+        None,
+        Some("process terminal correlation was lost after spawn"),
+    )
+    .await;
+
+    let result = task.await.unwrap();
+    assert!(!result.success);
+    assert_eq!(result.output["execution_state"], "outcome_unknown");
+    assert_eq!(result.output["command_started"], true);
+    assert_eq!(result.output["command_completed"], false);
+    assert_eq!(result.output["promoted_to_job"], true);
+    assert_eq!(result.output["terminal"], false);
+    assert_eq!(result.output["job_id"], job_id);
+    assert_eq!(result.output["job_status"], "lost");
+    assert_eq!(
+        result.output["continuation"]["arguments"]["items"][0]["job_id"],
+        job_id
+    );
+    let schema = crate::tool_runtime::registry::output_schema_for_tool("run_process");
+    let instance = json!({
+        "success": result.success,
+        "output": result.output.clone(),
+        "error": result.error.clone(),
+    });
+    crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&instance, &schema)
+        .unwrap_or_else(|error| panic!("uncertain run_process result schema mismatch: {error}"));
+
+    let visible = runtime
+        .runner_registry
+        .get_job_for_auth(Some(&crate::test_support::runner_access(&auth)), &job_id)
+        .await
+        .unwrap();
+    assert_eq!(visible.status, "lost");
+    assert_eq!(
+        visible.command_execution_state,
+        Some(ShellCommandExecutionState::OutcomeUnknown)
+    );
+    assert!(runtime
+        .runner_registry
+        .hidden_job_ids_for_test()
+        .await
+        .is_empty());
+    assert!(runtime.runner_registry.remove_job_record(&job_id).await);
+}
+
+#[tokio::test]
 async fn run_process_terminal_success_is_sparse_after_full_session_effect_recording() {
     let temp = tempfile::tempdir().unwrap();
     let runtime = test_runtime().with_structured_execution_sync_wait(Duration::from_millis(250));
@@ -1195,13 +1271,18 @@ async fn run_process_terminal_success_is_sparse_after_full_session_effect_record
     let session_id = session.session_id.clone();
     let auth = auth_context(None, true);
 
-    let (task, request) = dispatch_process_until_request(
-        &runtime,
-        "process-sparse-ledger",
-        process_call(project.clone(), Some(session_id.clone())),
-        auth.clone(),
-    )
-    .await;
+    let call = process_call(project.clone(), Some(session_id.clone()));
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        async move {
+            runtime.dispatch_with_auth_transport_options_and_metadata_with_recording_mode_and_context_with_result_projection(
+                call, Some(&auth), sessions::SessionTransport::Api,
+                Default::default(), None, true, Vec::new(), Default::default(),
+                Default::default(), super::super::return_timing::ToolReturnTimingPolicy::unconstrained(),
+            ).await
+        }
+    });
+    let request = wait_for_patch_agent_request(&runtime, "process-sparse-ledger").await;
     update_process_job(
         &runtime,
         "process-sparse-ledger",
@@ -1227,7 +1308,27 @@ async fn run_process_terminal_success_is_sparse_after_full_session_effect_record
     )
     .await;
 
-    let result = task.await.unwrap();
+    let (mut result, projection, _) = task.await.unwrap();
+    assert_eq!(result.output["execution_state"], "completed");
+    assert_eq!(result.output["command_started"], true);
+    assert_eq!(result.output["command_completed"], true);
+    assert_eq!(result.output["command_ok"], true);
+    let audit = super::super::tool_audit::canonical_execution_audit_result_for_tool(
+        "run_process",
+        &result.output,
+    );
+    assert_eq!(audit["command_ok"], true);
+    assert_eq!(audit["execution_state"], "completed");
+    let mut timer =
+        super::super::model_ergonomics_telemetry::ModelErgonomicsTimer::start_with_arguments(
+            "run_process",
+            &json!({}),
+        )
+        .unwrap();
+    timer.capture_canonical_result(&result);
+    projection.project(&mut result);
+    let metrics = timer.finish().record_for_tool_result(&result).unwrap();
+    assert_eq!(metrics.execution_state.as_deref(), Some("completed"));
     assert!(result.success, "{:?}", result.error);
     for omitted in [
         "execution_state",
@@ -2465,6 +2566,14 @@ async fn run_process_shell_command_mode_recovery_is_lossless_parser_ready_and_pr
                 if args[0] == "-lc" {
                     assert_eq!(result.output["shell"], "bash_login");
                 }
+                let expected_code = if args[0] == "-lc" {
+                    "run_process_bash_lc_to_login_run_shell"
+                } else if shell == "sh" {
+                    "run_process_sh_c_to_run_shell"
+                } else {
+                    "run_process_bash_c_to_run_shell"
+                };
+                assert_eq!(result.output["input_normalization"]["code"], expected_code);
                 assert!(result.output["input_normalization"]["hint"]
                     .as_str()
                     .unwrap()

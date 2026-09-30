@@ -195,6 +195,18 @@ pub(crate) async fn service_operation_spec(
     operation: ServiceOperation,
     credential: Option<&ServiceCredential>,
 ) -> SetupResultValue<ServiceStatus> {
+    if spec.scope == service::ServiceScope::User {
+        // No sudo/UAC, password exchange, or installer-broker retargeting for
+        // an owner user-manager operation. Native backend checks the real owner.
+        if credential.is_some() {
+            return Err(SetupDiagnostic::new(
+                "user_service_credential",
+                "User services do not accept an account password",
+                "Run as the saved environment owner",
+            ));
+        }
+        return apply(&spec, operation, None, record.request.project.as_deref());
+    }
     #[cfg(unix)]
     if crate::installer_unix::child_channel_active() {
         if credential.is_some() {
@@ -262,7 +274,8 @@ fn apply(
         ServiceOperation::PrepareRunner
             | ServiceOperation::Install
             | ServiceOperation::UpdateCredential
-    ) && matches!(spec.account, ServiceAccount::SystemUser { .. })
+    ) && spec.scope.is_system()
+        && matches!(spec.account, ServiceAccount::SystemUser { .. })
         && credential.is_none()
         && (operation == ServiceOperation::UpdateCredential
             || !ServiceManager::inspect(spec)
@@ -282,7 +295,8 @@ fn apply(
     }
     #[cfg(not(windows))]
     let _ = project;
-    let result = match operation {
+
+    match operation {
         ServiceOperation::PrepareRunner => {
             #[cfg(windows)]
             {
@@ -305,7 +319,7 @@ fn apply(
                     .map_err(service_error)?;
             }
             #[cfg(any(windows, target_os = "macos"))]
-            if spec.component == Component::Runner {
+            if spec.component == Component::Runner && spec.scope.is_system() {
                 let dir = spec
                     .args
                     .last()
@@ -328,7 +342,7 @@ fn apply(
                 ));
             }
             #[cfg(any(windows, target_os = "macos"))]
-            if spec.component == Component::Runner {
+            if spec.component == Component::Runner && spec.scope.is_system() {
                 let dir = spec
                     .args
                     .last()
@@ -348,8 +362,7 @@ fn apply(
             })?;
             ServiceManager::update_credential(spec, credential).map_err(service_error)
         }
-    };
-    result
+    }
 }
 
 /// Internal CLI entrypoint. This never opens a network connection or starts an

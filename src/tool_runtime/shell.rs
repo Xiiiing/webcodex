@@ -10,7 +10,8 @@ use super::helpers::{
 };
 use super::process::add_structured_continuation_facts;
 use super::structured_execution::{
-    await_hidden_structured_job, HiddenStructuredJobWait, StructuredExecutionBudget,
+    await_hidden_structured_job, finalize_hidden_terminal_projection, HiddenStructuredJobWait,
+    StructuredExecutionBudget,
 };
 use super::tool_result::ToolResult;
 use super::{ExecutionPurpose, ExecutionShell, ToolRuntime};
@@ -340,7 +341,7 @@ impl ToolRuntime {
         }
     }
 
-    fn run_shell_terminal_job_result(
+    pub(super) fn run_shell_terminal_job_result(
         job: &ShellJobInfo,
         stdout: String,
         stderr: String,
@@ -396,6 +397,22 @@ impl ToolRuntime {
                 state,
             ),
         };
+        if result.success {
+            // A recovered terminal snapshot is conclusive, but not an ordinary
+            // fast success. Preserve its canonical recovery facts for projection.
+            if let Some(state) = &job.recovery_state {
+                result.output["recovery_state"] = json!(state);
+            }
+            if job.recovered_after_server_restart {
+                result.output["recovered_after_server_restart"] = json!(true);
+            }
+            if let Some(at) = job.reconciled_at {
+                result.output["reconciled_at"] = json!(at);
+            }
+            if let Some(reason) = &job.recovery_reason_code {
+                result.output["recovery_reason_code"] = json!(reason);
+            }
+        }
         if job.stdout_log_truncated {
             result.output["stdout_truncated"] = json!(true);
         }
@@ -743,10 +760,16 @@ impl ToolRuntime {
                     stdout,
                     stderr,
                 }) => {
-                    let result = Self::run_shell_terminal_job_result(&job, stdout, stderr, timeout);
-                    self.runner_registry
-                        .remove_projected_hidden_terminal_job_record(&job.job_id)
-                        .await;
+                    let mut result =
+                        Self::run_shell_terminal_job_result(&job, stdout, stderr, timeout);
+                    finalize_hidden_terminal_projection(
+                        self.runner_registry.as_ref(),
+                        auth,
+                        &job,
+                        &mut result,
+                        budget,
+                    )
+                    .await;
                     result
                 }
                 Ok(HiddenStructuredJobWait::Continued {
@@ -919,6 +942,16 @@ impl ToolRuntime {
                     actual_shell,
                     "agent",
                 );
+                // A direct request has no Job identity. Capture the same proven
+                // terminal tuple as the hidden-Job fast path before late projection.
+                if result.success {
+                    add_structured_continuation_facts(
+                        &mut result,
+                        timeout,
+                        budget.sync_wait_secs,
+                        false,
+                    );
+                }
                 if let Some(resource) = ssh_resource {
                     result.output["ssh_resource"] = json!(resource);
                 }

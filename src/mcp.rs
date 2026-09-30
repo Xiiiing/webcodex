@@ -2,9 +2,13 @@ mod discovery;
 mod http_metadata;
 mod presentation;
 mod protocol;
+mod request_policy;
 mod resources;
 mod response;
 mod tools;
+
+#[cfg(test)]
+pub(crate) use tools::adaptive_runtime_gateway_input_schema_for_test;
 
 use crate::action_audit::{ActionAudit, ActionAuditRecord};
 use crate::auth::AuthContext;
@@ -333,10 +337,11 @@ pub async fn mcp_info(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     })));
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct McpToolJobAuditCorrelation {
     async_job_id: Option<String>,
     observed_job_ids: Vec<String>,
+    resolved_project: Option<String>,
 }
 
 fn safe_audit_job_id(value: Option<&Value>) -> Option<String> {
@@ -347,6 +352,18 @@ fn safe_audit_job_id(value: Option<&Value>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn safe_audit_project(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|project| {
+            !project.is_empty()
+                && project.chars().count() <= 512
+                && !project.chars().any(char::is_control)
+        })
+        .map(str::to_string)
+}
+
 fn mcp_tool_job_audit_correlation(
     tool_name: Option<&str>,
     body: &Value,
@@ -354,17 +371,67 @@ fn mcp_tool_job_audit_correlation(
     let Some(output) = body.pointer("/result/structuredContent/output") else {
         return McpToolJobAuditCorrelation::default();
     };
+    if tool_name == Some("wait_for_job_readiness") {
+        let mut observed_job_ids = Vec::new();
+        for value in output
+            .get("ready")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("job_id"))
+            .chain(
+                output
+                    .get("pending_job_ids")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+            .take(8)
+        {
+            if let Some(id) = safe_audit_job_id(Some(value)) {
+                if !observed_job_ids.contains(&id) {
+                    observed_job_ids.push(id);
+                }
+            }
+        }
+        // Never infer Project authority from the sparse readiness result body.
+        // The Job dispatcher may already bind a common Project from exact caller-authorized
+        // Job records; mixed/projectless sets deliberately remain unanchored.
+        return McpToolJobAuditCorrelation {
+            observed_job_ids,
+            ..Default::default()
+        };
+    }
     if tool_name == Some("observe_jobs") {
         let mut observed_job_ids = Vec::new();
+        let mut resolved_project: Option<String> = None;
+        let mut project_ambiguous = false;
         if let Some(items) = output.get("items").and_then(Value::as_array) {
             for item in items.iter().take(8) {
+                let item_output = item.get("output").filter(|value| value.is_object());
                 let job_id = safe_audit_job_id(
                     item.get("job_id")
-                        .or_else(|| item.get("output").and_then(|output| output.get("job_id"))),
+                        .or_else(|| item_output.and_then(|output| output.get("job_id"))),
                 );
                 if let Some(job_id) = job_id {
                     if !observed_job_ids.contains(&job_id) {
                         observed_job_ids.push(job_id);
+                    }
+                    let project = safe_audit_project(
+                        item_output
+                            .and_then(|output| output.get("project"))
+                            .or_else(|| item.get("project")),
+                    );
+                    match (resolved_project.as_deref(), project.as_deref()) {
+                        (None, Some(project)) if !project_ambiguous => {
+                            resolved_project = Some(project.to_string());
+                        }
+                        (Some(existing), Some(project)) if existing == project => {}
+                        (_, None) | (Some(_), Some(_)) => {
+                            resolved_project = None;
+                            project_ambiguous = true;
+                        }
+                        (None, Some(_)) => {}
                     }
                 }
             }
@@ -372,6 +439,7 @@ fn mcp_tool_job_audit_correlation(
         return McpToolJobAuditCorrelation {
             async_job_id: None,
             observed_job_ids,
+            resolved_project: (!project_ambiguous).then_some(resolved_project).flatten(),
         };
     }
 
@@ -385,9 +453,9 @@ fn mcp_tool_job_audit_correlation(
     McpToolJobAuditCorrelation {
         async_job_id: safe_audit_job_id(output.get("job_id")),
         observed_job_ids: Vec::new(),
+        resolved_project: None,
     }
 }
-
 fn mcp_tool_action_audit_ids(
     success: bool,
     observed_goal_plan_id: Option<&str>,
@@ -585,6 +653,34 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             return;
         }
     };
+    let policy = match request_policy::resolve(req.headers(), runtime.mcp_host_policy) {
+        Ok(policy) => policy,
+        Err(message) => {
+            // Reject ambiguous transport preferences before any tool/Job effect.
+            // Do not echo potentially sensitive header values into diagnostics.
+            guard.parsed("request_policy_error");
+            let body = rpc_error(request.id.clone(), -32600, message);
+            let estimated = estimate_json_bytes(&body);
+            guard.response_serialized(400, estimated, Some(false), None, "request_policy_error");
+            res.status_code(StatusCode::BAD_REQUEST);
+            res.render(Json(body));
+            guard.handler_returned(400, estimated, Some(false), None, "request_policy_error");
+            return;
+        }
+    };
+    // Clone only the lightweight runtime view when a preference actually differs.
+    // Stores, execution ownership and fences stay shared; policy never mutates
+    // the deployment snapshot or leaks between concurrent requests.
+    let runtime = if policy == runtime.mcp_host_policy {
+        runtime
+    } else {
+        Arc::new(
+            runtime
+                .as_ref()
+                .clone()
+                .with_request_mcp_host_policy(policy),
+        )
+    };
     let window = match protocol_era {
         McpProtocolEra::Legacy => {
             crate::client_window::mcp_window(req, request.method == "initialize")
@@ -728,7 +824,10 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     // one outer emergency timer only so the MCP hard-timeout path does not erase
     // an otherwise established runtime invocation from ergonomics telemetry.
     let mut hard_timeout_model_ergonomics = tool_name.as_deref().and_then(|name| {
-        ModelErgonomicsTimer::start_with_arguments(name, &request.params["arguments"])
+        let mut timer =
+            ModelErgonomicsTimer::start_with_arguments(name, &request.params["arguments"])?;
+        timer.resolve_work_on_project_guidance_profile(policy, true);
+        Some(timer)
     });
     let mut tool_correlation = crate::tool_runtime::ToolCallCorrelation::default();
     let mut model_ergonomics = None;
@@ -818,6 +917,14 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         }
     };
 
+    let job_correlation = match &outcome {
+        McpOutcome::Ok(body) => mcp_tool_job_audit_correlation(tool_name.as_deref(), body),
+        _ => McpToolJobAuditCorrelation::default(),
+    };
+    if tool_correlation.resolved_project.is_none() {
+        tool_correlation.resolved_project = job_correlation.resolved_project.clone();
+    }
+
     if let (Some(active), Some(project)) = (
         live_window_request.as_ref(),
         tool_correlation.resolved_project.as_deref(),
@@ -903,7 +1010,6 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
                 .and_then(|s| s.get("success").or_else(|| s.get("ok")))
                 .and_then(|v| v.as_bool());
             let audit_success = tool_success.unwrap_or(true);
-            let job_correlation = mcp_tool_job_audit_correlation(tool_name.as_deref(), &body);
             let audit_event = build_audit_event(
                 audit_success,
                 StatusCode::OK,
@@ -1115,11 +1221,11 @@ async fn handle_mcp_request_with_lifecycle(
     protocol_era: McpProtocolEra,
     host_file_import_trust: HostFileImportTrust,
     window: Option<&crate::client_window::ClientWindow>,
-    mut lifecycle: Option<&mut ToolRequestLifecycle>,
-    mut model_ergonomics_out: Option<&mut Option<ModelErgonomicsRecord>>,
+    lifecycle: Option<&mut ToolRequestLifecycle>,
+    model_ergonomics_out: Option<&mut Option<ModelErgonomicsRecord>>,
     compact_schemas: bool,
     server_mcp_apps_enabled: bool,
-    mut correlation_out: Option<&mut crate::tool_runtime::ToolCallCorrelation>,
+    correlation_out: Option<&mut crate::tool_runtime::ToolCallCorrelation>,
 ) -> McpOutcome {
     let stateless_2026 = protocol_era == McpProtocolEra::Stateless2026;
     let resource_read_bypasses_runtime_read = stateless_2026
@@ -1225,9 +1331,9 @@ async fn handle_mcp_request_with_lifecycle(
                 server_mcp_apps_enabled,
                 host_file_import_trust,
                 window,
-                lifecycle.as_deref_mut(),
-                model_ergonomics_out.as_deref_mut(),
-                correlation_out.as_deref_mut(),
+                lifecycle,
+                model_ergonomics_out,
+                correlation_out,
             )
             .await;
         }

@@ -19,6 +19,7 @@ pub fn default_environment_dir() -> SetupResultValue<PathBuf> {
         })
 }
 
+#[derive(Clone)]
 pub struct EnvironmentStore {
     root: PathBuf,
 }
@@ -190,7 +191,7 @@ fn validate_private_file(file: &File) -> SetupResultValue<()> {
     Ok(())
 }
 
-fn open_existing_private(path: &Path, writable: bool) -> SetupResultValue<File> {
+pub(crate) fn open_existing_private(path: &Path, writable: bool) -> SetupResultValue<File> {
     let metadata = std::fs::symlink_metadata(path).map_err(|_| SetupDiagnostic::io())?;
     if is_link(&metadata) || !metadata.is_file() {
         return Err(SetupDiagnostic::io());
@@ -209,7 +210,7 @@ fn open_existing_private(path: &Path, writable: bool) -> SetupResultValue<File> 
     Ok(file)
 }
 
-fn open_private(path: &Path, create_new: bool) -> SetupResultValue<File> {
+pub(crate) fn open_private(path: &Path, create_new: bool) -> SetupResultValue<File> {
     if !create_new {
         return open_existing_private(path, true);
     }

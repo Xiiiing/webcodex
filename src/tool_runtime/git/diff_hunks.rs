@@ -758,7 +758,7 @@ fn git_diff_hunks_recovery_value(
     }
 
     let continuation_call = next_continuation.map(|continuation| {
-        SuggestedToolCall::new(
+        SuggestedToolCall::mechanically_followable(
             "git_diff_hunks",
             git_diff_hunks_call_arguments(
                 project,
@@ -826,7 +826,7 @@ fn git_diff_hunks_recovery_value(
         json!("bounded_recovery_unavailable")
     };
     let refinement_call = refinement_recoverable.then(|| {
-        SuggestedToolCall::new(
+        SuggestedToolCall::mechanically_followable(
             "git_diff_hunks",
             git_diff_hunks_call_arguments(
                 project,
@@ -842,7 +842,7 @@ fn git_diff_hunks_recovery_value(
         .to_value()
     });
     let fragment_call = fragment_recoverable.then(|| {
-        SuggestedToolCall::new(
+        SuggestedToolCall::mechanically_followable(
             "git_diff_hunks",
             git_diff_hunks_call_arguments(
                 project,
@@ -913,8 +913,8 @@ fn normalize_git_diff_hunks_committed_range(
                 return Err("committed_range_conflicts_with_cached");
             }
             Ok(Some((
-                normalize_exact_commit_id(&base)?,
-                normalize_exact_commit_id(&head)?,
+                normalize_exact_commit_id(base)?,
+                normalize_exact_commit_id(head)?,
             )))
         }
     }

@@ -362,6 +362,25 @@ fn worktree_work_on_project_call(
     }
 }
 
+fn project_worktree_work_on_project_call(
+    project: &str,
+    instruction: &str,
+    base_ref: Option<&str>,
+    session_id: Option<&str>,
+) -> ToolCall {
+    ToolCall::WorkOnProject {
+        project: project.to_string(),
+        client_id: None,
+        path: None,
+        mode: Some("worktree".to_string()),
+        base_ref: base_ref.map(str::to_string),
+        instruction: instruction.to_string(),
+        guidance_profile: Default::default(),
+        include_extension_catalog: false,
+        session_id: session_id.map(str::to_string),
+    }
+}
+
 fn managed_fixture_git(root: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .args(args)
@@ -889,7 +908,20 @@ async fn dispatch_with_path_runner(
     let task = tokio::spawn({
         let runtime = runtime.clone();
         let auth = auth_context(None, true);
-        async move { runtime.dispatch_with_auth(call, Some(&auth)).await }
+        async move {
+            runtime
+                .dispatch_with_auth_transport_options_and_metadata_with_recording_mode_and_context(
+                    call,
+                    Some(&auth),
+                    crate::tool_runtime::sessions::SessionTransport::Mcp,
+                    Default::default(),
+                    None,
+                    true,
+                    vec!["project.instructions".into()],
+                    Default::default(),
+                )
+                .await
+        }
     });
     let deadline = std::time::Instant::now() + CODING_WORKFLOW_FIXTURE_TIMEOUT;
     loop {
@@ -916,6 +948,7 @@ async fn dispatch_with_path_runner(
                     "allow_patch": true,
                     "disabled": false,
                     "revision": format!("sha256:{}", "a".repeat(64)),
+                    "root_fingerprint": format!("wc_projroot_{}", "b".repeat(64)),
                     "source": "path",
                     "outcome": outcome,
                     "registered": registered,
@@ -1105,7 +1138,7 @@ fn work_on_project_schema_and_registration() {
     assert_eq!(props["session_id"]["type"], "string");
     assert_eq!(
         props["session_id"]["pattern"],
-        "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"
+        "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
     );
     assert_eq!(props["include_extension_catalog"]["type"], "boolean");
     assert_eq!(props["include_extension_catalog"]["default"], true);
@@ -1896,6 +1929,43 @@ fn work_on_project_projection_is_sparse_for_defaults_and_keeps_noteworthy_state(
     let instance = json!({ "success": true, "output": noteworthy_result.output });
     crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&instance, &schema)
         .unwrap_or_else(|error| panic!("noteworthy sparse output must match schema: {error}"));
+}
+
+#[test]
+fn work_on_project_projection_preserves_observed_tracking_and_dirty_paths() {
+    let mut input = valid_work_on_project_projection_input();
+    input["workspace"]["status"] = json!("dirty");
+    input["workspace"]["git"]["status"] = json!("dirty");
+    input["workspace"]["clean"] = json!(false);
+    input["workspace"]["upstream_status"] = json!("available");
+    input["workspace"]["upstream_reason_code"] = Value::Null;
+    input["workspace"]["upstream"] = json!("origin/main");
+    input["workspace"]["ahead"] = json!(2);
+    input["workspace"]["behind"] = json!(1);
+    input["workspace"]["changed_paths"] = json!(["src/a.rs", "src/b.rs"]);
+    input["workspace"]["changed_paths_total"] = json!(3);
+    input["workspace"]["changed_paths_truncated"] = json!(true);
+
+    let result = crate::tool_runtime::coding_task::project_work_on_project_output(
+        SAMPLE_PROJECT.to_string(),
+        input,
+    );
+    assert!(result.success, "{:?}", result.error);
+    let workspace = &result.output["workspace"];
+    assert_eq!(workspace["status"], "dirty");
+    assert_eq!(workspace["upstream_status"], "available");
+    assert_eq!(workspace["upstream"], "origin/main");
+    assert_eq!(workspace["ahead"], 2);
+    assert_eq!(workspace["behind"], 1);
+    assert_eq!(workspace["changed_paths"], json!(["src/a.rs", "src/b.rs"]));
+    assert_eq!(workspace["changed_paths_total"], 3);
+    assert_eq!(workspace["changed_paths_truncated"], true);
+    assert!(workspace.get("clean").is_none());
+
+    let schema = crate::tool_runtime::registry::output_schema_for_tool("work_on_project");
+    let instance = json!({"success": true, "output": result.output});
+    crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&instance, &schema)
+        .unwrap_or_else(|error| panic!("tracking startup projection must match schema: {error}"));
 }
 
 #[tokio::test]
@@ -2773,6 +2843,14 @@ async fn workflow_resume_context_is_window_principal_scoped_bounded_and_non_auth
         single["suggested_call"]["arguments"]["session_id"],
         first_ref
     );
+    assert_eq!(
+        single["suggested_call"]["follow_up_kind"],
+        "fallback_recovery"
+    );
+    webcodex_tool_contracts::test_support::validate_generated_tool_call_against_registered_input_schema(
+        &single["suggested_call"],
+    )
+    .expect("workflow resume recovery must pass session_handoff_summary registered inputSchema");
 
     let other_window = crate::client_window::ClientWindow::for_test("workflow-resume-other");
     let hidden_by_window = runtime
@@ -2856,6 +2934,10 @@ async fn workflow_resume_context_is_window_principal_scoped_bounded_and_non_auth
     assert_eq!(
         active_only["suggested_call"]["arguments"]["session_id"],
         second_ref
+    );
+    assert_eq!(
+        active_only["suggested_call"]["follow_up_kind"],
+        "fallback_recovery"
     );
 
     let mut newest_session_id = String::new();
@@ -2965,12 +3047,21 @@ async fn managed_worktree_bootstrap_recovers_same_operation_and_binds_session_to
     )
     .await;
 
+    let auth = auth_context(None, true);
+    let resolved_source = runtime
+        .resolve_project_input_for_auth("agent:wop-managed:source", Some(&auth))
+        .await
+        .expect("source Project resolves for short-ref bootstrap");
+    let source_project_ref = runtime
+        .project_reference_for_resolved(&resolved_source, Some(&auth))
+        .expect("source Project must have a short Project ref");
+    assert!(source_project_ref.starts_with("~p"));
+
     let (first, payloads) = dispatch_with_managed_worktree_runner(
         &runtime,
         client_id,
-        worktree_work_on_project_call(
-            client_id,
-            &source_path,
+        project_worktree_work_on_project_call(
+            &source_project_ref,
             "work in an isolated checkout",
             Some("HEAD"),
             None,
@@ -2995,6 +3086,19 @@ async fn managed_worktree_bootstrap_recovers_same_operation_and_binds_session_to
     assert_eq!(payloads[0]["operation_id"], payloads[1]["operation_id"]);
     assert!(payloads[0]["resume_project_id"].is_null());
     assert_eq!(payloads[0]["base_ref"], "HEAD");
+    assert_eq!(payloads[0]["expected_source_project_id"], "source");
+    assert_eq!(
+        payloads[0]["expected_source_root_fingerprint"],
+        managed_source_root_fingerprint()
+    );
+    assert_eq!(
+        payloads[1]["expected_source_project_id"],
+        payloads[0]["expected_source_project_id"]
+    );
+    assert_eq!(
+        payloads[1]["expected_source_root_fingerprint"],
+        payloads[0]["expected_source_root_fingerprint"]
+    );
     let project = "agent:wop-managed:managed-a1b2c3d4";
     assert_eq!(first.output["resolved_project"], project);
     assert_eq!(first.output["project"], project);
@@ -3111,6 +3215,89 @@ async fn managed_worktree_bootstrap_recovers_same_operation_and_binds_session_to
     let instance = json!({"success": true, "output": first.output});
     crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&instance, &schema)
         .unwrap_or_else(|error| panic!("managed worktree output must match schema: {error}"));
+}
+
+#[tokio::test]
+async fn managed_worktree_project_source_failure_scrubs_internal_identity_fence() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    init_git_repo(&source);
+    let source_path = source.canonicalize().unwrap().to_string_lossy().to_string();
+    let runtime = ToolRuntime::new_for_tests();
+    let client_id = "wop-managed-failure";
+    let mut source_project = registered_project("source", &source_path);
+    source_project.root_fingerprint = Some(managed_source_root_fingerprint());
+    register_agent_with_projects(
+        &runtime,
+        client_id,
+        None,
+        RunnerCapabilities {
+            shell: true,
+            git: true,
+            managed_worktree: true,
+            ..Default::default()
+        },
+        vec![source_project],
+    )
+    .await;
+
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        let call = project_worktree_work_on_project_call(
+            "agent:wop-managed-failure:source",
+            "surface a bounded identity failure",
+            None,
+            None,
+        );
+        async move {
+            runtime
+                .dispatch_with_auth(call, Some(&auth_context(None, true)))
+                .await
+        }
+    });
+    let deadline = std::time::Instant::now() + CODING_WORKFLOW_FIXTURE_TIMEOUT;
+    while !task.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "managed-worktree failure fixture did not finish"
+        );
+        let Some(request) = probe_patch_agent_request(&runtime, client_id).await else {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            continue;
+        };
+        assert_eq!(request.kind, "prepare_managed_worktree");
+        let response = json!({
+            "error_code": "managed_worktree_source_identity_changed",
+            "error_kind": "managed_worktree_source_identity_changed",
+            "failure_kind": "managed_worktree_source_identity_changed",
+            "state_changed": false,
+            "source_project_id": "source",
+            "source_root_fingerprint": managed_source_root_fingerprint(),
+        });
+        complete_patch_agent_request(
+            &runtime,
+            client_id,
+            &request.request_id,
+            1,
+            &response.to_string(),
+            "",
+        )
+        .await;
+    }
+
+    let result = task.await.unwrap();
+    assert!(!result.success);
+    assert_eq!(
+        result.output["error_kind"],
+        "managed_worktree_source_identity_changed"
+    );
+    assert_eq!(
+        result.output["source_project"],
+        "agent:wop-managed-failure:source"
+    );
+    assert!(result.output.get("source_project_id").is_none());
+    assert!(result.output.get("source_root_fingerprint").is_none());
 }
 
 #[tokio::test]
@@ -3244,51 +3431,25 @@ async fn source_project_session_cannot_resume_a_managed_worktree() {
     assert!(started.success, "{:?}", started.error);
     let session_id = started.output["session_id"].as_str().unwrap().to_string();
 
-    let task = tokio::spawn({
-        let runtime = runtime.clone();
-        let auth = auth.clone();
-        let source_path = source_path.clone();
-        let session_id = session_id.clone();
-        async move {
-            runtime
-                .dispatch_with_auth(
-                    worktree_work_on_project_call(
-                        client_id,
-                        &source_path,
-                        "must not switch workspace",
-                        None,
-                        Some(&session_id),
-                    ),
-                    Some(&auth),
-                )
-                .await
-        }
-    });
-    let request = wait_for_patch_agent_request(&runtime, client_id).await;
-    assert_eq!(request.kind, "prepare_managed_worktree");
-    let payload: Value = serde_json::from_str(request.stdin.as_deref().unwrap()).unwrap();
-    assert_eq!(payload["resume_project_id"], "source");
-    let error = json!({
-        "error_code": "managed_worktree_resume_mismatch",
-        "error_kind": "managed_worktree_resume_mismatch",
-        "failure_kind": "managed_worktree_resume_mismatch",
-        "state_changed": false,
-    });
-    complete_patch_agent_request(
-        &runtime,
-        client_id,
-        &request.request_id,
-        1,
-        &error.to_string(),
-        "",
-    )
-    .await;
-    let result = task.await.unwrap();
-    assert!(!result.success);
-    assert_eq!(
-        result.output["error_kind"],
-        "managed_worktree_resume_mismatch"
+    let result = runtime
+        .dispatch_with_auth(
+            project_worktree_work_on_project_call(
+                &source_project,
+                "must not switch workspace",
+                None,
+                Some(&session_id),
+            ),
+            Some(&auth),
+        )
+        .await;
+    assert!(
+        probe_patch_agent_request(&runtime, client_id)
+            .await
+            .is_none(),
+        "source Session mismatch must fail before prepare_managed_worktree"
     );
+    assert!(!result.success);
+    assert_eq!(result.output["error_kind"], "session_project_mismatch");
     assert_eq!(result.output["state_changed"], false);
     assert_eq!(instruction_events(&runtime, &session_id).len(), 1);
     assert_eq!(runtime.list_projects(Some(&auth)).await.output["count"], 1);
@@ -3360,7 +3521,11 @@ async fn path_source_auto_registers_reuses_and_supports_canonical_coding_entry()
     std::fs::write(root.path().join("hello.txt"), "hello\n").unwrap();
     let project_path = root.path().canonicalize().unwrap();
     let project_path = project_path.to_string_lossy().to_string();
-    let runtime = ToolRuntime::new_for_tests();
+    let references = tempfile::tempdir().unwrap();
+    let db = std::sync::Arc::new(
+        crate::Database::open(&references.path().join("references.db")).unwrap(),
+    );
+    let runtime = ToolRuntime::new_for_tests().with_project_reference_database(db);
     let client_id = "wop-path";
     register_agent_with_projects(
         &runtime,
@@ -3405,6 +3570,14 @@ async fn path_source_auto_registers_reuses_and_supports_canonical_coding_entry()
         !first.output.to_string().contains(&project_path),
         "compact work_on_project output leaked the absolute input path"
     );
+    assert_eq!(
+        first.output["context_projection"]["materials"][0]["status"],
+        "available"
+    );
+    assert_eq!(
+        first.output["context_projection"]["materials"][0]["projection"]["fingerprint"],
+        first.output["instructions"]["fingerprint"]
+    );
     let session_id = first.output["session_id"].as_str().unwrap().to_string();
 
     let second = dispatch_with_path_runner(
@@ -3432,6 +3605,31 @@ async fn path_source_auto_registers_reuses_and_supports_canonical_coding_entry()
         "reused_existing_registration"
     );
     assert_eq!(instruction_events(&runtime, &session_id).len(), 2);
+
+    for selector in [
+        first.output["resolved_project"].as_str().unwrap(),
+        first.output["project_ref"].as_str().unwrap(),
+    ] {
+        let canonical = dispatch_with_path_runner(
+            &runtime,
+            client_id,
+            work_on_project_call(selector, "canonical context", None),
+            "repo-a1b2c3d4",
+            &project_path,
+            "reused_existing_registration",
+            false,
+        )
+        .await;
+        assert!(canonical.success, "{canonical:?}");
+        assert_eq!(
+            canonical.output["resolved_project"],
+            first.output["resolved_project"]
+        );
+        assert_eq!(
+            canonical.output["context_projection"]["materials"][0]["status"],
+            "available"
+        );
+    }
 
     let listed = runtime.list_projects(Some(&auth_context(None, true))).await;
     assert!(listed.success);
@@ -4300,6 +4498,10 @@ async fn work_on_project_new_task_is_lightweight_and_preserves_startup_context()
 
     // resolved_project is the full runtime project id.
     assert_eq!(result.output["resolved_project"], project);
+    assert_eq!(result.output["workspace"]["upstream_status"], "absent");
+    assert!(result.output["workspace"].get("upstream").is_none());
+    assert!(result.output["workspace"].get("ahead").is_none());
+    assert!(result.output["workspace"].get("behind").is_none());
     // Neither an inconclusive LSP probe nor an intentionally skipped
     // repository overview is a readiness warning.
     assert!(result.output.get("repository").is_none());
@@ -5922,15 +6124,15 @@ async fn work_on_project_distinguishes_unavailable_from_inconclusive_lsp_probes(
     use std::time::{Duration, Instant};
 
     for (status, reason) in [
-        ("probe_timeout", "status_probe_timed_out"),
-        ("probe_failed", "status_probe_failed"),
-        ("unavailable", "server_unavailable"),
+        ("not_observed", None),
+        ("probe_failed", Some("status_probe_failed")),
+        ("unavailable", Some("server_unavailable")),
     ] {
         let root = tempfile::tempdir().unwrap();
         init_git_repo(root.path());
         commit_file(root.path(), "README.md", "# fixture\n", "seed");
         let runtime = ToolRuntime::new_for_tests()
-            .with_semantic_navigation_probe_timeout(Duration::from_millis(100));
+            .with_semantic_navigation_probe_timeout(Duration::from_secs(60));
         let project =
             register_runner_project_at_path(&runtime, "wop-probe-state", "demo", root.path()).await;
         let task = tokio::spawn({
@@ -5958,9 +6160,9 @@ async fn work_on_project_distinguishes_unavailable_from_inconclusive_lsp_probes(
                 continue;
             }
             probe_count += 1;
-            if status == "probe_timeout" {
-                // Leave exactly this probe unanswered; the normal timeout path
-                // must cancel it without blocking the rest of coding startup.
+            if status == "not_observed" {
+                // Leave only the optional probe unanswered. Mandatory completion
+                // must cancel it without waiting for the provider timeout.
                 continue;
             }
             let envelope = if status == "unavailable" {
@@ -5997,7 +6199,7 @@ async fn work_on_project_distinguishes_unavailable_from_inconclusive_lsp_probes(
         let semantic = &result.output["semantic_navigation"];
         assert_eq!(semantic["supported"], true);
         assert_eq!(semantic["status"], status);
-        assert_eq!(semantic["reason_code"], reason);
+        assert_eq!(semantic["reason_code"], json!(reason));
         if status == "unavailable" {
             assert_eq!(semantic["available"], false);
             assert_eq!(result.output["readiness"]["status"], "warn");

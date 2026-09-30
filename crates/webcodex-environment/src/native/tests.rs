@@ -20,18 +20,40 @@ fn fixture(
     std::thread::JoinHandle<()>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let requests = Arc::new(Mutex::new(Vec::new()));
+    let requests = Arc::new(Mutex::new(Vec::<HttpRequest>::new()));
     let captured = requests.clone();
     let handle = std::thread::spawn(move || {
-        for _ in 0..expected {
-            let (mut stream, _) = listener.accept().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut accepted = 0usize;
+        while accepted < expected {
+            let (mut stream, _) = match listener.accept() {
+                Ok(value) => value,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        let paths: Vec<_> = captured
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|request| request.path.clone())
+                            .collect();
+                        panic!(
+                            "HTTP fixture timed out after {accepted}/{expected} requests; captured paths: {paths:?}"
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("HTTP fixture accept failed: {error}"),
+            };
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
             let request = read_request(&mut stream);
             let (status, headers, body) = reply(&request);
             captured.lock().unwrap().push(request);
+            accepted += 1;
             let body = body.to_string();
             let mut response = format!("HTTP/1.1 {status} Fixture\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n", body.len());
             for (name, value) in headers {
@@ -103,6 +125,7 @@ fn record(
         schema_version: ENVIRONMENT_SCHEMA,
         environment_id: "fixture-environment".into(),
         request: SetupRequest {
+            service_scope: service::ServiceScope::System,
             mode,
             server_url,
             project,
@@ -119,6 +142,42 @@ fn record(
         projects: Vec::new(),
         configured: false,
     }
+}
+
+#[test]
+fn user_plans_keep_all_components_on_the_same_manager_without_system_entrypoints() {
+    let temp = crate::test_tempdir().unwrap();
+    let store = EnvironmentStore::open(temp.path().join("environment")).unwrap();
+    let mut saved = record(
+        "http://127.0.0.1:18880".into(),
+        None,
+        EnvironmentMode::Create {
+            listen: "127.0.0.1:18880".into(),
+        },
+    );
+    saved.request.runner = Some(true);
+    saved.runner_client_id = Some("user-runner".into());
+    saved.request.service_scope = service::ServiceScope::User;
+    // Pure plans: no platform manager or local credentials are touched.
+    for spec in [
+        service_spec(&store, &saved, Component::Server).unwrap(),
+        service_spec(&store, &saved, Component::Runner).unwrap(),
+        crate::tunnel_service_spec(&store, &saved, "default").unwrap(),
+    ] {
+        assert_eq!(spec.scope, service::ServiceScope::User);
+        assert!(spec.linux_socket.is_none());
+        assert!(matches!(
+            spec.account,
+            ServiceAccount::SystemUser { group: None, .. }
+        ));
+        for arg in ["--windows-service", "--computer-session-dir"] {
+            assert!(!spec.args.iter().any(|value| value == arg));
+        }
+        #[cfg(windows)]
+        assert!(spec.environment.is_empty());
+    }
+    assert!(!store.root().join("runner.toml").exists());
+    assert!(!store.root().join("webcodex-user-token").exists());
 }
 
 #[tokio::test]
@@ -519,7 +578,7 @@ async fn viewer_configure_uses_only_read_only_overview_and_keeps_runner_identity
 
 #[tokio::test]
 async fn older_server_viewer_works_but_runner_transition_requires_user_identity() {
-    let (url, requests, server) = fixture(4, |request| match request.path.as_str() {
+    let (url, requests, server) = fixture(5, |request| match request.path.as_str() {
         "/runtime" => (
             200,
             vec![("x-webcodex-console-assets", "embedded")],
@@ -546,18 +605,17 @@ async fn older_server_viewer_works_but_runner_transition_requires_user_identity(
         )
         .await
         .unwrap();
-    server.join().unwrap();
     assert_eq!(result.environment.username, None);
     assert_eq!(result.environment.runner_client_id, None);
     assert!(result.observation.authenticated);
-    assert_eq!(requests.lock().unwrap().len(), 4);
 
-    // A later project attachment must not invent a user or consume a code
-    // when this older Server cannot attest the token's account.
-    let (url, requests, server) = fixture(1, |_| (200, vec![], json!({"service":"webcodex"})));
+    // Preflight normally rejects root/service accounts before a Runner
+    // transition can contact the Server. Use a stable non-root identity only on
+    // this synthetic transition record so the test reaches the older-Server
+    // identity contract without changing the already-configured viewer state.
     let mut transition = result.environment;
-    transition.request.server_url = url;
     transition.request.project = Some(temp.path().to_path_buf());
+    transition.request.account.identity = "fixture-user-id".into();
     let secrets = SetupSecrets {
         pairing_code: Some(Secret::new("wc_pair_unused".into())),
         ..Default::default()
@@ -571,11 +629,13 @@ async fn older_server_viewer_works_but_runner_transition_requires_user_identity(
     )
     .await
     .unwrap_err();
-    server.join().unwrap();
     assert_eq!(error.code, "server_identity_contract");
+    server.join().unwrap();
     assert!(transition.runner_client_id.is_none());
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 5);
     assert_eq!(
-        requests.lock().unwrap()[0].path,
+        requests.last().unwrap().path,
         "/api/runtime-console/overview"
     );
 }
@@ -926,6 +986,7 @@ async fn uncertain_project_addition_is_not_dispatched_again() {
         Some(temp.path().to_path_buf()),
         EnvironmentMode::Join,
     );
+    environment.request.account.identity = "fixture-user-id".into();
     environment.username = Some("alice".into());
     environment.runner_client_id = Some("alice-client".into());
     store.save_environment(&environment).unwrap();

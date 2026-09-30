@@ -19,19 +19,24 @@ work_on_project
 ```
 
 `work_on_project` 是普通 coding/review 的 canonical bootstrap。把当前任务 instruction 交给它，然后遵循连接到的 Server 返回的 project instructions 与 tool surface。
+它会复用同一次 startup Git observation，提供有界的 branch/HEAD、upstream tracking、ahead/behind，以及可用时的 dirty-path 列表；这些字段就是初始 workspace observation，不应立刻再机械执行 `git status`/branch probe。只有相关 mutation 之后或确实需要额外精确 Git 事实时再刷新。Git、runtime、instruction、semantic-navigation 与 extension 等互不依赖且 authority 不变的 startup observation 会尽量并发调度。
 
 对于 substantial coding，在 Workflow Session 进入真实工作状态后（例如第一次有意义的源码 mutation，或开始长时间 validation），对该 exact Session 调用一次 `present_work_result(project, session_id)`。挂载后的 MCP App 会自行进行有界的 Workspace / Validation / Review live read，因此不要重复创建卡片，也不要为了给卡片喂状态而额外消耗 model turn。tiny/read-only 工作不需要 progress card。`finish_coding_task` 在 non-blocking closeout 时 seal eligible final changes，已经挂载的同一张卡会在后续 App refresh 中发现这份 immutable snapshot；如果此前没有挂卡而 closeout 明确返回 presentation suggestion，再在收尾时调用一次即可。
 它的 primary output 默认保持紧凑，不重复静态 instruction/workflow 正文；当前模型上下文缺少这些材料时，分别显式请求 `context_request=["project.instructions"]` 和/或 `context_request=["webcodex.workflow"]`。Workflow Session identity 不证明当前模型仍保留这些上下文。
 Bootstrap 或 discovery 返回 `project_ref` 后，普通 Project-scoped tool call 的 `project` 应优先复用这个短 selector。Canonical `agent:<client_id>:<project_id>` 仍保留用于 diagnostic 与显式 addressing，但模型无需机械重复。`project_ref` 由 Server 持久维护、按 principal 隔离，不携带 authority；每次调用都会根据其钉住的 canonical Project/root identity 重新授权。
+
+当已经有 registered Project、又需要隔离工作区时，直接使用 `work_on_project(project=<canonical id 或 project_ref>, mode="worktree", ...)`。不要重新推导 `client_id`、source absolute path，也不要猜 managed destination。Server 会在本次调用重新授权 source Project，Runner 负责派生并拥有 managed placement、持久化 source/base provenance，并返回新的 canonical Project 与短 ref。source Project → managed Project 是 fresh-Session transition，因此不要携带 source Project 的 Session；后续使用返回的 managed `project_ref` 与 Session 继续。兼容入口 `client_id + path + mode="worktree"` 仍受普通 path authority 约束；当已有 Project identity 时，它不是推荐流程。Managed storage 的实际目录布局属于实现细节，模型不应记忆或猜测。
 
 当 `work_on_project`、`start_session`、`session_summary` 或显式 handoff 返回 `session_ref` 时，后续显式 Session 选择可优先复用这个短 selector。Business `session_id` 与 wrapper `recording_session_id` 仍是两套独立语义，但都可以显式携带已签发的 ref：Runtime 会先把它还原为钉住的 canonical `wc_sess_*`，再执行各自原有的授权、生命周期或 guard 逻辑。Canonical identity 仍是持久化、审计、诊断和内部关联的权威身份。`session_ref` 只是按 principal 隔离的便利选择器；省略 recorder 时不会自动推断，也不会形成隐式或粘滞的 recorder context。
 默认情况下，它还会返回一个很小且有界的 `extensions` selection catalog：Skill metadata 来自 canonical 的 project / Runner-configured `skills.roots` / Runner-managed Skill Store 三类来源；Plugin metadata 只包含 configured working directory 与当前 Project root 匹配、且已 ready/committed 的 provider。该 metadata 不授予任何 authority，也不会自动读取 Skill body 或创建 Plugin binding；模型选择后使用 `skill_read_file` 读取 Skill 文本，`run_skill_resource` 只执行可信 Runner-configured live `scripts/` resource（由 `expected_definition_revision` fence definition）或 Runner-installed managed resource（另由 `expected_package_revision` fence package），Plugin 则走 `plugin_tool describe -> call`。Configured resource bytes 会一直保持 live 到实际执行时，并不会预先被 package revision 固定。只有当前模型上下文仍明确保留这些 discovery metadata 时，才应设置 `include_extension_catalog=false`。
 
 ## 工具策略 guidance
 
-`work_on_project` 的 `guidance_profile` 是可选的：显式值始终优先；MCP 调用省略时
-使用已配置的 `WEBCODEX_MCP_HOST_PROFILE` 作为 model-guidance 默认值；非 MCP/internal
-调用省略时仍回退到 `direct`。Workflow contract v21 保持共享的 `guidance`、
+`work_on_project` 的 `guidance_profile` 是可选的：显式值只覆盖指导文本；MCP 省略时
+使用当次请求的 `X-WebCodex-MCP-Profile`，header 省略才使用部署默认
+`WEBCODEX_MCP_HOST_PROFILE`。HTTP header 独立决定返回/等待策略，见
+[MCP 客户端策略](MCP.zh-CN.md#同一-server-的客户端策略)。非 MCP/internal
+调用省略时仍回退到 `direct`。Workflow contract v27 保持共享的 `guidance`、
 `model_protocol` 和 review `roles`，并在显式 `context_request=["webcodex.workflow"]`
 时通过 `tool_strategy` 返回本次请求选中的 effective 策略。
 
@@ -42,14 +47,29 @@ Bootstrap 或 discovery 返回 `project_ref` 后，普通 Project-scoped tool ca
   独立的 cross-tool read-only observation 才适合 Host 并行。native batch 之后若仍需
   cross-tool fan-out，partial evidence 仍有价值时优先 `Promise.allSettled`，只有真正的
   all-or-nothing 才使用 `Promise.all`。对于 result-dependent search/read/branch chain，
-  只要下一调用由结果机械确定且没有新的语义判断，就继续留在
-  同一个 Host cell。单个 child ToolResult 返回本身不是 model-turn boundary；需要 semantic
-  choice、ambiguous result、新用户决策、authority/permission、uncertain outcome、竞争性
-  recovery 或 mutation intent 尚未确定时才自然回到模型。完整 ToolResult 尽量留在 Host
-  cell，只返回下一次决策需要的紧凑证据。每个 Host cell 应是短生命周期 dependency DAG，
+  只有 Server 返回 parser-ready `follow_up_kind=mechanically_followable` 时，Host 才可以
+  在同一个 cell 内机械续作，并在当前 Host input schema 校验后原样复制生成参数；
+  `fallback_recovery` 只表示 recovery/detail/dependency，不能仅因为字段存在就自动执行。
+  单个 child ToolResult 返回本身不是 model-turn boundary；需要 semantic choice、
+  ambiguous result、新用户决策、authority/permission、uncertain outcome、竞争性 recovery、
+  mutation intent 尚未确定，或 stale revision/fence 之后需要继续 effectful replay 时才自然回到模型。
+  精确 stale-source reread 仍可以是 mechanically followable observation；但
+  `reread_required=true` 或 `direct_retry_safe=false` 是 effectful replay 的硬边界，
+  recovery 可以指出下一步应重新观察什么，但不授权 Host 自动重试 mutation。  完整 ToolResult 尽量留在 Host cell，只返回下一次决策需要的紧凑证据。每个 Host cell 应是短生命周期 dependency DAG，
   而不是承载长时间 Job lifetime。Job handoff 保存精确 identity 后，先完成已经确定的独立工作；
-  如果剩余工作主要只是等待，就结束当前 cell，之后从 exact continuation 恢复，不要让 cell
-  持续挂在长等待上，也不要因为 Job 存在就机械 `observe_jobs`。startup
+  执行所有 ready independent work 和明确 `mechanically_followable` 的续作，直到 quiescent。
+  只剩真正阻塞后续有效工作的 pending Job dependencies 时，把整个 exact Job set 交给一次
+  `wait_for_job_readiness(job_ids, mode=any|all, wait_secs)` join barrier；任意一个 Job terminal
+  就能解锁有用的独立后续 branch 时使用 `any`，只有真正需要全部 blocked dependency 的
+  join point 才使用 `all`。不能为每个 Job 开一个长 wait，也不能用 `Promise.race`
+  模拟 any-ready。应在保留 Host return guard 后，从当前 activation 剩余安全预算中选择
+  尽可能大的 `wait_secs`，同时受 canonical 45 秒上限约束；不再偏好固定 10/15/20 秒
+  slice。ready 后重新计算 ready/blocked work 并继续 same cell。deadline 后也先重新计算；
+  如果 ready work、blocked set 和 semantic information 都没有变化，不要机械续同一组 wait，
+  接近预算边界时正常 yield。Job terminal 不等于 mechanically_followable；
+  fallback_recovery、authority change、ambiguous result、outcome_unknown 和 effect uncertainty
+  仍回模型。Host cell 返回不等于当前 turn 完成；继续在当前 turn 推进任务，不假设
+  自动开启下一 turn，也不要用 `observe_jobs` heartbeat 保活。startup
   `tool_strategy.host_orchestration` catalog 与 exact
   `tool_manifest(tool_name=...)` hint 都从 canonical `ToolDefinition` metadata 派生；
   它们只提供 guidance，不改变 `ToolCompositionPolicy`、authority、effect、permission、

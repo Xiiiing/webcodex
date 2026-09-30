@@ -112,10 +112,13 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 super::ToolActivityPresentation::Support,
                 super::ToolActivityInteraction::Meaningful,
             ),
-            "Canonical bootstrap for ordinary coding/review. Prefer project_ref (principal-scoped; reauthorizes Project), project or client_id+path. Omit session_id for a fresh Workflow Session; does not imply a fresh model context. Exact resume requires an active accessible Session; never guesses prior Session. goal_context reuses one exact Goal; no authority. Read/follow AGENTS.md/CLAUDE.md or repository rules: request _wc.context=[\"project.instructions\"]; Runtime re-observes instruction files. Available complete body satisfies reading; do not immediately reread. For fresh or uncertain model context, request webcodex.workflow via _wc.context; reuse retained guidance. Reuse successful workspace branch/HEAD/status, available semantic navigation, sufficient startup Skills/Plugins; refresh stale/incomplete facts or for detail/fences. guidance_profile guides; include_extension_catalog controls catalogs. mode=worktree creates an isolated worktree from an exact Git base with Project authority; checkout does not require Git.",
-        ).with_gpt_action_description("Start/resume exact Project work. Prefer project_ref; canonical id or client_id+path also work. Exact resume accepts session_ref/session_id; sparse goal_context supports explicit Goal reuse. MCP context sidecars are unavailable here."),
+            "Canonical bootstrap for ordinary coding/review. Prefer principal-scoped project_ref; project or client_id+path. project_ref reauthorizes Project. mode=worktree isolated worktree: project reauthorizes source, resolves an exact Git base with Project authority, and returns managed Project/ref plus a fresh Workflow Session; never retarget source Session or guess paths. Omit session_id for fresh work; this does not imply a fresh model context. Exact resume needs an active accessible Session and never guesses prior Session. Read AGENTS.md/CLAUDE.md via _wc.context=[\"project.instructions\"]; Runtime re-observes instruction files; do not immediately reread complete bodies. For fresh or uncertain model context request webcodex.workflow. Reuse successful workspace state, available semantic navigation, sufficient startup Skills/Plugins; refresh stale facts. goal_context has no authority. guidance_profile guides; include_extension_catalog controls Skills/Plugins. checkout does not require Git.",
+        )
+        .with_gpt_action_description("Start/resume exact Project work. Prefer project_ref; canonical id or client_id+path also work. Exact resume accepts session_ref/session_id; sparse goal_context supports explicit Goal reuse. MCP context sidecars are unavailable here."),
         10,
-    ),    requires_explicit_business_session(model_spec(
+        super::ToolDirectReason::CoreWorkflow,
+    ),
+    requires_explicit_business_session(model_spec(
         def(
             "finish_coding_task",
             super::ToolAuditPolicy::TYPED_CANONICAL,
@@ -171,10 +174,11 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 super::ToolActivityPresentation::Transport,
                 super::ToolActivityInteraction::NonMeaningful,
             ),
-            "Present one persistent user-facing WebCodex card for the current client Window. For substantial Project work, call it once immediately after the first successful project-scoped WebCodex action so the card stays near the beginning of the chat; do not wait for Workflow Session creation, mutation, validation, or closeout. project is required; session_id is optional compatibility evidence and may be omitted. The card self-refreshes the same bounded Window ActionAudit activity used by WebUI, including observe/diagnostic actions, and may surface linked Session collaboration or sealed final changes only when those later exist. It creates no work, Session, validation, review, lifecycle change, or authority. Never repeat presentation in the same Window because another invocation may create another Host card.",
+            "Present one persistent user-facing WebCodex card for the current client Window. For substantial Project work, call it once immediately after the first successful project-scoped WebCodex action so the card stays near the beginning of the chat; do not wait for Workflow Session creation, mutation, validation, or closeout. project is required; session_id is optional; supply the exact business Workflow Session to show its authorized Server Job states on normal refresh. Without it the card does not infer Job ownership from Window or Project activity. The card self-refreshes the same bounded Window ActionAudit activity used by WebUI, including observe/diagnostic actions, and may surface linked Session collaboration or sealed final changes only when those later exist. It creates no work, Session, validation, review, lifecycle change, or authority. Never repeat presentation in the same Window because another invocation may create another Host card.",
         )
         .with_gpt_action_unsupported(),
         155,
+        super::ToolDirectReason::Presentation,
     ),
     def(
         "work_result_state",
@@ -644,9 +648,9 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
         "Return a bounded structured aggregate of session-local discussion from the recorded session ledger. Does not call an LLM or generate natural-language summaries.",
         )),
         15,
+        super::ToolDirectReason::CoreWorkflow,
     ),
-    adaptive_runtime_direct(
-        requires_explicit_business_session(model_spec(
+    requires_explicit_business_session(model_spec(
             def(
                 "session_handoff_summary",
             super::ToolAuditPolicy::typed_fields(&[
@@ -681,10 +685,8 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             super::ToolActivityPresentation::Support,
             super::ToolActivityInteraction::Meaningful,
         ),
-            "Explicit read-only recovery for genuinely missing task context or an explicit handoff; requires the exact session_id or its returned session_ref selector. Do not use as routine progress/status polling or to establish a Session baseline when current context is coherent. Defaults to identity plus deterministic handoff_brief, hard-bounded at 8 KiB: task instructions, workspace, progress, validation, jobs, collaboration attention, bounded external reports, next actions and basis completeness. External reports retain exact source IDs and unknown outcomes, with incomplete capture coverage; they are not native execution or validation. Omitted project uses the authorized Session Project. diagnostic=true adds detailed ledger and closeout evidence. A concurrent Session change marks the basis incomplete; re-observe before dependent work. No checkpoint allocation, ACK token, or authority grant.",
-        ).with_gpt_action_description("Recover missing task context or perform an explicit handoff for the exact session_id or returned session_ref. Avoid routine status polling or baseline creation. Returns bounded handoff_brief; diagnostic=true adds evidence. Check basis completeness before dependent work. Read-only.")),
-        16,
-    ),
+            "Explicit read-only recovery for missing task context or an explicit handoff; requires exact session_id/session_ref and is not routine status polling. Returns deterministic 8 KiB handoff_brief with task, workspace, progress, validation, Jobs, collaboration/external-report evidence, next actions and basis completeness. If the same owner has active Goals explicitly correlated to the Session, optional bounded goal_context is returned separately: zero omit it and multiple remain selection_required. Goal context is read-only: no inference, Goal mutation, liveness refresh, scheduling or authority grant. External reports retain unknown outcomes/incomplete coverage and are not native execution/validation. Omitted project uses the authorized Session Project; diagnostic=true adds ledger/closeout evidence. Concurrent Session change makes basis incomplete; re-observe before dependent work.",
+        ).with_gpt_action_description("Read-only recovery for exact session_id/session_ref; not routine polling. Returns bounded handoff_brief and optional explicitly correlated goal_context; multiple Goals stay unselected. diagnostic=true adds evidence. Check basis completeness before dependent work.")),
     requires_explicit_business_session(
         def(
             "session_handoff_state",

@@ -145,6 +145,7 @@ fn cargo_validation_start_metadata(
         shell: Some("direct_argv".to_string()),
         validation_steps: vec![step.clone()],
         validation: Some(ShellJobValidationMetadata {
+            project_validation: None,
             source_fence: None,
             tool: "cargo_test".to_string(),
             kind: "test".to_string(),
@@ -197,6 +198,7 @@ fn multi_package_cargo_check_start_metadata() -> ShellJobStartMetadata {
         shell: Some("direct_argv".to_string()),
         validation_steps: vec![step.clone()],
         validation: Some(ShellJobValidationMetadata {
+            project_validation: None,
             source_fence: None,
             tool: "cargo_check".to_string(),
             kind: "check".to_string(),
@@ -399,7 +401,7 @@ async fn terminal_protocol_violation_during_recovery_keeps_execution_terminal_au
 }
 
 #[tokio::test]
-async fn validation_progress_accepts_coalesced_sequence_gaps_without_skipping_steps() {
+async fn validation_progress_accepts_sequence_only_heartbeats_and_coalesced_gaps() {
     let registry = RunnerRegistry::default();
     register(&registry, INSTANCE_A, empty_inventory()).await;
     let steps = vec![
@@ -488,8 +490,25 @@ async fn validation_progress_accepts_coalesced_sequence_gaps_without_skipping_st
         }
     };
 
+    registry
+        .update_job(validation_update(2, "running", 0, Some("format"), false))
+        .await
+        .unwrap();
+    let mut heartbeat = validation_update(3, "running", 0, Some("format"), false);
+    heartbeat.activity = None;
+    let heartbeat_view = registry.update_job(heartbeat).await.unwrap();
+    assert_eq!(heartbeat_view.status, "running");
+    assert_eq!(heartbeat_view.last_update_seq, Some(3));
+    assert_eq!(
+        heartbeat_view.validation_progress,
+        Some(ShellJobValidationProgress {
+            completed: 0,
+            current_step: Some("format".to_string()),
+            failed_step: None,
+        })
+    );
+
     for update in [
-        validation_update(2, "running", 0, Some("format"), false),
         validation_update(37, "running", 1, Some("check"), false),
         validation_update(81, "running", 2, Some("test"), false),
     ] {
@@ -563,6 +582,34 @@ async fn old_count_capable_runner_accepts_cargo_validation_without_explicit_exec
         .unwrap()
         .expect("compatible Cargo validation request");
     assert_eq!(request.kind, "start_validation_job");
+}
+
+#[tokio::test]
+async fn project_test_options_are_fenced_again_at_job_admission() {
+    use webcodex_core::project_validation::*;
+    for supported in [false, true] {
+        let registry = RunnerRegistry::default();
+        let mut registration = register_request(INSTANCE_A, empty_inventory());
+        registration.capabilities.project_validation_v1 = true;
+        registration.capabilities.project_validation_test_options_v1 = supported;
+        registry.register(registration).await.unwrap();
+        let mut metadata = cargo_validation_start_metadata(Some(true), None, Some(3));
+        let validation = metadata.validation.as_mut().unwrap();
+        validation.tool = "project_validate".into();
+        validation.project_validation = Some(ProjectValidationProvenance {
+            request:ProjectValidationRequest {project_id:"demo".into(),cwd:None,action:ProjectValidationAction::Test,
+                adapter:ProjectValidationAdapter::Rust,scope:None,
+                test:Some(ProjectValidationTestOptions {filter:Some("focused".into()),min_tests:Some(3),require_tests:None})},
+            backend:"rust".into(),recipe_root:".".into(),root_digest:"a".repeat(64),manifest_digest:"b".repeat(64),invocation_digest:"c".repeat(64),
+        });
+        assert!(validation.is_valid());
+        let result = registry.start_job_with_metadata(start_request("validation"), "tester".into(), metadata).await;
+        if supported { assert!(result.is_ok(), "{result:?}"); }
+        else {
+            assert!(result.unwrap_err().contains("project_validation_test_options_v1"));
+            assert!(registry.list_jobs(Some(10)).await.is_empty());
+        }
+    }
 }
 
 #[tokio::test]
@@ -718,6 +765,7 @@ async fn cargo_test_count_assertion_survives_inventory_roundtrip_and_server_rest
                 shell: Some("direct_argv".to_string()),
                 validation_steps: vec![step.clone()],
                 validation: Some(ShellJobValidationMetadata {
+                    project_validation: None,
                     source_fence: None,
                     tool: "cargo_test".to_string(),
                     kind: "test".to_string(),
@@ -811,6 +859,7 @@ async fn reconciliation_rejects_cross_product_first_class_go_test_metadata() {
     snapshot.context.purpose = Some("validation".to_string());
     snapshot.context.validation_steps = vec!["test".to_string()];
     snapshot.context.validation = Some(ShellJobValidationMetadata {
+        project_validation: None,
         source_fence: None,
         tool: "go_test".to_string(),
         kind: "test".to_string(),
@@ -2713,6 +2762,18 @@ fn standalone_snapshot(job_id: &str, status: &str) -> ShellJobSnapshot {
         test_count_evidence: None,
         activity: None,
     }
+}
+
+#[test]
+fn job_inventory_accepts_bash_login_shell_context() {
+    let mut snapshot = standalone_snapshot("bash-login-running", "running");
+    snapshot.context.shell = Some("bash_login".to_string());
+    let inventory = ShellJobInventory {
+        active_complete: true,
+        jobs: vec![snapshot],
+    };
+
+    validate_job_inventory(CLIENT_ID, &[project_summary()], &inventory).unwrap();
 }
 
 #[test]

@@ -19,6 +19,7 @@ work_on_project
 ```
 
 `work_on_project` is the canonical bootstrap for normal coding and review. Give it the current task instruction and then follow the project instructions and tools returned by the connected Server.
+Its bounded workspace snapshot reuses the same startup Git observation for branch/HEAD, upstream tracking and ahead/behind state, plus a bounded dirty-path list when available. Treat these fields as the initial observation instead of immediately repeating `git status`/branch probes; refresh only after relevant mutations or when exact additional Git facts are required. Independent Git, runtime, instruction, semantic-navigation and extension startup observations are scheduled concurrently where their authority and results do not depend on one another.
 
 For substantial coding, present the exact Workflow Session once with `present_work_result(project, session_id)` after it becomes materially stateful (for example after the first meaningful source mutation or when long-running validation begins). The mounted MCP App performs bounded live Workspace / Validation / Review reads itself, so do not repeatedly present it or spend model turns polling solely to keep it current. Tiny and read-only work does not need a progress card. A non-blocking `finish_coding_task` seals eligible final changes at closeout; the already-mounted card discovers that immutable snapshot on a later App refresh. If no card was mounted and closeout returns the explicit presentation suggestion, present it once then.
 By default it also returns a small bounded `extensions` catalog for selection: Skill metadata comes from the canonical project/configured/managed Skill union, and Plugin metadata is restricted to ready providers whose configured working directory matches the Project root. This metadata grants no authority and does not load Skill bodies or create Plugin bindings; use `skill_read_file` for Skill text, `run_skill_resource` only for trusted Runner-configured live `scripts/` resources guarded by `expected_definition_revision` or Runner-installed managed resources additionally fenced by `expected_package_revision`, or `plugin_tool describe -> call` after selecting a relevant entry. Configured resource bytes remain live until execution rather than being package-revision-pinned. Set `include_extension_catalog=false` only when the current model context already retains that discovery metadata.
@@ -59,14 +60,19 @@ that the current model retained either material.
 
 When bootstrap or discovery returns `project_ref`, reuse it as the `project` selector on ordinary Project-scoped calls. The canonical `agent:<client_id>:<project_id>` identity remains visible for diagnostics and explicit addressing, but the model does not need to mechanically repeat it. A short ref is Server-owned, durable and principal-scoped, carries no authority, and is reauthorized against its pinned canonical Project/root identity on every call.
 
+When a registered Project already exists and isolated work is needed, use `work_on_project(project=<canonical id or project_ref>, mode="worktree", ...)`. Do not reconstruct `client_id`, the source absolute path, or a managed destination. The Server reauthorizes the source Project on that call; the Runner derives and owns managed placement, persists source/base provenance, and returns a new canonical Project plus short ref. Creating that managed Project is a fresh-Session transition, so do not pass the source Project's Session. Continue with the returned managed `project_ref` and Session. The compatibility `client_id + path + mode="worktree"` form remains subject to ordinary path authority and is not the recommended flow when a Project identity is already available. Managed storage layout is an implementation detail and should not be inferred or guessed by the model.
+
 When `work_on_project`, `start_session`, `session_summary`, or an explicit handoff returns `session_ref`, prefer that short selector for later explicit Session selection. Business `session_id` and wrapper `recording_session_id` remain separate contracts, but either may explicitly carry the already-issued ref: Runtime canonicalizes it to the pinned `wc_sess_*` before the role-specific authorization and lifecycle/guard logic runs. The canonical identity remains valid and authoritative. The ref is principal-scoped convenience only; omission never infers a recorder and no sticky recorder context is created.
 
 ## Tool strategy guidance
 
 `work_on_project` accepts an optional `guidance_profile`. An explicit value always
-wins. When omitted on MCP, the configured `WEBCODEX_MCP_HOST_PROFILE` supplies the
-model-guidance default; omission on non-MCP/internal calls falls back to `direct`.
-Workflow contract v21 returns shared `guidance`, `model_protocol` and review `roles`,
+wins for guidance only. MCP omission uses the current request's
+`X-WebCodex-MCP-Profile`, or the deployment `WEBCODEX_MCP_HOST_PROFILE` when absent.
+See [request-local client policy](MCP.md#request-local-client-policy); HTTP headers
+select transport timing independently from this tool argument. Non-MCP/internal
+omission falls back to `direct`.
+Workflow contract v27 returns shared `guidance`, `model_protocol` and review `roles`,
 plus only the selected `tool_strategy`, when explicitly requested through
 `context_request=["webcodex.workflow"]`. The selection is request-local: choose again
 on exact resume without changing Session identity or business state. It is never
@@ -82,16 +88,31 @@ context refreshes use the same effective-profile rule.
   Predetermined independent cross-tool read-only observations may run in parallel;
   after native batches, prefer `Promise.allSettled` when partial evidence remains useful
   and `Promise.all` only for true all-or-nothing fan-out. Result-dependent
-  search/read/branch chains should stay in one Host cell when the next call is
-  mechanically determined. A child ToolResult arriving is not itself a
-  model-turn boundary: return to the model for semantic choices, ambiguity, new user
-  decisions, authority/permission requirements, uncertain outcomes, competing
-  recovery choices, or unresolved mutation intent. Keep full ToolResults in the Host
-  cell and return compact decision evidence. Treat each Host cell as a short dependency
-  DAG, not a long-running Job lifetime. After Job handoff, retain exact identity and
-  continue already-known independent work; if the remaining work is primarily waiting,
-  end the cell and resume from the exact continuation instead of holding it open. Avoid
-  mechanical `observe_jobs` polling. The
+  search/read/branch chains may stay in one Host cell when the Server returns a parser-ready
+  `follow_up_kind=mechanically_followable`; copy those generated arguments unchanged after
+  current Host input-schema validation. `fallback_recovery` is recovery/detail/dependency
+  evidence and must not be auto-followed merely because it is present. A child ToolResult
+  arriving is not itself a model-turn boundary: return to the model for semantic choices,
+  ambiguity, new user decisions, authority/permission requirements, uncertain outcomes,
+  competing recovery choices, unresolved mutation intent, or any effectful replay after a stale
+  revision/fence. An exact stale-source reread may still be mechanically followable, but
+  `reread_required=true` or `direct_retry_safe=false` is a hard boundary for effectful replay:
+  recovery may identify the next observation; it does not authorize automatic mutation retry.
+  Keep full results in the Host cell and emit compact decision evidence. Run ready independent
+  work and explicit mechanical continuations to quiescence. Only when pending Job dependencies
+  really block further useful progress, pass the entire blocked exact set to one
+  `wait_for_job_readiness` join barrier. Use `any` when one terminal Job can unlock a useful
+  dependent branch, then recompute ready/blocked work; use `all` only at a true join where every
+  blocked dependency is required. Never create per-Job long waits or use `Promise.race` for
+  first-ready aggregation. Choose `wait_secs` as the largest safe value from the remaining Host
+  activation budget after preserving its return guard, capped by the canonical 45s maximum; do not
+  prefer fixed 10/15/20s slices. Continue newly ready work in the same cell. After a deadline,
+  recompute ready work and the blocked set; if neither changed and no new semantic information
+  exists, do not mechanically repeat the same-set wait and yield near the budget boundary. Job
+  terminal does not imply mechanically_followable; fallback recovery, authority changes, ambiguity,
+  outcome_unknown and effect uncertainty still return to the model. Returning from a Host cell
+  does not complete the current model turn. Continue the task within that turn; never assume an
+  automatic next turn or use `observe_jobs` heartbeat polling. The
   startup `tool_strategy.host_orchestration` catalog and exact
   `tool_manifest(tool_name=...)` hint are both derived from canonical
   `ToolDefinition` metadata. They are guidance only and do not alter
@@ -162,7 +183,7 @@ Review the actual workspace/diff after editing and validation. Passing tests do 
 
 ## Long-running work
 
-A command or validation that outlives the synchronous grace period continues as the same WebCodex Job. Keep its exact Job identity and parser-ready continuation. If useful independent work remains, continue that work and observe the Job later; do not repeatedly poll a running Job merely to keep it visible. When the next useful action actually depends on the terminal result, use the returned continuation; the Server bounds its observation wait for the configured MCP Host profile. The Runtime still supports its transport-neutral observation ceiling internally, while MCP waiting is adapted to the Host budget. For one Job or when any terminal result unblocks progress, use `terminal`; when every Job in a predetermined set is required before progress, use `all_terminal`. Recovery/continuation hints never authorize a retry of an uncertain effect.
+A command or validation that outlives the synchronous grace period continues as the same WebCodex Job. Retain its exact identity and fallback continuation, then finish independent work in the current turn. When Job dependencies block progress, use one bounded `wait_for_job_readiness` join: `any` when one terminal outcome unlocks work, `all` only when every selected dependency is needed. Read logs/details with `observe_jobs`; observation may itself use bounded `terminal` / `all_terminal` waiting when needed. MCP waiting respects the current request policy without shortening execution lifetime. At deadline reassess work and dependencies, never mechanically refill waits or redispatch. A Host cell ending is not task completion; ordinary work does not require an automatic next turn. Preserve pending identities when the task cannot finish. Durable `wait_for_job_terminal` is only for an explicitly established optional continuation workflow, not ordinary waiting. Recovery hints never authorize uncertain-effect retries.
 
 ## Manual multi-window collaboration
 

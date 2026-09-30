@@ -4,9 +4,9 @@ This integration records bounded **external reports** in an explicitly selected
 WebCodex Workflow Session. It does not install Hooks, change trust, create a
 Session/Goal, execute commands, or migrate a conversation. The Server now projects
 these claims read-only in `session_handoff_summary`. The optional read-only local
-consumer and optional automatic entry below can inspect that brief; export and
-Goal linkage remain follow-up work. This does not establish real
-two-sided UI acceptance.
+consumer and optional automatic entry below can inspect that brief and the optional
+read-only Goal recovery context described below; export remains follow-up work. This
+does not establish real two-sided UI acceptance.
 
 ## Server contract
 
@@ -53,7 +53,7 @@ unknown count, truncation and explicit incomplete coverage. Use
 Session lifecycle/authority remain owned by the existing Session store;
 the SQLite table is only external evidence, not a second task state machine.
 
-## Optional adapter (macOS / Linux, Python 3.10+)
+## Optional adapter (macOS / Linux / Windows, Python 3.10+)
 
 After the user confirms the exact project and work, prepare one private configuration
 **outside the project** with the exact canonical project root, existing Workflow
@@ -73,13 +73,37 @@ No production service or global configuration changes are necessary to review it
 }
 ```
 
-Configuration and authorization files must be private regular single-link files
-(mode 0600); authorization contains the deployment's existing full Authorization
-header value. The pre-created outbox directory must be private (0700). Keep all
-three outside the project so reading an untrusted checkout cannot change the target
-or obtain credentials. This Unix adapter refuses symlink leaf files and redirects;
-remote transport requires HTTPS. HTTP is accepted only for loopback. It uses the
-configured origin directly, not ambient proxy settings. Windows support is deferred.
+Configuration and authorization files must be private regular single-link files;
+authorization contains the deployment's existing full Authorization header value.
+The pre-created outbox directory must also be private. Keep all three outside the
+project so reading an untrusted checkout cannot change the target or obtain credentials.
+On macOS/Linux, files must be owned by the current user with mode 0600 and the state
+directory with mode 0700. On Windows, files/directories must be owned by the current
+user, must not be reparse points, and their DACL may grant access only to the
+current user, SYSTEM, and the local Administrators group. The adapter refuses symlink/reparse
+targets and redirects on every platform; remote transport requires HTTPS and HTTP is
+accepted only for loopback. It uses the configured origin directly, not ambient proxy
+settings.
+
+On Windows, create the operator files as the current user and remove inherited broad
+access before use. One PowerShell pattern is:
+
+```powershell
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls C:\private\operator\observation.json /inheritance:r
+icacls C:\private\operator\observation.json /setowner "$me"
+icacls C:\private\operator\observation.json /grant:r "${me}:(F)" "SYSTEM:(F)" "*S-1-5-32-544:(F)"
+icacls C:\private\operator\webcodex-authorization /inheritance:r
+icacls C:\private\operator\webcodex-authorization /setowner "$me"
+icacls C:\private\operator\webcodex-authorization /grant:r "${me}:(F)" "SYSTEM:(F)" "*S-1-5-32-544:(F)"
+icacls C:\private\operator\observation-outbox /inheritance:r
+icacls C:\private\operator\observation-outbox /setowner "$me"
+icacls C:\private\operator\observation-outbox /grant:r "${me}:(OI)(CI)(F)" "SYSTEM:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)"
+```
+
+Use canonical absolute Windows paths in JSON (for example
+`C:\\private\\operator\\observation.json`). The command examples below use
+`python3`; use the equivalent installed interpreter such as `py -3` on Windows.
 
 Configure a `PostToolUse` command through the client's normal supported Hooks flow:
 
@@ -134,6 +158,16 @@ unknown operations before continuing. The command does not select a Session by
 directory or recency, bind the new local conversation, mark work complete, replay
 an operation, install a Hook, or write a handoff file.
 
+When the exact Workflow Session already has one caller-owned active Goal linked by an
+explicit Workflow Session↔Goal correlation, the Server may also return sibling
+`goal_context`. This projection is separate from the 8 KiB `handoff_brief` and contains
+bounded Goal identity/lifecycle/revision, objective, current plan and checkpoint
+context. Zero correlated active Goals omit it. Multiple active Goals return only a
+bounded `selection_required` candidate set and never choose or expose one Goal as the
+default. Reading this context does not create or associate a Goal, checkpoint/update/
+complete progress, refresh Goal liveness, schedule work, or grant Goal/Session/Project
+authority.
+
 `read_handoff.py` itself remains a deliberate recovery command.
 It requires an already selected Workflow Session and the normal authorized
 credential; a new local Codex conversation must not inherit an old conversation's
@@ -150,9 +184,10 @@ client's supported Hook configuration and trust UI:
 python3 /absolute/path/session_recovery.py --registry /private/operator/recovery.json hook
 ```
 
-Prepare a private registry (mode 0600), authorization file (0600, containing the
-complete Authorization value), and existing private state directory (0700), all
-outside the projects they serve:
+Prepare a private registry, authorization file containing the complete
+Authorization value, and an existing private state directory, all outside the
+projects they serve. Apply the same Unix mode or Windows ACL/reparse-point rules
+described above:
 
 ```json
 {
@@ -197,7 +232,9 @@ are written or replayed by this entry.
 
 Python unit tests use synthetic Hook payloads and controlled senders, including
 uncertain delivery/retry, changed associations, private-file checks, redaction,
-and the read-only consumer's exact identity checks.
+and the read-only consumer's exact identity checks. CI runs this suite on both
+Linux and Windows; Windows coverage includes native ACL, non-blocking lock, atomic
+replace and reparse-point checks.
 Rust tests cover transactional replay/reopen/conflict/capacity, authenticated
 runtime dispatch, and the actual `/api/tools/call` non-recording handoff path. These
 do **not** establish real Codex Hook lifecycle or ChatGPT

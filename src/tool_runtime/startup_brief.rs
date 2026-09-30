@@ -46,10 +46,13 @@ const MAX_FAILURE_FILE_JSON_BYTES: usize = 160;
 const MAX_ACTION_JSON_BYTES: usize = 384;
 const MAX_INSTRUCTION_EXCERPT_JSON_BYTES: usize = 768;
 
-#[cfg(test)]
-pub(crate) use webcodex_core::runtime_contract::BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS;
 pub(crate) use webcodex_core::runtime_contract::{
     BUILTIN_CODING_WORKFLOW_CONTRACT, BUILTIN_CODING_WORKFLOW_VERSION,
+};
+#[cfg(test)]
+pub(crate) use webcodex_core::runtime_contract::{
+    BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEMS,
+    BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEM_CHARS,
 };
 
 /// Stable model-facing coding/review semantics owned by WebCodex itself.
@@ -59,6 +62,15 @@ pub(crate) use webcodex_core::runtime_contract::{
 /// implementation uses the default guidance; task text may explicitly request
 /// the independent review role, whose name only selects review behavior.
 pub(crate) fn builtin_coding_workflow_projection(profile: CodingGuidanceProfile) -> Value {
+    builtin_coding_workflow_projection_with_policy(profile, Default::default())
+}
+
+/// Request-context guidance may select a deployment preference without changing
+/// canonical startup parsing, ToolSpecs or previously established workflow state.
+pub(crate) fn builtin_coding_workflow_projection_with_policy(
+    profile: CodingGuidanceProfile,
+    policy: crate::model_workflow::ModelWorkflowPolicy,
+) -> Value {
     json!({
         "contract": BUILTIN_CODING_WORKFLOW_CONTRACT,
         "version": BUILTIN_CODING_WORKFLOW_VERSION,
@@ -71,27 +83,27 @@ pub(crate) fn builtin_coding_workflow_projection(profile: CodingGuidanceProfile)
             "Ordinary implementation is default: map cross-layer changes end to end; use compiler/schema/exhaustiveness failures for gaps; minimize concepts, avoid speculative redesign.",
             "Validation failure is evidence, not queue cleanliness. Fix dependent blockers; continue otherwise. Reuse assertion_name; outcome_unknown fails closed. After Rust stabilizes, format once. Development validation may overlap independent work; covered-source edits make it stale for final evidence.",
             "For closeout evidence, freeze source covered by final validation. Continue read-only review/docs/external inspection; if covered source must change, invalidate that evidence and rerun the appropriate final validation.",
-            "Keep one execution/Job. execution_state=pending preserves the exact continuation as fallback state, not a next-action command or retry. A continuation is not mechanically required just because it is present. Continue independent work; passive Job attention may surface.",
-            "observe_jobs is for logs/details/recovery, never a heartbeat. Do not immediately follow or repeatedly poll the same pending continuation. list_jobs is identity recovery. Use wait_for_job_terminal only when terminal outcome is a true dependency and no independent work remains; do not poll or rearm it."
+            "Keep one execution/Job. Generated calls carry follow_up_kind. mechanically_followable is an exact continuation: copy args unchanged after Host inputSchema validation. fallback_recovery is recovery/detail/dependency, never auto-followed. Pending Job continuation is fallback_recovery; passive Job attention may surface.",
+            "observe_jobs is for logs/details/recovery; list_jobs is identity recovery; finish ready work before one wait_for_job_readiness join. any may unblock a branch; all requires every blocker. Deadline recomputes work/set; never mechanically refill. Current turn; no automatic next turn. Never retry/redispatch."
         ],
         "tool_strategy": tool_strategy_projection(profile),
         "model_protocol": {
-            "goal_workflow": "On exact Session re-entry, honor work_on_project.goal_context: reuse one exact active Goal with get_goal/present_goal_plan; choose explicitly among multiple candidates; never infer from Project/Window/title/recency. For ordinary new substantial multi-step/cross-turn work with no reusable Goal, call prepare_goal_workflow with the exact current Workflow Session, bounded completion_conditions/steps, and optional explicit controller Agent, then present_goal_plan. available=false never proves no Goal. Host continuation setup/readiness remains separate. Low-level create_goal and associate_goal_workflow_session remain available. Tiny one-step lookups/trivial edits need no Goal. This applies independently of AGENTS.md.",
-            "goal_continuation": "Automatic continuation needs an exact explicit durable controller Agent and the existing production Host carrier. Reuse the same Agent already made callable by explicit setup or exact Wake context; never infer Agent identity from a Window or create a second Goal-only identity. An Agent may be both Task assignee and Goal controller: Tasks/Attempts own execution, the controller routes next reasoning only. Goal Plan detects; the separate Agent Continuation card carries turns. Stalled is not offline; dispatch acceptance is not resume. An exact stall Wake requires bootstrap, immediate consume, get_goal and exact Session handoff recovery; never retry an uncertain prior effect.",
-            "goal_checkpoint": "After a plan phase completes, prefer _wc.control.before.goal_progress on the next ordinary call: mark the previous phase complete and next phase current with exact revision/key. Record only facts already true; never pre-complete tests or defer checkpoints to closeout. checkpoint_goal remains valid standalone. Complete all steps and verify/review before explicit update_goal or finish_coding_task + goal_completion; the Server cannot judge natural-language conditions.",
+            "goal_workflow": policy.goal_selection_guidance(),
+            "goal_continuation": policy.mcp_app_resume.guidance(),
+            "goal_checkpoint": policy.goal_checkpoint_guidance(),
             "handoff_recovery": "Use handoff recovery only after task-context loss/compaction/restart, explicit cross-window/Agent handoff, or user-requested recovery. Never use it for routine progress/baselines. A frontend timeout alone does not imply Workflow Session loss. If task context is genuinely lost and the exact session_id is unknown, attach _wc.context=[\"workflow.resume\"] to an ordinary call, choose an exact authorized candidate, call session_handoff_summary with the exact session_id, check basis completeness, then resume with work_on_project(project=..., session_id=...). A dirty workspace after context loss is not evidence of external or concurrent modification by itself. Recover exact Workflow Session evidence first.",
             "session_recording": "When work_on_project creates or resumes, prefer its returned session_ref as _wc.record on the next ordinary model-visible call for recorder provenance only; canonical wc_sess_* remains valid. business session_id may target another Session; _wc.record grants no authority.",
             "session_message_ack": "For any retained collaboration message with requires_ack=true projected in session_attention, peer_messages, or operator_messages, attach _wc.ack=[<wc_msg_*>] on the next ordinary model-visible call. Compact _wc.ack_ref remains Session-only. ACK proves model-context retention only; it never resolves messages, grants authority, or gates execution.",
             "window_reply": "After handling an operator_messages item, reply textually by attaching _wc.reply={reply_to:<wc_msg_*>,message:<text>} to the next ordinary model-visible WebCodex call in the same Window. No _wc.record or business session_id is required. If requires_ack=true, also include the same id in _wc.ack. The reply is a post-result collaboration sidecar: it never authorizes, predicts, or changes the main tool effect.",
             "session_message_resolution": "For a handled non-todo, attach _wc.resolve={message_id:<wc_msg_*>,resolution:<text>} on the next ordinary call together with _wc.record; if requires_ack, also include the id in _wc.ack. Resolve cannot predict or change the main call. Todos use complete_session_message.",
-            "control_sidecars": "_wc.control is optional: piggyback an established transition only when an ordinary call is already needed; otherwise omit it or use the standalone canonical tool. before supports goal_progress, wake_consume, attempt_heartbeat, session_context_update; after_success supports todo_completion, plus goal_completion/session_close on non-blocking finish_coding_task. One mutation per phase, independently authorized; the sidecar itself never authorizes and there are no automatic transitions. Post failure preserves main success. session_context_update is fail-closed pending CAS/replay support.",
+            "control_sidecars": "_wc.control is optional and only for an established workflow: piggyback a known transition on an already-needed call; otherwise omit it or use its standalone tool. Never create a Goal/Agent just to use a sidecar. Follow the canonical control schema and load webcodex.goal_workflow for Goal transitions. One mutation per phase, independently authorized; no automatic transitions. Post failure preserves main success. session_context_update remains fail-closed pending CAS/replay support.",
             "context_sidecar": "_wc.context is an optional post-result context request; it never authorizes. jobs.attention is Project-level, not Session/control; workflow.resume is Window/principal-scoped recovery evidence only and never selects or resumes a Session. Recover project.instructions by observation call before dependent mutation.",
-            "bootstrap_reuse": "For read/follow AGENTS.md, CLAUDE.md, repository instructions/project rules/local coding rules, or instruction-dependent tasks, request _wc.context=[\"project.instructions\"] on the first suitable work_on_project. instructions.status=loaded means source observed, not body included. status=available material with content_included=true and no truncation/incompleteness satisfies reading instructions; do not immediately reread via read_files. Reread unavailable/truncated/incomplete sources, changed fingerprints/revisions, possible post-bootstrap edits, or exact source/range needs. Request _wc.context=[\"webcodex.workflow\"] for fresh/uncertain model context, compaction/context recovery, or explicit workflow requests when guidance is missing; reuse retained guidance.",
+            "bootstrap_reuse": "For read/follow AGENTS.md, CLAUDE.md, repository instructions/project rules/local coding rules, or instruction-dependent tasks, request _wc.context=[\"project.instructions\"] on the first suitable work_on_project. instructions.status=loaded means source observed, not body included. status=available material with content_included=true and no truncation/incompleteness satisfies reading instructions; do not immediately reread via read_files. Reread unavailable/truncated/incomplete sources, changed fingerprints/revisions, possible post-bootstrap edits, or exact source/range needs. Refresh _wc.context=[\"webcodex.workflow\"] for missing/stale guidance, compaction/context recovery or an announced deployment-policy change. This refreshes guidance data, not Host schemas; reuse retained guidance and do not poll it.",
             "bootstrap_observations": "Treat successful work_on_project.workspace as the initial branch/HEAD/status observation; avoid immediate git_status/rev-parse/branch for identical facts. Inspect changed paths, staged/unstaged detail, diffs/hunks/commit ranges or refresh after mutation, stale/unknown/unavailable state, and for fresh mutation fences. semantic_navigation supported=true/available=true allows direct navigation without lsp_status; diagnose null/probe_timeout/probe_failed/unavailable or provider issues. Reuse a complete/sufficient startup Skills/Plugins catalog; use skills.catalog, skill_list, plugin_tool list/describe for truncated/unavailable catalogs, missing task capabilities, changed revision/runtime, or explicit broader/refreshed discovery.",
             "runner_targeting": "For exact Runner client_id, use runtime_status(client_id=...) or list_projects(client_id=...) before treating it as absent.",
             "persistent_shell": "Local: run_process=literal argv; run_shell=shell grammar/short chains; run_script=program-like scripts; specialize for added semantics. Persistent shell only for repeated named-SSH state or local same-process state.",
             "work_result_presentation": "For substantial Project work in a stable client Window, call present_work_result(project) exactly once immediately after the first successful project-scoped WebCodex action. Do not wait for work_on_project, a Workflow Session, mutation, validation, or closeout. The mounted card refreshes the same Window ActionAudit activity as WebUI, including observe/diagnostic actions; optional linked Session collaboration and final changes may appear later. Never repeat presentation or model-poll it in the same Window. Tiny one-step/read-only lookups may skip it; finish may suggest it only as a fallback if no card was presented.",
-            "normal_closeout": "Source/validation/open evidence: finish_coding_task(summary_only=true). Honor goal_follow_up for explicitly correlated active Goals: checkpoint incomplete/current steps or explicitly complete with update_goal after fresh verification/review. Finish never completes a Goal implicitly; explicit goal_completion sidecar intent is required. Read/planning/artifact: finalize directly, also closing any established Goal."
+            "normal_closeout": "Source/validation/open evidence: finish_coding_task(summary_only=true). No established Goal means no Goal closeout. For existing goal_follow_up load webcodex.goal_workflow and preserve unresolved obligations; changing preference never completes a Goal implicitly. Read/planning/artifact: finalize directly; explicitly close an established Goal only after verified completion."
         },
         "roles": {
             "independent_review": {
@@ -169,16 +181,15 @@ fn tool_strategy_guidance(profile: CodingGuidanceProfile) -> &'static [&'static 
             "Known target: bounded targeted reads. Broad discovery: small files/count search then targeted reads. Avoid ritual turns.",
         ],
         CodingGuidanceProfile::HostCodeMode => &[
-            "Host-native Code Mode is model guidance only. It grants no WebCodex capability/authority, changes no effects/retry/idempotency, and does not require WebCodex nested Code Mode.",
-            "Known same-kind inputs: prefer native batches such as read_files(items), search_project_texts(queries), cargo_check(packages), or one edit_project_files batch; do not Promise.all same-kind micro-calls.",
-            "Known independent cross-tool read-only observations: native batches first. For remaining fan-out, use Host Promise.allSettled when partial evidence is useful; use Promise.all only for true all-or-nothing. Prefer search_and_read for search→read; keep result-dependent chains in one Host cell when mechanically determined.",
-            "Do not return to the model merely because one child ToolResult arrived. If the next call is mechanically determined with no unresolved semantic choice/uncertainty/authority need, stay in the Host cell and return compact evidence for the next decision.",
-            "Natural model-turn boundaries are semantic choice, ambiguous result, new user decision, authority/permission, outcome_unknown or competing recovery, or unresolved mutation intent—not child-call completion.",
-            "Keep full ToolResults in the Host cell when possible; preserve revisions, exact pending continuations, observation_ref/read_revision, and failure/recovery fields. Normal pending results may intentionally hide top-level Job bookkeeping. Avoid text(JSON.stringify(fullResult)) dumps.",
-            "On execution_state=pending, retain the continuation as fallback and finish independent calls. Its presence does not make observe_jobs mechanically determined. Do not keep a Host cell alive with repeated same-Job polling; return when useful DAG work is exhausted. Arm one terminal wait only when terminal blocks progress.",
-            "Development validation may overlap independent work. For final evidence freeze covered source; covered-source edits invalidate that evidence and require rerun. Host support is supplied by the Host, not verified by WebCodex.",
-        ],
-        #[cfg(feature = "experimental-code-mode")]
+            "Host-native Code Mode is model guidance only. It grants no WebCodex capability/authority, changes no effects/retry/idempotency, and does not require WebCodex nested Code Mode. Host support is not verified by WebCodex; emit compact evidence.",
+            "Known same-kind inputs: prefer native batches such as read_files(items), search_project_texts(queries), cargo_check(packages), or one edit_project_files batch; do not Promise.all same-kind micro-calls. Never per-Job waits, Promise.race, or automatic redispatch.",
+            "Independent cross-tool read-only observations: native batches first; then Promise.allSettled for partial evidence or Promise.all for all-or-nothing. Prefer search_and_read for search→read; keep mechanically determined dependent chains in one Host cell. Never use observe_jobs heartbeat polling.",
+            "Run to quiescence: finish ready independent calls; follow only follow_up_kind=mechanically_followable with generated arguments unchanged after current input-schema validation. Continue ready work in the same cell. Job terminal does not imply mechanically_followable; fallback_recovery never auto-runs.",
+            "Return to the model for semantic choice, ambiguous result, new user decision, authority/permission change, outcome_unknown, competing recovery, unresolved mutation intent or effect uncertainty. Child-call completion alone is not a boundary. Cell return is not turn completion.",
+            "Exact stale-source reread may be mechanical. reread_required=true or direct_retry_safe=false stops effectful replay; recovery is not mutation retry authority. Keep full ToolResults in the Host cell; preserve exact pending continuations, observation_ref/read_revision, and failure/recovery fields.",
+            "execution_state=pending: retain exact Job identity/continuation as fallback. Run currently-ready independent calls. Ready work exhausted: wait_for_job_readiness join barrier on the entire exact blocked set. any when one terminal Job can unlock a useful branch; all only when every blocked dependency is required.",
+            "Choose wait_secs as the largest safe value from the remaining Host activation budget, up to the 45s maximum; do not prefer fixed 10/15/20s slices. Deadline: recompute ready work and the blocked set; do not mechanically repeat the same-set wait. Final validation: freeze covered source; edits invalidate evidence.",
+        ],        #[cfg(feature = "experimental-code-mode")]
         CodingGuidanceProfile::CodeMode => &[
             "For one simple observation use a direct primitive; do not wrap it in Code Mode. If one bounded search will immediately inspect its matches, prefer direct search_and_read. Native commands and structured tools are first-class; choose the simplest sufficient primitive. Narrow broad discovery before targeted reads.",
             "Prefer read-only code_mode_exec for multi-step related search/read observations, cross-file/module investigation, or synthesis of independent observations when it reduces outer model round trips. Three or more related observations is a soft heuristic, never a correctness rule.",
@@ -541,6 +552,32 @@ fn workspace_projection(git: &Value) -> Value {
         .cloned()
         .or_else(|| git.get("head").filter(|value| value.is_string()).cloned())
         .unwrap_or(Value::Null);
+    let show_changes = git.get("show_changes").unwrap_or(&Value::Null);
+    let mut changed_paths = Vec::new();
+    for path in show_changes
+        .get("files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file.get("path").and_then(Value::as_str))
+    {
+        if path.len() > MAX_PATH_JSON_BYTES || changed_paths.iter().any(|seen| seen == path) {
+            continue;
+        }
+        changed_paths.push(path.to_string());
+        if changed_paths.len() == MAX_CHANGED_PATHS {
+            break;
+        }
+    }
+    let changed_paths_total = show_changes
+        .get("files_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(changed_paths.len() as u64);
+    let changed_paths_truncated = show_changes
+        .get("files_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || changed_paths_total > changed_paths.len() as u64;
     json!({
         "status": status,
         "git_available": git_available,
@@ -555,8 +592,14 @@ fn workspace_projection(git: &Value) -> Value {
         "modified": count(counts, "modified"),
         "untracked": count(counts, "untracked"),
         "staged": count(counts, "staged"),
-        "ahead": Value::Null,
-        "behind": Value::Null,
+        "upstream_status": git.get("upstream_status").cloned().unwrap_or_else(|| json!("unobserved")),
+        "upstream_reason_code": git.get("upstream_reason_code").cloned().unwrap_or(Value::Null),
+        "upstream": git.get("upstream").cloned().unwrap_or(Value::Null),
+        "ahead": git.get("ahead").cloned().unwrap_or(Value::Null),
+        "behind": git.get("behind").cloned().unwrap_or(Value::Null),
+        "changed_paths": changed_paths,
+        "changed_paths_total": changed_paths_total,
+        "changed_paths_truncated": changed_paths_truncated,
     })
 }
 
@@ -1550,7 +1593,10 @@ fn enforce_hard_size_limit(brief: &mut Value) {
     // larger guidance projection could trim unrelated instructions/evidence.
     let workflow_budget = serialized_len(&builtin_coding_workflow_projection(
         CodingGuidanceProfile::Direct,
-    ));
+    ))
+    .max(serialized_len(&builtin_coding_workflow_projection(
+        CodingGuidanceProfile::HostCodeMode,
+    )));
     #[cfg(feature = "experimental-code-mode")]
     let workflow_budget = workflow_budget.max(serialized_len(&builtin_coding_workflow_projection(
         CodingGuidanceProfile::CodeMode,
@@ -1559,6 +1605,46 @@ fn enforce_hard_size_limit(brief: &mut Value) {
         .saturating_sub(workflow_budget.saturating_sub(serialized_len(&brief["workflow"])));
     if serialized_len(brief) <= max_bytes {
         return;
+    }
+
+    // Extension entries are optional selection metadata and can be recovered
+    // through explicit discovery. Under aggregate startup pressure, trim them
+    // before repository facts or project instruction prose.
+    const EXTENSION_CATALOGS: &[(&str, &str)] = &[
+        (
+            "/extensions/skills",
+            "Use skills.catalog or skill_list for broader or refreshed discovery.",
+        ),
+        (
+            "/extensions/plugins",
+            "Use plugins.catalog or explicit plugin_tool list and describe for broader or current schema discovery.",
+        ),
+    ];
+    loop {
+        if serialized_len(brief) <= max_bytes {
+            return;
+        }
+        let mut removed = false;
+        for (pointer, discovery_hint) in EXTENSION_CATALOGS {
+            let Some(catalog) = brief.pointer_mut(pointer).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let Some(entries) = catalog.get_mut("entries").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            if !entries.is_empty() {
+                entries.pop();
+                let returned_count = entries.len();
+                catalog.insert("returned_count".to_string(), json!(returned_count));
+                catalog.insert("truncated".to_string(), json!(true));
+                catalog.insert("discovery_hint".to_string(), json!(discovery_hint));
+                removed = true;
+                break;
+            }
+        }
+        if !removed {
+            break;
+        }
     }
 
     // Repository metadata is lower priority than rule prose: drop optional
@@ -1778,8 +1864,14 @@ fn enforce_hard_size_limit(brief: &mut Value) {
         brief["instructions"]["truncated"] = json!(true);
     }
 
+    // The common workflow allowance is an internal evidence-alignment target,
+    // not a tighter wire limit for smaller profiles. Synthetic or future
+    // untrimmed fields may make that target unreachable after every canonical
+    // degradable field is exhausted; in that case the real 30 KiB startup hard
+    // bound remains authoritative. HostCodeMode itself has max_bytes equal to
+    // the hard bound because its workflow envelope establishes the allowance.
     debug_assert!(
-        serialized_len(brief) <= max_bytes,
+        serialized_len(brief) <= STANDARD_STARTUP_HARD_MAX_BYTES,
         "startup brief base contract exceeded its hard byte budget"
     );
 }
@@ -2445,6 +2537,16 @@ mod tests {
         };
         let first = build(CodingGuidanceProfile::Direct);
         let second = build(CodingGuidanceProfile::Direct);
+        let host = build(CodingGuidanceProfile::HostCodeMode);
+        assert!(startup_brief_size(&host) <= STANDARD_STARTUP_HARD_MAX_BYTES);
+        let mut direct_facts = first.clone();
+        let mut host_facts = host.clone();
+        direct_facts.as_object_mut().unwrap().remove("workflow");
+        host_facts.as_object_mut().unwrap().remove("workflow");
+        assert_eq!(
+            direct_facts, host_facts,
+            "HostCodeMode guidance must not change which startup facts fit the byte budget"
+        );
         #[cfg(feature = "experimental-code-mode")]
         {
             let composed = build(CodingGuidanceProfile::CodeMode);

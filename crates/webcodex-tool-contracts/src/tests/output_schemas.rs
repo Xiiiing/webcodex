@@ -39,6 +39,7 @@ fn structured_execution_output(
     });
     if promoted_to_job {
         instance["output"]["continuation"] = serde_json::json!({
+            "follow_up_kind": "fallback_recovery",
             "tool": "observe_jobs",
             "arguments": {
                 "items": [{
@@ -63,8 +64,48 @@ fn structured_execution_output(
 }
 
 #[test]
+fn project_build_schema_accepts_same_job_queued_handoff() {
+    let schema = output_schema_for_tool("project_build");
+    let mut pending = structured_execution_output(
+        "project_build",
+        "queued",
+        false,
+        false,
+        true,
+        false,
+        Some("job-1"),
+        Some("agent_queued"),
+    );
+    pending["output"]["backend"] = serde_json::json!("rust");
+    pending["output"]["purpose"] = serde_json::json!("build");
+    pending["output"]["process_summary"] = serde_json::json!("cargo build");
+    pending["output"]["cwd"] = serde_json::json!(".");
+    pending["output"]["executor"] = serde_json::json!("agent");
+    test_support::validate_schema_instance(&pending, &schema)
+        .expect("project_build queued handoff must remain the same typed Job");
+}
+
+#[test]
 fn suggested_tool_call_schema_recognizer_is_strict_and_structural() {
+    let valid_generated = json!({
+        "follow_up_kind": "mechanically_followable",
+        "tool": "read_files",
+        "arguments": {
+            "project": "agent:test:demo",
+            "items": [{"path": "src/lib.rs"}]
+        }
+    });
+    test_support::validate_generated_tool_call_against_registered_input_schema(&valid_generated)
+        .expect("generated read_files follow-up must pass the current registered inputSchema");
+    let mut host_rejected = valid_generated.clone();
+    host_rejected["arguments"]["unsupported_host_field"] = json!(true);
+    let error =
+        test_support::validate_generated_tool_call_against_registered_input_schema(&host_rejected)
+            .expect_err("registered Host schema must reject generated arguments with drift");
+    assert!(error.contains("registered inputSchema"), "{error}");
+
     let canonical = suggested_tool_call_schema(
+        webcodex_core::runtime_contract::GeneratedFollowUpKind::MechanicallyFollowable,
         "git_log",
         json!({"type": "object", "additionalProperties": false, "properties": {}}),
         "next page",
@@ -72,6 +113,10 @@ fn suggested_tool_call_schema_recognizer_is_strict_and_structural() {
     assert_eq!(
         suggested_tool_call_schema_target(&canonical),
         Some("git_log")
+    );
+    assert_eq!(
+        canonical["properties"]["follow_up_kind"]["const"],
+        "mechanically_followable"
     );
 
     let incidental = json!({
@@ -96,6 +141,124 @@ fn suggested_tool_call_schema_recognizer_is_strict_and_structural() {
         "required": ["tool", "arguments"]
     });
     assert_eq!(suggested_tool_call_schema_target(&open_object), None);
+}
+
+#[test]
+fn registered_generated_next_step_schemas_declare_host_execution_posture() {
+    fn inspect_call_shapes(
+        schema: &serde_json::Value,
+        path: &str,
+        count: &mut usize,
+        failures: &mut Vec<String>,
+    ) {
+        match schema {
+            serde_json::Value::Object(object) => {
+                if let Some(properties) = object
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object)
+                {
+                    if properties.contains_key("tool") && properties.contains_key("arguments") {
+                        *count += 1;
+                        let posture = properties
+                            .get("follow_up_kind")
+                            .and_then(|field| field.get("const"))
+                            .and_then(serde_json::Value::as_str);
+                        if !posture.is_some_and(|value| {
+                            webcodex_core::runtime_contract::GENERATED_FOLLOW_UP_KIND_VALUES
+                                .contains(&value)
+                        }) {
+                            failures.push(format!(
+                                "{path}: generated tool-call schema is missing a canonical follow_up_kind const"
+                            ));
+                        }
+                        let required_has_posture = object
+                            .get("required")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|required| {
+                                required
+                                    .iter()
+                                    .any(|field| field.as_str() == Some("follow_up_kind"))
+                            });
+                        if !required_has_posture {
+                            failures.push(format!(
+                                "{path}: generated tool-call schema does not require follow_up_kind"
+                            ));
+                        }
+                    }
+                }
+                for (key, child) in object {
+                    inspect_call_shapes(child, &format!("{path}.{key}"), count, failures);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    inspect_call_shapes(child, &format!("{path}[{index}]"), count, failures);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_generated_edges(
+        schema: &serde_json::Value,
+        path: &str,
+        in_recovery: bool,
+        count: &mut usize,
+        failures: &mut Vec<String>,
+    ) {
+        match schema {
+            serde_json::Value::Object(object) => {
+                for (key, child) in object {
+                    let child_path = format!("{path}.{key}");
+                    let recovery = in_recovery || key == "recovery";
+                    if matches!(
+                        key.as_str(),
+                        "next_call" | "suggested_call" | "continuation"
+                    ) || recovery
+                    {
+                        inspect_call_shapes(child, &child_path, count, failures);
+                    } else {
+                        visit_generated_edges(child, &child_path, recovery, count, failures);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    visit_generated_edges(
+                        child,
+                        &format!("{path}[{index}]"),
+                        in_recovery,
+                        count,
+                        failures,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let specs = registered_tool_specs();
+    let mut count = 0;
+    let mut failures = Vec::new();
+    for spec in &specs {
+        visit_generated_edges(
+            &spec.output_schema,
+            &spec.name,
+            false,
+            &mut count,
+            &mut failures,
+        );
+    }
+
+    assert!(
+        count >= 10,
+        "generated next-step schema audit unexpectedly covered only {count} call shapes"
+    );
+    assert!(
+        failures.is_empty(),
+        "registered generated next-step schemas must expose explicit Host execution posture:\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -183,7 +346,7 @@ fn git_diff_hunks_recovery_schema_accepts_only_sparse_actionable_lanes() {
     });
     let refine = json!({"current_hunk": {
         "reason_code": "larger_max_hunk_lines_available",
-        "next_call": {"tool": "git_diff_hunks", "arguments": arguments}
+        "next_call": {"follow_up_kind": "mechanically_followable", "tool": "git_diff_hunks", "arguments": arguments}
     }});
     test_support::validate_schema_instance(&refine, schema).unwrap();
     let mut fragment = refine.clone();
@@ -313,6 +476,7 @@ fn search_batch_omitted_summary_schema_is_bounded_and_content_free() {
                 {"index": 3, "success": false, "reason_code": "timeout", "failure_stage": "agent_transport", "detail_code": "timeout"}
             ],
             "suggested_call": {
+                "follow_up_kind": "mechanically_followable",
                 "tool": "search_project_texts",
                 "arguments": {
                     "project": "agent:oe:demo",
@@ -936,7 +1100,7 @@ fn observe_jobs_failure_item_schema_closes_recovery_metadata() {
                 "success": false,
                 "output": null,
                 "error_kind": "unknown_job",
-                "suggested_call": {"tool": "list_jobs", "arguments": {}},
+                "suggested_call": {"follow_up_kind": "fallback_recovery", "tool": "list_jobs", "arguments": {}},
                 "error": "unknown job"
             }],
             "wait": {
@@ -980,7 +1144,7 @@ fn read_continuation_output_schemas_accept_one_action_and_snapshot_truth() {
                 "read_revision": 3817291045227_u64, "start_line": 1, "limit": 100, "total_lines": 200,
                 "returned_lines": 50, "end_line": 50, "has_more": true, "budget_truncated": true}}],
         "output_truncated": true, "truncation_reason": "batch_response_budget",
-        "suggested_call": {"tool": "read_files", "arguments": {"project": "agent:oe:demo", "session_id": "wc_sess_abcdefghijklmnop",
+        "suggested_call": {"follow_up_kind": "mechanically_followable", "tool": "read_files", "arguments": {"project": "agent:oe:demo", "session_id": "wc_sess_abcdefghijklmnop",
             "items": [{"path": "src/0.rs", "start_line": 51, "limit": 50, "expected_read_revision": 3817291045227_u64}, {"path": "src/1.rs"}, {"path": "src/2.rs", "start_line": 4, "limit": 20}]}}
     }});
     test_support::validate_schema_instance(&result, &schema).unwrap();
@@ -1402,6 +1566,33 @@ fn key_tool_output_schemas_include_expected_fields() {
         ("run_process", "run_process", run_process_schema),
         ("run_script", "run_script", run_script_schema),
     ] {
+        let mut uncertain = structured_execution_output(
+            execution_source,
+            "outcome_unknown",
+            true,
+            false,
+            true,
+            false,
+            Some("job-1"),
+            Some("lost"),
+        );
+        uncertain["success"] = json!(false);
+        uncertain["error"] = json!("execution outcome is unknown");
+        uncertain["output"]["promoted_to_job"] = json!(true);
+        uncertain["output"]["observation_token"] = json!("observation");
+        uncertain["output"]["async_handoff_available"] = json!(true);
+        uncertain["output"]["command_ok"] = json!(false);
+        uncertain["output"]["failure_kind"] = json!("outcome_unknown");
+        uncertain["output"]["tool_failure"] = json!(true);
+        test_support::validate_schema_instance(&uncertain, schema).unwrap_or_else(|error| {
+            panic!("{tool} must admit an uncertain execution with its exact recovery Job: {error}")
+        });
+    }
+
+    for (tool, execution_source, schema) in [
+        ("run_process", "run_process", run_process_schema),
+        ("run_script", "run_script", run_script_schema),
+    ] {
         let mut promoted_without_job_id = structured_execution_output(
             execution_source,
             "running",
@@ -1605,27 +1796,7 @@ fn key_tool_output_schemas_include_expected_fields() {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("wake_on")));
-        let pending_strategy = output_schema_property(&specs, name, "pending_strategy");
-        assert_eq!(
-            pending_strategy["properties"]["default"]["const"],
-            "continue_independent_work"
-        );
-        assert_eq!(
-            pending_strategy["properties"]["passive_terminal_attention"]["const"],
-            "same_scope_may_surface"
-        );
-        assert_eq!(
-            pending_strategy["properties"]["observe_continuation"]["const"],
-            "logs_details_recovery_fallback"
-        );
-        assert_eq!(
-            pending_strategy["properties"]["observe_auto_follow"]["const"],
-            false
-        );
-        assert_eq!(
-            pending_strategy["properties"]["blocked_fallback"]["const"],
-            "wait_for_job_terminal"
-        );
+        assert!(!has_output_field(name, "pending_strategy"));
         assert!(
             has_output_field(name, "failure_kind"),
             "{name} missing failure_kind"
@@ -2362,6 +2533,7 @@ fn computer_recovery_output_schemas_use_canonical_action_shapes() {
         "success": false,
         "output": {
             "suggested_call": {
+                "follow_up_kind": "fallback_recovery",
                 "tool": "computer_observe",
                 "arguments": {"action": "windows", "client_id": "special"}
             }
@@ -2417,6 +2589,7 @@ fn skill_recovery_output_schema_accepts_canonical_shapes_and_declares_legacy_rej
             "outcome_unknown": true,
             "state_changed": null,
             "suggested_call": {
+                "follow_up_kind": "fallback_recovery",
                 "tool": "skill_versions",
                 "arguments": {
                     "project": "agent:test:demo",
@@ -2480,7 +2653,6 @@ fn default_output_schema_field_names() -> BTreeSet<&'static str> {
 #[test]
 fn model_visible_output_schemas_admit_bounded_passive_job_attention() {
     let attention = json!({
-        "changed": true,
         "items": [{
             "job_id": "wc_job_schema",
             "tool": "cargo_test",
@@ -2500,6 +2672,7 @@ fn model_visible_output_schemas_admit_bounded_passive_job_attention() {
                 }
             },
             "details": {
+                "follow_up_kind": "fallback_recovery",
                 "tool": "observe_jobs",
                 "arguments": {"items": [{"job_id": "wc_job_schema"}]}
             }
@@ -2526,14 +2699,8 @@ fn model_visible_output_schemas_admit_bounded_passive_job_attention() {
         "success": true,
         "output": {
             "execution_state": "pending",
-            "pending_strategy": {
-                "default": "continue_independent_work",
-                "passive_terminal_attention": "same_scope_may_surface",
-                "observe_continuation": "logs_details_recovery_fallback",
-                "observe_auto_follow": false,
-                "blocked_fallback": "wait_for_job_terminal"
-            },
             "continuation": {
+                "follow_up_kind": "fallback_recovery",
                 "tool": "observe_jobs",
                 "arguments": {
                     "items": [{"job_id": "wc_job_pending", "after_observation_token": "wj3_AAAAAAAAAAAAAAAAAAAAAA.1.0.0"}],
@@ -3337,4 +3504,141 @@ fn browser_observation_schema_accepts_canonical_runner_output_and_rejects_privat
     let mut leaked_endpoint = effect;
     leaked_endpoint["debug_endpoint"] = json!("ws://127.0.0.1/devtools");
     assert!(act_ok(leaked_endpoint).is_err());
+}
+
+#[test]
+fn browser_batch_schema_is_closed_bounded_and_reports_partial_certainty() {
+    let schema = crate::input_schema_for_tool("browser_act");
+    let request = json!({
+        "action": "batch", "client_id": "mini",
+        "browser_id": "browser_abcdefghijklmnop", "page_id": "page_abcdefghijklmnop",
+        "operations": [
+            {"action": "input_text", "element_id": "element_abcdefghijklmnop", "text": "Alice"},
+            {"action": "select_option", "element_id": "element_abcdefghijklmnop", "option": "Bachelor"},
+            {"action": "set_value", "element_id": "element_abcdefghijklmnop", "value": "2027-06"},
+            {"action": "click", "element_id": "element_abcdefghijklmnop"},
+            {"action": "upload_file", "element_id": "element_abcdefghijklmnop", "project": "agent:mini:resume", "path": "resume.pdf"}
+        ]
+    });
+    test_support::validate_schema_instance(&request, &schema).unwrap();
+    let call: crate::tool_call::BrowserActToolCall =
+        serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(call.action_name(), "batch");
+    for field in [
+        "page_id",
+        "browser_id",
+        "selector",
+        "xpath",
+        "backend_node_id",
+        "script",
+        "method",
+    ] {
+        let mut invalid = request.clone();
+        invalid["operations"][0][field] = json!("forbidden");
+        assert!(
+            test_support::validate_schema_instance(&invalid, &schema).is_err(),
+            "{field}"
+        );
+        assert!(serde_json::from_value::<crate::tool_call::BrowserActToolCall>(invalid).is_err());
+    }
+    for operations in [
+        vec![],
+        vec![request["operations"][0].clone(); 33],
+        vec![json!({"action": "navigate", "url": "https://example.test"})],
+    ] {
+        let mut invalid = request.clone();
+        invalid["operations"] = json!(operations);
+        assert!(test_support::validate_schema_instance(&invalid, &schema).is_err());
+    }
+    let output = crate::output_schema_for_tool("browser_act");
+    for (state, stopped_state, remaining) in [
+        ("completed", "not_started", 2),
+        ("outcome_unknown", "outcome_unknown", 1),
+        ("completed", "completed", 2),
+    ] {
+        test_support::validate_schema_instance(
+            &json!({"success": false, "error": "stopped", "output": {
+                "execution_state": state, "state_changed": true, "requested_count": 3,
+                "completed_count": 1, "stopped_at_index": 1, "remaining_count": remaining,
+                "stopped_execution_state": stopped_state, "needs_snapshot": true
+            }}),
+            &output,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn structured_validation_definitions_receive_the_validation_output_family() {
+    let mut count = 0;
+    for definition in tool_definitions().filter(|definition| {
+        definition
+            .execution
+            .is_some_and(|execution| execution.form == ToolExecutionForm::StructuredValidation)
+    }) {
+        count += 1;
+        let schema = output_schema_for_tool(definition.name);
+        let properties = schema["properties"]["output"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{} validation output properties", definition.name));
+        for field in [
+            "source_state",
+            "execution_state",
+            "failure_kind",
+            "continuation",
+        ] {
+            assert!(
+                properties.contains_key(field),
+                "{} missing {field}",
+                definition.name
+            );
+        }
+    }
+    assert!(count > 0);
+}
+
+#[test]
+fn passive_success_schema_keeps_source_truth_and_distinguishes_rich_failures() {
+    let schema = output_schema_for_tool("cargo_check");
+    let field = &schema["properties"]["output"]["properties"]["job_attention"];
+    let compact = json!({"items":[{
+        "job_id":"wc_job_success", "tool":"cargo_test", "outcome":"passed",
+        "validation":{"kind":"test", "tests_run_count":3, "zero_tests_run":false,
+            "source_state":{"freshness":"unproven","observed_mutation_fence":"uncrossed"}}
+    }]});
+    test_support::validate_schema_instance(&compact, field).unwrap();
+    for pointer in ["/items/0/outcome", "/items/0/validation/source_state"] {
+        let mut missing = compact.clone();
+        *missing.pointer_mut(pointer).unwrap() = Value::Null;
+        assert!(
+            test_support::validate_schema_instance(&missing, field).is_err(),
+            "{pointer}"
+        );
+    }
+    for (freshness, fence) in [("stale", "crossed"), ("unproven", "unknown")] {
+        let mut misleading = compact.clone();
+        misleading["items"][0]["validation"]["source_state"] =
+            json!({"freshness":freshness,"observed_mutation_fence":fence});
+        assert!(test_support::validate_schema_instance(&misleading, field).is_err());
+    }
+    for outcome in ["failed", "timed_out", "cancelled"] {
+        let mut failure = compact.clone();
+        failure["items"][0]["outcome"] = json!(outcome);
+        assert!(test_support::validate_schema_instance(&failure, field).is_err());
+    }
+}
+
+#[test]
+fn structured_validation_sparse_assertion_never_weakens_rejection_or_uncertainty() {
+    let schema = registry::output_schema_for_tool("cargo_test");
+    for output in [
+        serde_json::json!({"command_started":false,"command_completed":false,"failure_kind":"capability_unavailable"}),
+        serde_json::json!({"execution_state":"outcome_unknown","command_started":true,"command_completed":false,"terminal":false,"failure_kind":"outcome_unknown"}),
+    ] {
+        let mut wire =
+            serde_json::json!({"success":false,"error":"validation unavailable","output":output});
+        test_support::validate_schema_instance(&wire, &schema).unwrap();
+        wire["output"]["test_count_assertion"] = serde_json::json!({"minimum_tests":1});
+        assert!(test_support::validate_schema_instance(&wire, &schema).is_err());
+    }
 }

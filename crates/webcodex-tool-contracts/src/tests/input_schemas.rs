@@ -2,35 +2,6 @@ use super::*;
 use webcodex_core::runner_protocol::RAW_SHELL_COMMAND_MAX_BYTES;
 use webcodex_core::workflow_session_contract::EXECUTION_PURPOSE_VALUES;
 
-macro_rules! assert_schema_fields {
-    (
-        $properties:expr,
-        $context:expr,
-        present: [$($present:expr),* $(,)?]
-        $(, absent: [$($absent:expr),* $(,)?])?
-        $(,)?
-    ) => {{
-        let properties = $properties;
-        let context = $context;
-        $(
-            assert!(
-                properties.contains_key($present),
-                "{context}: missing schema field {}",
-                $present
-            );
-        )*
-        $(
-            $(
-                assert!(
-                    !properties.contains_key($absent),
-                    "{context}: unexpected schema field {}",
-                    $absent
-                );
-            )*
-        )?
-    }};
-}
-
 #[test]
 fn tool_specs_names_are_unique() {
     let specs = registered_tool_specs();
@@ -298,6 +269,127 @@ fn list_project_files_paging_schema_keeps_cardinality_bounded() {
 }
 
 #[test]
+fn project_validate_test_options_schema_is_closed_and_bounded() {
+    let schema = input_schema_for_tool("project_validate");
+    let base = json!({"project":"demo","action":"test"});
+    for options in [
+        json!({}),
+        json!({"filter":"^Test/Sub$","require_tests":false,"min_tests":3}),
+        json!({"filter":"selected"}),
+    ] {
+        let mut value = base.clone();
+        value["test"] = options;
+        assert!(
+            test_support::validate_schema_instance(&value, &schema).is_ok(),
+            "{value}"
+        );
+        assert!(ToolCall::from_tool_name("project_validate", value).is_ok());
+    }
+    for options in [
+        json!({"argv":["--release"]}),
+        json!({"min_tests":0}),
+        json!({"min_tests":1_000_001}),
+        json!({"filter":"x".repeat(201)}),
+        json!({"require_tests":"yes"}),
+    ] {
+        let mut value = base.clone();
+        value["test"] = options;
+        assert!(
+            test_support::validate_schema_instance(&value, &schema).is_err(),
+            "{value}"
+        );
+    }
+    assert!(test_support::validate_schema_instance(&base, &schema).is_ok());
+    // No command strings or feature flags enter the top-level gateway.
+    let mut command = base;
+    command["args"] = json!(["--release"]);
+    assert!(ToolCall::from_tool_name("project_validate", command).is_err());
+}
+
+#[test]
+fn project_build_schema_is_closed_bounded_and_has_no_raw_execution_fields() {
+    let schema = input_schema_for_tool("project_build");
+    let valid = serde_json::json!({
+        "project": "demo",
+        "adapter": "rust",
+        "scope": {"packages": ["package-a", "package-b"]},
+        "timeout_secs": 1800
+    });
+    assert!(test_support::validate_schema_instance(&valid, &schema).is_ok());
+
+    for forbidden in [
+        "executable",
+        "args",
+        "shell",
+        "script",
+        "sync_wait_secs",
+        "release",
+        "target",
+    ] {
+        assert!(
+            schema["properties"].get(forbidden).is_none(),
+            "project_build exposed {forbidden}"
+        );
+    }
+    for invalid in [
+        serde_json::json!({"project":"demo","scope":{"packages":[]}}),
+        serde_json::json!({"project":"demo","scope":{"packages":(0..9).map(|i| format!("p-{i}")).collect::<Vec<_>>()}}),
+        serde_json::json!({"project":"demo","scope":{"packages":["x".repeat(257)]}}),
+        serde_json::json!({"project":"demo","scope":{"packages":["a"],"unknown":true}}),
+        serde_json::json!({"project":"demo","unknown":true}),
+    ] {
+        assert!(
+            test_support::validate_schema_instance(&invalid, &schema).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn project_validate_package_scope_schema_is_closed_and_bounded() {
+    let schema = input_schema_for_tool("project_validate");
+    let valid = serde_json::json!({
+        "project": "demo",
+        "action": "check",
+        "scope": {"packages": ["package-a", "package-b"]}
+    });
+    assert!(test_support::validate_schema_instance(&valid, &schema).is_ok());
+
+    for invalid in [
+        serde_json::json!({
+            "project": "demo",
+            "action": "check",
+            "scope": {"packages": []}
+        }),
+        serde_json::json!({
+            "project": "demo",
+            "action": "check",
+            "scope": {"packages": (0..9).map(|index| format!("package-{index}")).collect::<Vec<_>>()}
+        }),
+        serde_json::json!({
+            "project": "demo",
+            "action": "check",
+            "scope": {"packages": ["x".repeat(257)]}
+        }),
+        serde_json::json!({
+            "project": "demo",
+            "action": "check",
+            "scope": {"packages": ["package-a"], "unknown": true}
+        }),
+        serde_json::json!({
+            "project": "demo",
+            "action": "check",
+            "scope": {}
+        }),
+    ] {
+        assert!(
+            test_support::validate_schema_instance(&invalid, &schema).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn execution_timeout_schemas_keep_runtime_bounds_and_hide_sync_wait_tuning() {
     let specs = registered_tool_specs();
     for (name, default) in [
@@ -420,10 +512,16 @@ fn cargo_test_schema_explains_execution_proof_policy() {
         no_run.contains("does not require executed-test-count proof"),
         "{no_run}"
     );
+    assert!(spec.description.contains("Exit 0 alone is not test proof"));
     assert!(spec
         .description
-        .contains("Normal execution requires non-zero"));
-    assert!(spec.description.contains("require_tests=false opts out"));
+        .contains("default requires positive counts"));
+    assert!(spec
+        .description
+        .contains("require_tests=false accepts zero only without min_tests"));
+    assert!(spec
+        .description
+        .contains("require_tests=true/min_tests enforce a proven minimum"));
     assert!(spec.description.contains("no_run=true is compile-only"));
     assert!(spec.description.contains("Rust substring"));
     assert!(spec.description.contains("--exact"));
@@ -431,7 +529,15 @@ fn cargo_test_schema_explains_execution_proof_policy() {
     assert!(spec.description.contains("--lib"));
     assert!(spec
         .description
-        .contains("zero-test results are not validation proof"));
+        .contains("Rich success may lack test proof"));
+    for phrase in [
+        "tests_run_count and explicit minimum_tests",
+        "require_tests=false for accepted zero",
+        "no_run=true for compile-only",
+        "source_state never certifies current workspace source",
+    ] {
+        assert!(spec.description.contains(phrase), "missing {phrase}");
+    }
 }
 
 #[test]
@@ -1174,11 +1280,13 @@ fn job_terminal_continuation_app_contract_is_exact_wait_plus_private_view_fence_
     )
     .is_ok());
 
-    let registered = registered_tool_specs();
-    let present = spec_named(&registered, "present_job_terminal_continuation");
-    assert_eq!(present.input_schema["required"], json!(["wait_id"]));
+    assert!(!registered_tool_specs()
+        .iter()
+        .any(|spec| spec.name == "present_job_terminal_continuation"));
+    let present = input_schema_for_tool("present_job_terminal_continuation");
+    assert_eq!(present["required"], json!(["wait_id"]));
     assert_eq!(
-        present.input_schema["properties"]["wait_id"]["pattern"],
+        present["properties"]["wait_id"]["pattern"],
         "^wc_job_wait_[A-Za-z0-9_-]{16}$"
     );
 }
@@ -1267,6 +1375,29 @@ fn process_alias_and_python_are_host_visible_without_opening_objects() {
             schema["properties"]["argv"]["maxItems"],
             schema["properties"]["args"]["maxItems"]
         );
+        let mut alias = schema["properties"]["argv"].clone();
+        let mut canonical = schema["properties"]["args"].clone();
+        let description = alias
+            .as_object_mut()
+            .unwrap()
+            .remove("description")
+            .unwrap();
+        canonical.as_object_mut().unwrap().remove("description");
+        assert_eq!(
+            alias, canonical,
+            "{name}: an alias must retain all canonical bounds"
+        );
+        assert!(description.as_str().unwrap().contains("mechanical retry"));
+        assert!(!description.as_str().unwrap().contains("Compatibility"));
+        let mut arguments = json!({"project":"demo", "executable":"git", "argv":["status"]});
+        if name == "run_detached_process" {
+            arguments["idempotency_key"] = json!("schema-key");
+        }
+        assert!(test_support::validate_schema_instance(&arguments, &schema).is_ok());
+        arguments["args"] = json!(["status"]);
+        assert!(test_support::validate_schema_instance(&arguments, &schema).is_ok());
+        arguments["argz"] = json!(["status"]);
+        assert!(test_support::validate_schema_instance(&arguments, &schema).is_err());
         assert!(schema["properties"].get("arguments").is_none());
     }
     let schema = input_schema_for_tool("run_script");

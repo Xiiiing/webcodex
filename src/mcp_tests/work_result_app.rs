@@ -36,10 +36,11 @@ async fn handle_with_server_apps_enabled(
 async fn work_result_descriptor_is_explicit_sparse_app_only_and_resource_backed() {
     assert_eq!(
         MCP_WORK_RESULT_UI_RESOURCE_URI,
-        "ui://webcodex/work-result/v11"
+        "ui://webcodex/work-result/v13"
     );
     assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v9"));
     assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v10"));
+    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v11"));
     assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v4"));
     assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v5"));
     assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v6"));
@@ -153,12 +154,7 @@ async fn work_result_descriptor_is_explicit_sparse_app_only_and_resource_backed(
             .pointer("/_meta/ui/resourceUri"),
         Some(&json!(MCP_GOAL_PLAN_UI_RESOURCE_URI))
     );
-    assert_eq!(
-        tool(&full_ui["result"], "present_agent_continuation")
-            .unwrap()
-            .pointer("/_meta/ui/resourceUri"),
-        Some(&json!(MCP_AGENT_CONTINUATION_UI_RESOURCE_URI))
-    );
+    assert!(tool(&full_ui["result"], "present_agent_continuation").is_none());
 
     let plain = handle_with_server_apps_enabled(
         &runtime,
@@ -488,7 +484,7 @@ fn work_result_html_is_bounded_live_progress_ui() {
         "id=\"windowIdentity\"",
         "Project · ",
         "Session · ",
-        "Window calls in start-time order.",
+        "Calls in this chat, earliest first.",
         "Activity",
         "Collaboration",
         "Final changes",
@@ -527,6 +523,15 @@ fn work_result_html_is_bounded_live_progress_ui() {
     assert!(MCP_WORK_RESULT_APP_HTML.contains("if (document.hidden) {"));
     assert!(!MCP_WORK_RESULT_APP_HTML.contains("HIDDEN_REFRESH_MS"));
     assert!(!MCP_WORK_RESULT_APP_HTML.contains("HIDDEN_IDLE_REFRESH_MS"));
+    assert!(
+        MCP_WORK_RESULT_APP_HTML
+            .contains("scrollbar-gutter: stable; box-sizing: border-box; padding-right: 10px"),
+        "scrolling Work Result regions must reserve content space beside the scrollbar"
+    );
+    assert!(
+        MCP_WORK_RESULT_APP_HTML.contains("Changed content"),
+        "live workspace file contents should be rendered in Results"
+    );
     for forbidden in [
         "Linked work conversation",
         "No linked work conversation",

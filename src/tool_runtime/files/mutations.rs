@@ -11,12 +11,12 @@ fn compact_model_edit_surface(tool_name: &str) -> bool {
 }
 
 fn read_files_recovery(project: &str, path: &str) -> Value {
-    json!({
-        "tool": "read_files",
-        "arguments": {"project": project, "items": [{"path": path}]}
-    })
+    crate::tool_runtime::SuggestedToolCall::mechanically_followable(
+        "read_files",
+        json!({"project": project, "items": [{"path": path}]}),
+    )
+    .to_value()
 }
-
 fn recoverable_write_rejection(reason: impl AsRef<str>) -> String {
     format!(
         "Rejected before write: {}.\nNo files were modified.\nRetry guidance: read the file again to refresh line numbers/context, then retry with updated guards.",
@@ -1965,6 +1965,8 @@ fn sanitize_apply_text_edits_model_recovery(
 
     if error_kind == "sha256_conflict" {
         result.output["error_kind"] = json!("stale_file_revision");
+        result.output["direct_retry_safe"] = json!(false);
+        result.output["reread_required"] = json!(true);
         if let Some(change) = change {
             result.output["path"] = json!(change.path);
             result.output["recovery"] = read_files_recovery(project, &change.path);
@@ -2807,7 +2809,7 @@ impl ToolRuntime {
                     end_line: None,
                     line: None,
                     create_dirs: false,
-                    wait_timeout_secs: wait_timeout_secs,
+                    wait_timeout_secs,
                 },
                 "tool_runtime".to_string(),
             )

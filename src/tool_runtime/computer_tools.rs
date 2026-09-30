@@ -2061,7 +2061,7 @@ fn computer_suggested_recovery(
         .expect("Computer recovery output is an object")
         .insert(
             "suggested_call".to_string(),
-            SuggestedToolCall::new(tool, arguments).to_value(),
+            SuggestedToolCall::fallback_recovery(tool, arguments).to_value(),
         );
     result
 }
@@ -3766,9 +3766,12 @@ fn validate_snapshot(
             );
         }
         let actual_region = output.get("region").and_then(snapshot_region_values);
-        let expected_region = expected_region
-            .and_then(snapshot_region_values)
-            .or_else(|| Some((0, 0, surface_width, surface_height)));
+        let expected_region = expected_region.and_then(snapshot_region_values).or(Some((
+            0,
+            0,
+            surface_width,
+            surface_height,
+        )));
         let Some((x, y, region_width, region_height)) = actual_region else {
             return computer_error(
                 "invalid_runner_response",

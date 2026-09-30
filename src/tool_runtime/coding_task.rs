@@ -15,8 +15,8 @@ use super::continuation_feedback::{
     ContinuationToolFailureSnapshot,
 };
 use super::git_review_snapshot::{
-    caller_fingerprint as review_caller_fingerprint, latest_workspace_snapshot,
-    workspace_snapshot_complete_for_closeout, GitReviewSnapshot,
+    caller_fingerprint as review_caller_fingerprint, workspace_snapshot_complete_for_closeout,
+    GitReviewSnapshot,
 };
 use super::handoff::{
     actionable_unexpected_failure_count, apply_compact_workflow_outcomes, closeout_work_projection,
@@ -41,7 +41,7 @@ use super::startup_brief::{
     startup_brief_from_output, StartupBriefInput, StartupExtensions, StartupPluginEntry,
     StartupPluginsCatalog, REPOSITORY_OVERVIEW_NOT_REQUESTED_REASON,
 };
-use super::tool_catalog::TOOL_RECOMMENDED_FLOWS;
+use super::tool_catalog::model_visible_recommended_flows;
 use super::tool_inputs::{CodingGuidanceProfile, SessionMode, StartupDetail};
 use super::tool_result::{RecoveryKind, ToolResult};
 use super::unknown_session_result;
@@ -65,6 +65,13 @@ const FINISH_SESSION_EVENT_LIMIT: usize = 200;
 /// the standalone `project_overview` tool's 30s wait. An optional overview
 /// failure must not block the coding task, so it fails over quickly.
 pub(crate) const DEFAULT_REPOSITORY_OVERVIEW_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// Request-local observations for the post-result context sidecar. Never persisted
+/// or inferred from the public startup projection.
+pub(crate) struct BootstrapContext {
+    pub(crate) project: ResolvedProject,
+    pub(crate) instructions: ProjectInstructionsSnapshot,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct ProjectResolutionMetadata {
@@ -263,13 +270,13 @@ fn runner_coding_capability_error(client_id: &str, error: String) -> ToolResult 
                 "failure_kind": "unknown_runner",
                 "client_id": client_id,
                 "state_changed": false,
-                "suggested_call": {
-                    "tool": "list_runners",
-                    "arguments": {
+                "suggested_call": super::SuggestedToolCall::fallback_recovery(
+                    "list_runners",
+                    json!({
                         "include_projects": false,
                         "summary_only": true,
-                    }
-                }
+                    }),
+                ).to_value()
             }),
         );
     }
@@ -301,6 +308,136 @@ fn attach_project_resolution(
         result.output["state_changed"] = json!(true);
     }
     attach_permission(result, resolution.permission.as_ref())
+}
+
+fn project_resolution_from_runner_result(
+    resolved: ToolResult,
+    managed_requested: bool,
+    permission: Option<PermissionDecision>,
+) -> Result<(String, ProjectResolutionMetadata), ToolResult> {
+    if !resolved.success {
+        return Err(attach_permission(resolved, permission.as_ref()));
+    }
+    let Some(project) = resolved
+        .output
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+    else {
+        return Err(attach_permission(
+            ToolResult::err_with_output(
+                "Runner returned a path resolution without a runtime project id",
+                json!({
+                    "error_kind": "operation_failed",
+                    "failure_kind": "operation_failed",
+                    "state_changed": resolved.output["registered"]
+                        .as_bool()
+                        .unwrap_or(false),
+                }),
+            ),
+            permission.as_ref(),
+        ));
+    };
+    let outcome = resolved
+        .output
+        .get("outcome")
+        .and_then(Value::as_str)
+        .filter(|outcome| {
+            if managed_requested {
+                matches!(
+                    *outcome,
+                    "managed_worktree_created" | "managed_worktree_recovered"
+                )
+            } else {
+                matches!(*outcome, "reused_existing_registration" | "auto_registered")
+            }
+        })
+        .map(str::to_string);
+    let registered = resolved.output.get("registered").and_then(Value::as_bool);
+    let (Some(outcome), Some(registered)) = (outcome, registered) else {
+        return Err(attach_permission(
+            ToolResult::err_with_output(
+                "Runner returned malformed path resolution metadata",
+                json!({
+                    "error_kind": "operation_failed",
+                    "failure_kind": "operation_failed",
+                    "state_changed": resolved.output["registered"]
+                        .as_bool()
+                        .unwrap_or(false),
+                }),
+            ),
+            permission.as_ref(),
+        ));
+    };
+    if !managed_requested && registered != (outcome == "auto_registered") {
+        return Err(attach_permission(
+            ToolResult::err_with_output(
+                "Runner returned inconsistent path resolution metadata",
+                json!({
+                    "error_kind": "operation_failed",
+                    "failure_kind": "operation_failed",
+                    "state_changed": registered,
+                }),
+            ),
+            permission.as_ref(),
+        ));
+    }
+    let worktree = if managed_requested {
+        let base_ref = resolved
+            .output
+            .get("base_ref")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let base_sha = resolved
+            .output
+            .get("base_sha")
+            .and_then(Value::as_str)
+            .filter(|sha| {
+                matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            .map(str::to_string);
+        let source_dirty = resolved.output.get("source_dirty").and_then(Value::as_bool);
+        let managed = resolved.output.get("managed").and_then(Value::as_bool);
+        match (managed, base_ref, base_sha, source_dirty) {
+            (Some(true), Some(base_ref), Some(base_sha), Some(source_dirty)) => {
+                Some(ManagedWorktreeProjection {
+                    managed: true,
+                    base_ref,
+                    base_sha,
+                    source_dirty,
+                })
+            }
+            _ => {
+                return Err(attach_permission(
+                    ToolResult::err_with_output(
+                        "Runner returned malformed managed worktree metadata",
+                        json!({
+                            "error_kind": "operation_failed",
+                            "failure_kind": "operation_failed",
+                            "state_changed": true,
+                        }),
+                    ),
+                    permission.as_ref(),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    let resolution = ProjectResolutionMetadata {
+        source: if managed_requested {
+            "managed_worktree".to_string()
+        } else {
+            "path".to_string()
+        },
+        outcome,
+        resolved_project: project.clone(),
+        registered,
+        worktree,
+        permission,
+    };
+    Ok((project, resolution))
 }
 
 impl ToolRuntime {
@@ -406,6 +543,7 @@ impl ToolRuntime {
         trusted_recording_session_id: Option<&str>,
         trusted_recording_session_project: Option<&str>,
         transport: SessionTransport,
+        bootstrap_context: &mut Option<BootstrapContext>,
     ) -> ToolResult {
         let detail = startup.detail;
         let project_source = match resolve_project_source(project, client_id, path) {
@@ -514,15 +652,139 @@ impl ToolRuntime {
         };
         let (project, mut project_resolution) = match project_source {
             CodingProjectSource::Existing { project } => {
-                let resolution = ProjectResolutionMetadata {
-                    source: "project".to_string(),
-                    outcome: "resolved_existing_project".to_string(),
-                    resolved_project: String::new(),
-                    registered: false,
-                    worktree: None,
-                    permission: None,
-                };
-                (project, resolution)
+                if let Some(worktree) = managed_worktree.as_ref() {
+                    let source = match self.resolve_project_input_for_auth(&project, auth).await {
+                        Ok(source) => source,
+                        Err(error) => return error.into_tool_result(),
+                    };
+                    if let Some(session_id) = resume_session_id.as_deref() {
+                        return session_project_mismatch_result(
+                            session_id,
+                            startup.tool_name,
+                            &SessionProjectMismatch {
+                                session_project: resume_session_project
+                                    .as_ref()
+                                    .map(|project| project.resolved_id.clone())
+                                    .unwrap_or_else(|| "<unscoped>".to_string()),
+                                request_project: format!(
+                                    "managed_worktree_from:{}",
+                                    source.resolved_id
+                                ),
+                            },
+                        );
+                    }
+                    if let Some(recording_session_id) = trusted_recording_session_id {
+                        return session_project_mismatch_result(
+                            recording_session_id,
+                            startup.tool_name,
+                            &SessionProjectMismatch {
+                                session_project: trusted_recording_session_resolved_project
+                                    .as_ref()
+                                    .map(|project| project.resolved_id.clone())
+                                    .unwrap_or_else(|| "<unscoped>".to_string()),
+                                request_project: format!(
+                                    "managed_worktree_from:{}",
+                                    source.resolved_id
+                                ),
+                            },
+                        );
+                    }
+                    if let Some(result) =
+                        registration_scope_denied(auth, "managed worktree project registration")
+                    {
+                        return result;
+                    }
+                    let permission = super::permissions::evaluate_permission_for_tool(
+                        &self.permission_evaluator,
+                        "register_project",
+                        None,
+                    );
+                    if let Some(decision) = permission.as_ref() {
+                        if !decision.allows_execution() {
+                            let mut result =
+                                super::permissions::permission_execution_denied_result(decision);
+                            super::permissions::add_permission_to_result(&mut result, decision);
+                            return result;
+                        }
+                    }
+                    if let Err(result) = self
+                        .require_runner_coding_capability(&source.config.client_id, auth)
+                        .await
+                    {
+                        return attach_permission(result, permission.as_ref());
+                    }
+                    let Some(source_project_id) =
+                        super::lsp_tools::runner_local_project_id(&source.resolved_id)
+                            .map(str::to_string)
+                    else {
+                        return attach_permission(
+                            ToolResult::err_with_output(
+                                "managed worktree source must resolve to one Runner project",
+                                json!({
+                                    "error_kind": "managed_worktree_source_identity_unavailable",
+                                    "failure_kind": "operation_failed",
+                                    "source_project": source.resolved_id,
+                                    "state_changed": false,
+                                }),
+                            )
+                            .with_recovery(RecoveryKind::Reobserve),
+                            permission.as_ref(),
+                        );
+                    };
+                    let Some(source_root_fingerprint) = source.root_fingerprint.clone() else {
+                        return attach_permission(
+                            ToolResult::err_with_output(
+                                "managed worktree source root identity is unavailable",
+                                json!({
+                                    "error_kind": "managed_worktree_source_identity_unavailable",
+                                    "failure_kind": "operation_failed",
+                                    "source_project": source.resolved_id,
+                                    "state_changed": false,
+                                }),
+                            )
+                            .with_recovery(RecoveryKind::Reobserve),
+                            permission.as_ref(),
+                        );
+                    };
+                    let source_runtime_id = source.resolved_id.clone();
+                    let mut resolved = self
+                        .prepare_managed_worktree(
+                            source.config.client_id.clone(),
+                            source.config.path.clone(),
+                            worktree.base_ref.clone(),
+                            worktree.operation_id.clone(),
+                            None,
+                            Some(source_project_id),
+                            Some(source_root_fingerprint.clone()),
+                            auth,
+                        )
+                        .await;
+                    if !resolved.success {
+                        // Root fingerprints and Runner-local source ids are internal
+                        // identity fences, not model-facing recovery inputs. Keep the
+                        // already-authorized canonical source Project for diagnostics,
+                        // but scrub internal identity material from Runner failures.
+                        if let Some(output) = resolved.output.as_object_mut() {
+                            output.remove("source_project_id");
+                            output.remove("source_root_fingerprint");
+                        }
+                        resolved.output["source_project"] = json!(source_runtime_id);
+                    }
+                    match project_resolution_from_runner_result(resolved, true, permission) {
+                        Ok(resolved) => resolved,
+                        Err(result) => return result,
+                    }
+                } else {
+                    let resolution = ProjectResolutionMetadata {
+                        source: "project".to_string(),
+                        outcome: "resolved_existing_project".to_string(),
+                        resolved_project: String::new(),
+                        registered: false,
+                        worktree: None,
+                        permission: None,
+                    };
+                    (project, resolution)
+                }
             }
             CodingProjectSource::RunnerPath { client_id, path } => {
                 if managed_worktree.is_none() {
@@ -602,6 +864,8 @@ impl ToolRuntime {
                         worktree.base_ref.clone(),
                         worktree.operation_id.clone(),
                         worktree.resume_project_id.clone(),
+                        None,
+                        None,
                         auth,
                     )
                     .await
@@ -609,130 +873,11 @@ impl ToolRuntime {
                     self.resolve_or_register_project(client_id, path, auth)
                         .await
                 };
-                if !resolved.success {
-                    return attach_permission(resolved, permission.as_ref());
+                match project_resolution_from_runner_result(resolved, managed_requested, permission)
+                {
+                    Ok(resolved) => resolved,
+                    Err(result) => return result,
                 }
-                let Some(project) = resolved
-                    .output
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .filter(|id| !id.trim().is_empty())
-                    .map(str::to_string)
-                else {
-                    return attach_permission(
-                        ToolResult::err_with_output(
-                            "Runner returned a path resolution without a runtime project id",
-                            json!({
-                                "error_kind": "operation_failed",
-                                "failure_kind": "operation_failed",
-                                "state_changed": resolved.output["registered"]
-                                    .as_bool()
-                                    .unwrap_or(false),
-                            }),
-                        ),
-                        permission.as_ref(),
-                    );
-                };
-                let outcome = resolved
-                    .output
-                    .get("outcome")
-                    .and_then(Value::as_str)
-                    .filter(|outcome| {
-                        if managed_requested {
-                            matches!(
-                                *outcome,
-                                "managed_worktree_created" | "managed_worktree_recovered"
-                            )
-                        } else {
-                            matches!(*outcome, "reused_existing_registration" | "auto_registered")
-                        }
-                    })
-                    .map(str::to_string);
-                let registered = resolved.output.get("registered").and_then(Value::as_bool);
-                let (Some(outcome), Some(registered)) = (outcome, registered) else {
-                    return attach_permission(
-                        ToolResult::err_with_output(
-                            "Runner returned malformed path resolution metadata",
-                            json!({
-                                "error_kind": "operation_failed",
-                                "failure_kind": "operation_failed",
-                                "state_changed": resolved.output["registered"]
-                                    .as_bool()
-                                    .unwrap_or(false),
-                            }),
-                        ),
-                        permission.as_ref(),
-                    );
-                };
-                if !managed_requested && registered != (outcome == "auto_registered") {
-                    return attach_permission(
-                        ToolResult::err_with_output(
-                            "Runner returned inconsistent path resolution metadata",
-                            json!({
-                                "error_kind": "operation_failed",
-                                "failure_kind": "operation_failed",
-                                "state_changed": registered,
-                            }),
-                        ),
-                        permission.as_ref(),
-                    );
-                }
-                let worktree = if managed_requested {
-                    let base_ref = resolved
-                        .output
-                        .get("base_ref")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    let base_sha = resolved
-                        .output
-                        .get("base_sha")
-                        .and_then(Value::as_str)
-                        .filter(|sha| {
-                            matches!(sha.len(), 40 | 64)
-                                && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-                        })
-                        .map(str::to_string);
-                    let source_dirty = resolved.output.get("source_dirty").and_then(Value::as_bool);
-                    let managed = resolved.output.get("managed").and_then(Value::as_bool);
-                    match (managed, base_ref, base_sha, source_dirty) {
-                        (Some(true), Some(base_ref), Some(base_sha), Some(source_dirty)) => {
-                            Some(ManagedWorktreeProjection {
-                                managed: true,
-                                base_ref,
-                                base_sha,
-                                source_dirty,
-                            })
-                        }
-                        _ => {
-                            return attach_permission(
-                                ToolResult::err_with_output(
-                                    "Runner returned malformed managed worktree metadata",
-                                    json!({
-                                        "error_kind": "operation_failed",
-                                        "failure_kind": "operation_failed",
-                                        "state_changed": true,
-                                    }),
-                                ),
-                                permission.as_ref(),
-                            )
-                        }
-                    }
-                } else {
-                    None
-                };
-                let resolution = ProjectResolutionMetadata {
-                    source: if managed_requested {
-                        "managed_worktree".to_string()
-                    } else {
-                        "path".to_string()
-                    },
-                    outcome,
-                    resolved_project: project.clone(),
-                    registered,
-                    worktree,
-                    permission,
-                };
-                (project, resolution)
             }
         };
         // `detail` is the single startup projection control: full keeps the
@@ -796,11 +941,9 @@ impl ToolRuntime {
                 );
             }
         }
-        // Semantic-navigation and fixed project-instruction observation remain
-        // mandatory startup probes. Extension discovery is an independent,
-        // bounded observation that runs concurrently only when the caller keeps
-        // include_extension_catalog enabled. Diagnostic projections can still
-        // run the optional repository overview concurrently.
+        // LSP availability is advisory: observe it concurrently, but stop waiting
+        // when the mandatory startup observations finish.
+        let (startup_complete, startup_completed) = tokio::sync::oneshot::channel();
         let extension_discovery = async {
             if startup.include_extension_catalog {
                 Some(self.extension_discovery_for_startup(&resolved, auth).await)
@@ -808,37 +951,45 @@ impl ToolRuntime {
                 None
             }
         };
-        let (semantic_navigation, project_instructions, repository_overview, extensions) =
-            if startup.include_repository_overview {
-                let (semantic_navigation, project_instructions, repository_overview, extensions) =
-                    futures_util::future::join4(
-                        self.probe_semantic_navigation_for_startup(&resolved),
-                        self.load_effective_coding_instructions(&resolved, auth),
-                        self.repository_overview_for_startup(&resolved, auth),
-                        extension_discovery,
-                    )
-                    .await;
-                (
-                    semantic_navigation,
-                    project_instructions,
-                    repository_overview,
-                    extensions,
-                )
-            } else {
-                let (semantic_navigation, project_instructions, extensions) =
-                    futures_util::future::join3(
-                        self.probe_semantic_navigation_for_startup(&resolved),
-                        self.load_effective_coding_instructions(&resolved, auth),
-                        extension_discovery,
-                    )
-                    .await;
-                (
-                    semantic_navigation,
-                    project_instructions,
-                    repository_overview_not_requested(),
-                    extensions,
-                )
+        let startup_context = Box::pin(async {
+            let repository_overview = async {
+                if startup.include_repository_overview {
+                    self.repository_overview_for_startup(&resolved, auth).await
+                } else {
+                    repository_overview_not_requested()
+                }
             };
+            futures_util::future::join3(
+                self.load_effective_coding_instructions(&resolved, auth),
+                repository_overview,
+                extension_discovery,
+            )
+            .await
+        });
+        let mandatory = async {
+            let observations = futures_util::future::join3(
+                startup_context,
+                self.runtime_status(auth),
+                Box::pin(
+                    self.coding_startup_git_summary(&resolved.resolved_id, include_recent_commits),
+                ),
+            )
+            .await;
+            let _ = startup_complete.send(());
+            observations
+        };
+        let (
+            semantic_navigation,
+            (
+                (project_instructions, repository_overview, extensions),
+                runtime_status_result,
+                (git, git_warnings),
+            ),
+        ) = futures_util::future::join(
+            self.probe_semantic_navigation_for_startup(&resolved, startup_completed),
+            mandatory,
+        )
+        .await;
         let semantic_navigation = serde_json::to_value(semantic_navigation).unwrap_or_else(|_| {
             json!({
                 "supported": false,
@@ -847,10 +998,14 @@ impl ToolRuntime {
                 "reason_code": "status_probe_failed",
             })
         });
+        *bootstrap_context = Some(BootstrapContext {
+            project: resolved.clone(),
+            instructions: project_instructions.clone(),
+        });
         // Coding startup always observes every fixed repository-rule
         // candidate. The complete bounded body remains only in the in-memory
         // Workflow Session; the ledger persistence path omits it.
-        let mut warnings = Vec::new();
+        let mut warnings = git_warnings;
         if repository_overview.get("status").and_then(Value::as_str) == Some("unavailable")
             && repository_overview
                 .get("reason_code")
@@ -864,15 +1019,14 @@ impl ToolRuntime {
         }
         let mut runtime_status_call_failed = false;
         let (runtime_status, runtime_status_for_brief) = {
-            let result = self.runtime_status(auth).await;
-            if !result.success {
+            if !runtime_status_result.success {
                 runtime_status_call_failed = true;
                 warnings.push(json!({
                     "kind": "runtime_status_unavailable",
                     "message": "runtime status was unavailable during startup",
                 }));
             }
-            let raw = result.output;
+            let raw = runtime_status_result.output;
             let projected = if compact_startup {
                 compact_runtime_status(&raw)
             } else {
@@ -887,13 +1041,6 @@ impl ToolRuntime {
         );
         let coding_agent_providers =
             project_coding_agent_providers(&resolved.config.client_id, &runtime_status_for_brief);
-        let git = self
-            .coding_startup_git_summary(
-                &resolved.resolved_id,
-                include_recent_commits,
-                &mut warnings,
-            )
-            .await;
         // Surface dirty/conflict worktree state at top-level so compact Action
         // responses that omit full git payloads still keep the warning reason.
         if !git.is_null() {
@@ -1288,6 +1435,7 @@ impl ToolRuntime {
             trusted_recording_session_id,
             trusted_recording_session_project,
             transport,
+            &mut None,
         )
         .await
     }
@@ -1354,6 +1502,7 @@ impl ToolRuntime {
         trusted_recording_session_project: Option<&str>,
         transport: SessionTransport,
         correlation: &mut ToolCallCorrelation,
+        bootstrap_context: &mut Option<BootstrapContext>,
     ) -> ToolResult {
         let project_source = match resolve_project_source(project, client_id, path) {
             Ok(source) => source,
@@ -1380,12 +1529,7 @@ impl ToolRuntime {
                 );
             }
         }
-        if mode == "worktree" && matches!(project_source, CodingProjectSource::Existing { .. }) {
-            return invalid_project_source(
-                "mode='worktree' requires client_id + path source checkout",
-                json!({"field": "mode", "required_with": "client_id + path"}),
-            );
-        }
+        let managed_worktree_requested = mode == "worktree";
         let managed_worktree = (mode == "worktree").then(|| ManagedWorktreeRequest {
             base_ref,
             operation_id: uuid::Uuid::new_v4().to_string(),
@@ -1455,16 +1599,17 @@ impl ToolRuntime {
                 trusted_recording_session_id,
                 trusted_recording_session_project,
                 transport,
+                bootstrap_context,
             )
             .await;
         if !result.success {
             return result;
         }
-        let projected_project = if project.is_empty() {
+        let projected_project = if project.is_empty() || managed_worktree_requested {
             startup_brief_from_output(&result.output)
                 .and_then(|brief| {
                     brief
-                        .pointer("/project_resolution/resolved_project")
+                        .pointer("/project/resolved_id")
                         .and_then(Value::as_str)
                 })
                 .unwrap_or_default()
@@ -1559,7 +1704,11 @@ impl ToolRuntime {
         });
         let reusable_snapshot = if summary_only {
             review_caller_fingerprint(auth).ok().and_then(|caller| {
-                latest_workspace_snapshot(&caller, &resolved.resolved_id, Some(&session_id))
+                self.latest_workspace_review_snapshot(
+                    &caller,
+                    &resolved.resolved_id,
+                    Some(&session_id),
+                )
             })
         } else {
             review_snapshot_reuse["reason_code"] =
@@ -1756,12 +1905,10 @@ impl ToolRuntime {
             .await
         {
             Ok(true) => Some(json!({
-                "suggested_call": {
-                    "tool": "present_work_result",
-                    "arguments": {
-                        "project": resolved.resolved_id.clone(),
-                    }
-                }
+                "suggested_call": super::SuggestedToolCall::fallback_recovery(
+                    "present_work_result",
+                    json!({"project": resolved.resolved_id.clone()}),
+                ).to_value()
             })),
             Ok(false) => None,
             Err(message) => {
@@ -2153,8 +2300,8 @@ impl ToolRuntime {
         &self,
         project: &str,
         include_recent_commits: bool,
-        warnings: &mut Vec<Value>,
-    ) -> Value {
+    ) -> (Value, Vec<Value>) {
+        let mut warnings = Vec::new();
         let mut output = json!({
             "available": false,
             "branch": Value::Null,
@@ -2184,6 +2331,23 @@ impl ToolRuntime {
             output["branch"] = result.output.get("branch").cloned().unwrap_or(Value::Null);
             output["head"] = result.output.get("head").cloned().unwrap_or(Value::Null);
             output["clean"] = result.output.get("clean").cloned().unwrap_or(Value::Null);
+            output["upstream_status"] = result
+                .output
+                .get("upstream_status")
+                .cloned()
+                .unwrap_or_else(|| json!("unobserved"));
+            output["upstream_reason_code"] = result
+                .output
+                .get("upstream_reason_code")
+                .cloned()
+                .unwrap_or(Value::Null);
+            output["upstream"] = result
+                .output
+                .get("upstream")
+                .cloned()
+                .unwrap_or(Value::Null);
+            output["ahead"] = result.output.get("ahead").cloned().unwrap_or(Value::Null);
+            output["behind"] = result.output.get("behind").cloned().unwrap_or(Value::Null);
             output["non_git_project"] = result
                 .output
                 .get("non_git_project")
@@ -2231,7 +2395,7 @@ impl ToolRuntime {
             object.remove("recent_commits");
         }
 
-        output
+        (output, warnings)
     }
 
     /// Deterministic repository structure overview for the coding startup
@@ -2455,6 +2619,22 @@ struct WorkOnProjectWorkspaceProjection {
     head: WorkOnProjectRequiredNullable<String>,
     clean: WorkOnProjectRequiredNullable<bool>,
     conflicts: u64,
+    #[serde(default)]
+    upstream_status: Option<String>,
+    #[serde(default)]
+    upstream_reason_code: Option<String>,
+    #[serde(default)]
+    upstream: Option<String>,
+    #[serde(default)]
+    ahead: Option<u64>,
+    #[serde(default)]
+    behind: Option<u64>,
+    #[serde(default)]
+    changed_paths: Vec<String>,
+    #[serde(default)]
+    changed_paths_total: u64,
+    #[serde(default)]
+    changed_paths_truncated: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2554,6 +2734,14 @@ fn sparse_work_on_project_workspace(workspace: WorkOnProjectWorkspaceProjection)
         head,
         clean,
         conflicts,
+        upstream_status,
+        upstream_reason_code,
+        upstream,
+        ahead,
+        behind,
+        changed_paths,
+        changed_paths_total,
+        changed_paths_truncated,
     } = workspace;
     let status_unavailable = status == "unavailable";
     let mut projected = json!({
@@ -2571,6 +2759,33 @@ fn sparse_work_on_project_workspace(workspace: WorkOnProjectWorkspaceProjection)
     }
     if let Some(head) = head.0 {
         projected["head"] = json!(head);
+    }
+    if let Some(upstream_status) = upstream_status.filter(|status| status != "unobserved") {
+        projected["upstream_status"] = json!(upstream_status);
+    }
+    if let Some(upstream_reason_code) = upstream_reason_code {
+        projected["upstream_reason_code"] = json!(upstream_reason_code);
+    }
+    if let Some(upstream) = upstream {
+        projected["upstream"] = json!(upstream);
+    }
+    if let Some(ahead) = ahead {
+        projected["ahead"] = json!(ahead);
+    }
+    if let Some(behind) = behind {
+        projected["behind"] = json!(behind);
+    }
+    if !changed_paths.is_empty() {
+        projected["changed_paths"] = json!(changed_paths);
+        projected["changed_paths_total"] = json!(changed_paths_total.max(
+            projected["changed_paths"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0) as u64
+        ));
+        if changed_paths_truncated {
+            projected["changed_paths_truncated"] = json!(true);
+        }
     }
     if status_unavailable {
         if let Some(clean) = clean.0 {
@@ -2980,8 +3195,7 @@ fn recommended_flow_groups(visible: Option<&HashSet<&str>>) -> Value {
     const GROUPS: &[&str] = &["inspect", "edit", "validate", "review", "handoff"];
     let mut map = serde_json::Map::new();
     for group in GROUPS {
-        let tools = TOOL_RECOMMENDED_FLOWS
-            .iter()
+        let tools = model_visible_recommended_flows()
             .find(|flow| flow.name == *group)
             .map(|flow| {
                 let mut seen = HashSet::new();
@@ -3623,7 +3837,7 @@ mod startup_runner_tests {
             "changes": {
                 "show_changes": {
                     "diff_review_handoff": {
-                        "next_call": {"tool": "git_diff_hunks", "arguments": {}}
+                        "next_call": {"follow_up_kind": "mechanically_followable", "tool": "git_diff_hunks", "arguments": {}}
                     }
                 }
             },

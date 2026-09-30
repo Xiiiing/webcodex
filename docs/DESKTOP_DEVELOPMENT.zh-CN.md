@@ -112,6 +112,12 @@ Desktop 会验证三个 binary 报告的 version 与 Git commit 一致。
 同源 binary 的目录。这个 override 只属于 debug/development 路径；正式安装的
 non-debug Desktop 必须使用包内 runtime resources。
 
+### Desktop 数据目录
+
+Desktop 默认从 Tauri 提供的当前用户 app-local-data 目录开始。Windows 上，Desktop 会解析最终 Desktop-owned data-root 组件之前的 ancestor 到真实物理文件系统位置，再原样追加尚不存在的 tail。这样可以支持 `C:\\Users\\<user>` 通过 NTFS Junction 重定向到其他磁盘的 Windows profile，同时让 Desktop state、secrets、`runtime/local`、connection state、provider/coding-agent state、updates、diagnostics 与 reset/recovery 始终共享同一个 effective root。已经存在的最终 WebCodex data-root 组件不会通过 Junction/symlink 被 canonicalize 掉；如果它本身是 reparse point，Desktop 会直接拒绝，以保留 credential-path 安全边界。
+
+运维恢复或调试时可以设置 `WEBCODEX_DESKTOP_DATA_DIR` 覆盖 Tauri 路径；其值必须是绝对路径。Windows 会对 override 应用同样的物理路径解析规则；Linux/macOS 不会因此新增 symlink canonicalization 语义。这个 override **不会**放宽 CLI credential-path 安全检查：bundled CLI 仍会严格验证最终 effective path，并拒绝不安全的 credential directory 重定向。
+
 ## 从源码运行 Desktop
 
 dogfood runtime 构建好以后：
@@ -293,7 +299,7 @@ smoke 会真正走 native installer，并验证包内 runtime identity。Windows
 
 ## 在 macOS 本地构建 DMG
 
-当前公开 macOS 分发包使用 ad-hoc signing，不做 notarization。
+本地开发 DMG 仍使用 ad-hoc signing，不做 notarization。正式 macOS release workflow 使用 Developer ID Application 签名和 notarization，使包内 Runner 获得稳定的 TCC code identity。
 
 普通本地打包优先使用仓库已经提供的一条完整 helper：
 

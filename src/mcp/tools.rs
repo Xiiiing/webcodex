@@ -113,6 +113,11 @@ fn adaptive_runtime_gateway_tool_spec() -> ToolSpec {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn adaptive_runtime_gateway_input_schema_for_test() -> Value {
+    adaptive_runtime_gateway_tool_spec().input_schema
+}
+
 fn mcp_adaptive_runtime_gateway_target_route(
     target: &str,
     stateless_2026: bool,
@@ -976,7 +981,10 @@ fn attach_job_terminal_resume_suggested_call_schema(
     app_enabled: bool,
     value: &mut Value,
 ) {
-    if !app_enabled || tool_name != "wait_for_job_terminal" {
+    if !app_enabled
+        || tool_name != "wait_for_job_terminal"
+        || !is_adaptive_runtime_direct_tool("present_job_terminal_continuation")
+    {
         return;
     }
     let Some(properties) = value
@@ -992,6 +1000,7 @@ fn attach_job_terminal_resume_suggested_call_schema(
             "description": "Host-specific parser-ready advisory call for the current MCP App continuation carrier. Present only for a still-waiting Job when this Host can create that carrier; it grants no authority and should be used only when no independent work remains and the current model turn can yield immediately after presentation.",
             "additionalProperties": false,
             "properties": {
+                "follow_up_kind": {"type": "string", "const": "fallback_recovery"},
                 "tool": {"type": "string", "const": "present_job_terminal_continuation"},
                 "arguments": {
                     "type": "object",
@@ -1005,7 +1014,7 @@ fn attach_job_terminal_resume_suggested_call_schema(
                     "required": ["wait_id"]
                 }
             },
-            "required": ["tool", "arguments"]
+            "required": ["follow_up_kind", "tool", "arguments"]
         }),
     );
 }
@@ -1014,7 +1023,13 @@ pub(super) fn project_job_terminal_resume_suggested_call(
     carrier_available: bool,
     result: &mut ToolResult,
 ) {
-    if !carrier_available || !result.success {
+    // MCP-added edges are not part of the canonical domain output schema.
+    // Derive their availability from the same static descriptor policy, not
+    // workflow guidance or an App capability alone.
+    if !carrier_available
+        || !result.success
+        || !is_adaptive_runtime_direct_tool("present_job_terminal_continuation")
+    {
         return;
     }
     let Some(output) = result.output.as_object_mut() else {
@@ -1038,7 +1053,7 @@ pub(super) fn project_job_terminal_resume_suggested_call(
     };
     output.insert(
         "suggested_call".to_string(),
-        crate::tool_runtime::SuggestedToolCall::new(
+        crate::tool_runtime::SuggestedToolCall::fallback_recovery(
             "present_job_terminal_continuation",
             json!({"wait_id": wait_id}),
         )
@@ -2012,6 +2027,13 @@ pub(super) async fn handle_call(
     mut correlation_out: Option<&mut crate::tool_runtime::ToolCallCorrelation>,
 ) -> McpOutcome {
     let result_presentation = McpToolResultPresentation::from_request_params(&request_params);
+    if let (Some(lc), Some(name), Some(arguments)) = (
+        lifecycle.as_deref(),
+        request_params.get("name").and_then(Value::as_str),
+        request_params.get("arguments"),
+    ) {
+        lc.capture_request_diagnostic(name, arguments);
+    }
     let mut params: McpToolCallParams = match serde_json::from_value(request_params) {
         Ok(params) => params,
         Err(e) => {
@@ -2622,9 +2644,9 @@ pub(super) async fn handle_call(
         };
     }
     if session_message_resolution.is_some() && session_id.is_none() {
-        let message = format!(
-            "field '_wc.resolve' requires '_wc.record' for the exact target Workflow Session",
-        );
+        let message =
+            "field '_wc.resolve' requires '_wc.record' for the exact target Workflow Session"
+                .to_string();
         if let Some(lc) = lifecycle.as_deref() {
             lc.dispatch_failed("invalid_arguments");
             lc.dispatch_finished(false, Some(false), "invalid_arguments");
@@ -2684,7 +2706,7 @@ pub(super) async fn handle_call(
             completion.invocation = invocation_facts;
         }
     }
-    if let Some(slot) = correlation_out.as_deref_mut() {
+    if let Some(slot) = correlation_out {
         *slot = outcome.correlation.clone();
     }
     let mut result = match outcome.error_status {
@@ -2813,7 +2835,7 @@ pub(super) async fn handle_call(
             .get("structuredContent")
             .and_then(|structured| completion.record_for_structured_content(structured))
     });
-    if let Some(slot) = model_ergonomics_out.as_deref_mut() {
+    if let Some(slot) = model_ergonomics_out {
         *slot = model_ergonomics;
     }
     return McpOutcome::Ok(rpc_result(

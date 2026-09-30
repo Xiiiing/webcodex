@@ -1,4 +1,4 @@
-import type { MachineBuildInfo, RuntimeSettings, RuntimeSource, RuntimeSwitchRequest, RuntimeSwitchResult, DiagnosticSnapshot, DiagnosticResource, TraceUpdate, TraceSettings, UpdateStatus } from "../models/runtime-shell";
+import type { MachineBuildInfo, RuntimeSettings, RuntimeSource, RuntimeSwitchRequest, RuntimeSwitchResult, DiagnosticSnapshot, DiagnosticResource, TraceUpdate, TraceSettings, UpdateStatus, UpdateDownloadStatus } from "../models/runtime-shell";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ActivityEntry,
@@ -16,6 +16,9 @@ import type { McpProviderRequest, TunnelProfileAction, TunnelProfileRequest } fr
 import type { CodingAgentRequest, SshRegisterRequest, SshResourcesSnapshot, SshMutationResult, RunnerCapabilityAuthorizationSnapshot } from "../models/runner-capabilities";
 
 export const desktopApi = {
+  managedInstructionsRead: () => invoke<import("../models/managed-instructions").ManagedInstructionsSnapshot>("managed_instructions_read"),
+  managedInstructionsSave: (expected_revision: string, content: string) => invoke<import("../models/managed-instructions").ManagedInstructionsSnapshot>("managed_instructions_save", { request: { expected_revision, content } }),
+  managedInstructionsEnable: (target: SettingsTarget, expected: RunnerPaths, expected_revision: string) => invoke<DesktopState>("managed_instructions_enable", { request: { target, expected, expected_revision } }),
   prepareProjectUnregister: (project: string) => invoke<import("../models/workspace").UnregisterObservation>("prepare_project_unregister", { project }),
   unregisterProject: ({ target, project, expected_revision }: import("../models/workspace").UnregisterObservation) => invoke<DesktopState>("unregister_project", { request: { target, project, expected_revision, confirmed: true } }),
   desktopBuildInfo: () => invoke<MachineBuildInfo>("get_desktop_build_info"),
@@ -31,6 +34,11 @@ export const desktopApi = {
   exportSupportBundle: (path: string) => invoke<void>("export_support_bundle", { path }),
   restorePreviousConfiguration: (expectedPrimarySha256: string) => invoke<DesktopState>("restore_previous_configuration", { expectedPrimarySha256 }),
   checkForUpdates: (manual = false) => invoke<UpdateStatus>("check_for_updates", { manual }),
+  updateDownloadState: () => invoke<UpdateDownloadStatus>("get_update_download_state"),
+  downloadUpdate: (version: string) => invoke<UpdateStatus>("download_update", { version }),
+  cancelUpdateDownload: () => invoke<UpdateDownloadStatus>("cancel_update_download"),
+  setAutomaticUpdateDownload: (enabled: boolean) => invoke<UpdateStatus>("set_automatic_update_download", { enabled }),
+  installVerifiedUpdate: (version: string, confirmed: boolean) => invoke<void>("install_verified_update", { version, confirmed }),
   remindUpdateLater: () => invoke<UpdateStatus>("remind_update_later"),
   openLatestRelease: () => invoke<void>("open_latest_release"),
   saveCodingAgent: (request: CodingAgentRequest) => invoke<DesktopState>("save_coding_agent", { request }),
@@ -78,6 +86,7 @@ export const desktopApi = {
       request: { projectPath: projectPath ?? null },
     }),
   configureEnvironment: (request: {
+    serviceScope?: "user" | "system";
     mode: "create" | "join";
     serverUrl?: string | null;
     projectPath?: string | null;

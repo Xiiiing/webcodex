@@ -28,6 +28,15 @@ pub(super) fn normalize_observation_call_timing(
         return;
     }
     match call {
+        ToolCall::WaitForJobReadiness { wait_secs, .. } => {
+            // A join may use the remaining request budget, not the 5s handoff
+            // slice. Still honor a smaller client budget and the return guard.
+            let safe_wait = policy
+                .host_budget_secs
+                .saturating_sub(crate::mcp_host::HOST_RETURN_GUARD_SECS)
+                .max(1);
+            *wait_secs = (*wait_secs).min(safe_wait);
+        }
         ToolCall::ObserveJobs { wait_secs, .. } | ToolCall::JobTail { wait_secs, .. } => {
             if let Some(wait_secs) = wait_secs.as_mut() {
                 *wait_secs = (*wait_secs).min(policy.continuation_wait_secs);
@@ -163,6 +172,7 @@ mod tests {
                 "execution_state": "outcome_unknown",
                 "job_id": "job-123",
                 "continuation": {
+                    "follow_up_kind": "fallback_recovery",
                     "tool": "observe_jobs",
                     "arguments": {
                         "items": [{
@@ -189,6 +199,7 @@ mod tests {
     fn generated_continuation_wait_is_transport_aware_without_changing_identity() {
         let mut result = ToolResult::ok(serde_json::json!({
             "continuation": {
+                "follow_up_kind": "fallback_recovery",
                 "tool": "observe_jobs",
                 "arguments": {
                     "items": [{
@@ -215,6 +226,44 @@ mod tests {
         api.output["continuation"]["arguments"]["wait_secs"] = serde_json::json!(55);
         normalize_result_timing(&mut api, SessionTransport::Api, host_code_mode_policy());
         assert_eq!(api.output["continuation"]["arguments"]["wait_secs"], 55);
+    }
+
+    #[test]
+    fn readiness_explicit_wait_is_not_generic_five_second_handoff() {
+        let mut call = ToolCall::from_tool_name(
+            "wait_for_job_readiness",
+            serde_json::json!({"job_ids":["job"],"mode":"any","wait_secs":45}),
+        )
+        .unwrap();
+        let policy = host_code_mode_policy();
+        assert_eq!(policy.continuation_wait_secs, 5);
+        normalize_observation_call_timing(&mut call, SessionTransport::Mcp, policy);
+        assert!(matches!(
+            call,
+            ToolCall::WaitForJobReadiness { wait_secs: 45, .. }
+        ));
+    }
+
+    #[test]
+    fn readiness_honors_smaller_request_budget_without_changing_api_waits() {
+        for profile in [McpHostProfile::Direct, McpHostProfile::HostCodeMode] {
+            let policy = McpHostConfig {
+                profile,
+                host_budget_secs: Some(9),
+            }
+            .runtime_policy();
+            for (transport, expected) in [(SessionTransport::Mcp, 4), (SessionTransport::Api, 45)] {
+                let mut call = ToolCall::from_tool_name(
+                    "wait_for_job_readiness",
+                    serde_json::json!({"job_ids":["job"],"mode":"all","wait_secs":45}),
+                )
+                .unwrap();
+                normalize_observation_call_timing(&mut call, transport, policy);
+                assert!(
+                    matches!(call, ToolCall::WaitForJobReadiness { wait_secs, .. } if wait_secs == expected)
+                );
+            }
+        }
     }
 
     #[test]

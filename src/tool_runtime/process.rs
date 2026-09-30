@@ -10,7 +10,8 @@ use super::shell::{
     command_execution_state_name, dispatch_uncertainty_lifecycle, runner_command_lifecycle,
 };
 use super::structured_execution::{
-    await_hidden_structured_job, HiddenStructuredJobWait, StructuredExecutionBudget,
+    await_hidden_structured_job, finalize_hidden_terminal_projection, HiddenStructuredJobWait,
+    StructuredExecutionBudget,
 };
 use super::tool_audit::{assertion_validation_identity, run_process_validation_identity};
 use super::{ExecutionPurpose, ToolResult, ToolRuntime};
@@ -413,7 +414,7 @@ impl ToolRuntime {
         }
         // Use the real canonical parser, including wrapper-field validation.
         super::ToolCall::from_tool_name("run_shell", arguments.clone()).ok()?;
-        Some(super::SuggestedToolCall::new("run_shell", arguments).to_value())
+        Some(super::SuggestedToolCall::mechanically_followable("run_shell", arguments).to_value())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -575,7 +576,7 @@ impl ToolRuntime {
             Err(error) => {
                 return process_tool_failure_result(
                     command_rejected_message(
-                        error.to_string(),
+                        &error,
                         "confirm the Runner is registered and connected, then retry.",
                     ),
                     "agent_offline",
@@ -1007,10 +1008,15 @@ impl ToolRuntime {
                     stdout,
                     stderr,
                 }) => {
-                    let result = terminal_structured_job_result(&job, stdout, stderr, timeout);
-                    self.runner_registry
-                        .remove_projected_hidden_structured_job_record(&job.job_id)
-                        .await;
+                    let mut result = terminal_structured_job_result(&job, stdout, stderr, timeout);
+                    finalize_hidden_terminal_projection(
+                        self.runner_registry.as_ref(),
+                        auth,
+                        &job,
+                        &mut result,
+                        budget,
+                    )
+                    .await;
                     result
                 }
                 Ok(HiddenStructuredJobWait::Continued {

@@ -78,9 +78,9 @@ fn mcp_job_audit_correlation_keeps_only_stable_job_identity() {
                 "success": true,
                 "output": {
                     "items": [
-                        {"job_id": "wc_job_background_123", "observation_token": "one"},
-                        {"job_id": "wc_job_second_456", "observation_token": "two"},
-                        {"job_id": "wc_job_background_123", "observation_token": "duplicate"},
+                        {"job_id": "wc_job_background_123", "project": "agent:special:demo", "observation_token": "one"},
+                        {"job_id": "wc_job_second_456", "project": "agent:special:demo", "observation_token": "two"},
+                        {"job_id": "wc_job_background_123", "project": "agent:special:demo", "observation_token": "duplicate"},
                         {"job_id": "../unsafe"}
                     ]
                 }
@@ -96,6 +96,23 @@ fn mcp_job_audit_correlation_keeps_only_stable_job_identity() {
         ]
     );
     assert!(correlated.async_job_id.is_none());
+    assert_eq!(
+        correlated.resolved_project.as_deref(),
+        Some("agent:special:demo")
+    );
+
+    let mixed_projects = json!({
+        "result": {"structuredContent": {"success": true, "output": {"items": [
+            {"job_id": "wc_job_background_123", "project": "agent:special:demo"},
+            {"job_id": "wc_job_second_456", "project": "agent:special:other"}
+        ]}}}
+    });
+    assert!(
+        mcp_tool_job_audit_correlation(Some("observe_jobs"), &mixed_projects)
+            .resolved_project
+            .is_none(),
+        "a multi-Project observe_jobs call must not be assigned to one Project"
+    );
 
     let ids = mcp_tool_action_audit_ids(
         true,
@@ -281,6 +298,8 @@ mod plugin_check;
 mod plugin_tools;
 #[path = "mcp_tests/protocol.rs"]
 mod protocol;
+#[path = "mcp_tests/request_policy.rs"]
+mod request_policy;
 #[path = "mcp_tests/response.rs"]
 mod response_tests;
 #[path = "mcp_tests/result_app.rs"]
@@ -404,4 +423,16 @@ async fn oauth_mcp_request(
         .map(str::to_string);
     let body = resp.take_json::<Value>().await.unwrap();
     (status, body, challenge)
+}
+
+#[test]
+fn readiness_audit_correlation_retains_exact_jobs_without_guessing_project() {
+    let body = json!({"result":{"structuredContent":{"success":true,"output":{
+        "wait_state":"ready", "ready":[{"job_id":"wc_job_A","status":"completed","outcome":"succeeded"}],
+        "pending_job_ids":["wc_job_B"], "project":"untrusted-guess"
+    }}}});
+    let correlation = mcp_tool_job_audit_correlation(Some("wait_for_job_readiness"), &body);
+    assert_eq!(correlation.observed_job_ids, vec!["wc_job_A", "wc_job_B"]);
+    assert!(correlation.resolved_project.is_none());
+    assert!(correlation.async_job_id.is_none());
 }

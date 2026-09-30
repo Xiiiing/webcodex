@@ -79,9 +79,22 @@ Workflow Session lifecycle is independent from the durable `wc_goal_*` Goal doma
 
 A `session_ref` is only a short model selector. The Server owns a durable mapping scoped to the authenticated principal and pins the ref to one exact canonical Workflow Session incarnation. Resolving it produces the canonical `wc_sess_*` before business authorization/dispatch; the ordinary Project visibility, Session authority, lifecycle, and guard checks then run unchanged. The ref is not a credential, bearer capability, recorder identity, or "current/recent Session" inference. If the pinned Session disappears or its exact incarnation cannot be proven, the old ref fails closed and is never recycled or silently retargeted. Canonical Session ids remain authoritative for persistence, audit, diagnostics, internal joins, and explicit API/CLI consumers.
 
+Model-facing `session_id` input schemas must admit `~sN` wherever the kernel accepts a Session selector, including exact resume and card presentation. Canonical-id-only input regexes would let a strict Host reject the ref before resolution. This does not widen output `session_id`, persisted IDs, or other identity domains: outputs retain canonical identity, and the separate `session_ref` field carries the selector. Unknown, malformed, foreign, or stale refs still fail in the existing resolver and authorization path. A retained Closed Session follows the same lifecycle rules as its canonical id: historical reads may succeed, but a selector never reopens it or permits a mutation denied to the canonical id.
+
 Canonical Session identity/retention is separate from in-memory residency. `Active` and `Closed` are business lifecycle states; hot/cold residency and LRU ordering are implementation details and never lifecycle transitions. Active canonical Sessions currently remain materialized hot. The configured `hot_session_capacity_target` is therefore an observability target rather than destructive authority: when Active Session count exceeds it, the store retains those Active identities instead of deleting them or turning later exact resume into `unknown_session_id`. Restart restore follows the same rule and never trims Active rows merely to satisfy that target.
 
 Closed historical rows use an independent bounded retention policy. Closed Sessions are coldified to compact durable JSON and remain queryable while retained; mutation remains denied and retention never reopens them. `historical_session_retention_limit` bounds retained Closed history only. When that explicit historical policy expires an old Closed row, the current v2 ledger has no tombstone shape, so a later lookup can no longer distinguish retention expiry from an identity that was never present. Adding explicit retention-expired tombstones is a separate follow-up and must not be approximated by deleting Active identities. The compatibility `max_sessions` status field now aliases the hot capacity target and must not be interpreted as permission to delete durable Active Sessions.
+
+Access recency is maintained by a store-owned ordered index with separate Closed
+eligibility; it is not business lifecycle or activity. Exact reads update that
+index without appending ledger events or scheduling a write. The background
+whole-ledger writer coalesces ordinary asynchronous dirty marks for at most a
+fixed 20 ms scheduling window from the first pending mark. Progress never resets
+that deadline. Explicit generation flushes and shutdown bypass coalescing, while
+preserving existing write ordering and persistence-error reporting. I/O can take
+longer; this is neither a fsync nor a power-loss guarantee. Ledger version 2 and
+its per-cycle full snapshot format are unchanged. Implementation evidence and
+tradeoffs: [SessionStore access and writes](../implementation/session-store-access-and-write-scheduling.md).
 
 Per-Session event and message tails remain independently bounded (`DEFAULT_MAX_EVENTS_PER_SESSION` and `DEFAULT_MAX_MESSAGES_PER_SESSION`); preserving a canonical Active identity does not turn its event/message history into an unbounded archive. The persistence wire shape remains ledger version 2 because this change alters retention/restore policy, not the serialized Session row schema. Existing Session rows already deleted by an older Server cannot be reconstructed by upgrading: the fix prevents future destructive capacity loss from the first upgraded snapshot onward.
 
@@ -422,27 +435,50 @@ variant remains for that retired name; `work_on_project` calls the shared coding
 workflow engine directly, with diagnostic projection controls available only to
 tests rather than as a Session-selection or compatibility surface.
 
+Requested `project.instructions` context on `work_on_project` reuses that call's
+resolved Project and instruction observation. Material scopes remain independently
+checked; incomplete observations are not re-read or promoted to complete. The
+semantic-navigation status probe runs concurrently with required bootstrap
+observations. Startup does not wait solely for LSP: `not_observed` with null
+availability means required observations finished first. Explicit LSP tools still
+obtain current provider truth.
+
 `work_on_project` also owns the optional managed-worktree bootstrap without
-creating a new authority or Session concept. On a fresh `client_id + path` call
-with `mode=worktree`, `path` is a source checkout: the selected Runner validates
-the source against its filesystem policy, resolves `base_ref` (or the source
-`HEAD`) to an exact commit, chooses and creates an isolated detached worktree,
-registers that worktree as an ordinary runtime Project, and only then creates the
-Workflow Session on that final Project. The Server never constructs a Runner-host
-worktree path or interprets the Git ref. `work_on_project` hides Project
-registration and managed-worktree bootstrap from the ordinary model workflow;
-Project authority itself is not removed.
+creating a new authority or Session concept. The canonical model-facing form is
+a fresh `project + mode=worktree` call. The Server first resolves and
+reauthorizes that registered source Project, derives its authoritative
+Runner/source checkout/root fingerprint, and passes that identity fence to the
+Runner. The Runner re-resolves the exact registered source, validates that the
+identity still matches, resolves `base_ref` (or the source `HEAD`) to an exact
+commit, derives its internal managed namespace from the source checkout,
+creates an isolated detached worktree, registers that worktree as an ordinary
+runtime Project, and only then creates the Workflow Session on that final
+Project. The model never selects the managed destination and does not need to
+reconstruct `client_id` or an absolute source path.
 
-An explicit `session_id` in worktree mode resumes only its already-authorized
-final managed Project. The Runner re-observes that registered worktree and its
-source provenance instead of creating another worktree; a provided `base_ref`
-must still resolve to the stored exact base commit. `recording_session_id`,
-`ClientWindow`, ACK metadata, source-path knowledge, and managed operation ids do
-not select or authorize the Project. Finishing or closing the Workflow Session
-does not remove the managed worktree or unregister its Project; later review,
-commit, push, PR, handoff, and investigation remain possible until a future
-explicit lifecycle operation says otherwise.
+`client_id + path + mode=worktree` remains a compatibility/bootstrap form.
+Its source path still passes the ordinary Runner filesystem/path-authority
+checks and it converges on the same Runner-owned managed-worktree manager. The
+Runner chooses the managed namespace inside its current filesystem policy so the
+resulting Project remains usable by ordinary file/shell/process tools without
+special path authority. If an explicit `allowed_roots` policy is narrowed to the
+source checkout itself and leaves no isolated sibling location, bootstrap fails
+closed with `managed_worktree_root_unavailable`; Project-first selection never
+widens the operator's filesystem policy.
 
+Creating a managed Project from a source Project is a Project transition, not a
+Session retarget. A source Project's `session_id` therefore fails closed with
+the ordinary exact-Project Session mismatch before managed creation. The
+caller continues with the returned managed Project/ref and its new Workflow
+Session. The compatibility path form may exactly resume an already-authorized
+managed Project; in that case the Runner re-observes the registered worktree
+and source provenance rather than creating another worktree, and a provided
+`base_ref` must still resolve to the stored exact base commit.
+`recording_session_id`, `ClientWindow`, ACK metadata, source-path knowledge,
+and managed operation ids do not select or authorize the Project. Finishing or
+closing the Workflow Session does not remove the managed worktree or unregister
+its Project; later review, commit, push, PR, handoff, and investigation remain
+possible until a future explicit lifecycle operation says otherwise.
 `work_on_project` deliberately does not use Workflow Session identity, transport
 identity, a client-window key, credentials, project identity, or Server lifetime
 as evidence that the current model still retains static bootstrap content. The
@@ -455,8 +491,10 @@ retention state. `include_extension_catalog` remains a separate caller-explicit
 selection-metadata preference.
 
 `guidance_profile` is a request-local presentation enum. Explicit selection wins;
-when omitted on MCP, `McpHostRuntimePolicy.profile` (configured by
-`WEBCODEX_MCP_HOST_PROFILE`) supplies the default, while non-MCP/internal omission
+when omitted on MCP, the current request's `McpHostRuntimePolicy.profile` supplies
+the default (`X-WebCodex-MCP-Profile`, otherwise deployment `WEBCODEX_MCP_HOST_PROFILE`).
+The MCP adapter creates an immutable runtime view; it never stores this preference
+in the Session or changes shared execution ownership. Non-MCP/internal omission
 falls back to `direct`. Available explicit values are `direct`, `host_code_mode` for
 Host-supplied native orchestration in every build, or `code_mode` for WebCodex nested
 orchestration only in Experimental Code Mode builds. Host-native guidance favors canonical batches and `search_and_read`,
@@ -756,13 +794,18 @@ durable/queryable sink for low-cardinality ergonomics telemetry. No second
 telemetry table or recorder is created. The shared ToolRuntime kernel owns the
 normal timer for a registered model-visible tool; the transport that already owns
 the outer Action Audit row then finalizes one `summary.model_ergonomics` object
-from the final model-facing ToolResult projection. A transport may use a bounded
+from the final model-facing ToolResult projection, retaining the canonical
+closed execution state captured before late model compaction. Execution
+ActionAudit receipts retain definition-authorized bounded lifecycle, validation
+counts/assertion verdicts, and source classifications, never raw command/script/stdout/stderr,
+diagnostic bodies, or source fence identity.
+Workflow Session evidence is consumed before projection. A transport may use a bounded
 fallback timer only after a runtime tool identity is established when MCP-only
 validation rejects the call before kernel entry or the MCP hard dispatch timeout
 prevents kernel completion. Batch items do not create generic invocation records,
 and hidden/internal helpers do not start this telemetry.
 
-The current durable generic record uses `schema_version = 11`. Older telemetry rows
+The current durable generic record uses `schema_version = 12`. Older telemetry rows
 remain naturally queryable and are not migrated or backfilled. The current
 record contains:
 
@@ -772,6 +815,10 @@ record contains:
 - optional `finish_summary_only` and bounded `work_on_project` request-shape facts;
 - optional edit measurement fields: `edit_surface`, `edit_outcome`, and
   `edit_conflict_kind`.
+- optional `readiness` summary for successful transient waits: `mode`,
+  `requested_jobs`, `unique_jobs`, `waited_ms`, `wait_state`, `ready_count`,
+  `pending_count`. It retains no logs, paths, credentials, or observation tokens;
+  sub-millisecond waits are not mislabeled as already-ready.
 - optional bounded Job convergence counts and salted exact-relation events;
   see [Server-only convergence measurement](job-reliability-and-concurrency.md#server-only-convergence-measurement).
   Exact serial predecessor links remain outer Action Audit metadata; they do

@@ -2,6 +2,7 @@ mod coding_agents;
 mod connections;
 mod diagnostics;
 mod environment;
+mod managed_instructions;
 mod mcp_providers;
 #[cfg(test)]
 mod projectless_tests;
@@ -72,6 +73,8 @@ struct ChatGptActivityProbe {
 
 pub struct AppState {
     core: Mutex<Option<DesktopCore>>,
+    desktop_data_dir: crate::desktop_data_dir::DesktopDataDir,
+    managed_instructions: Arc<crate::managed_instructions::ManagedInstructions>,
     ssh_resources: Mutex<crate::ssh_resources::SshResourcesManager>,
     published: Arc<RwLock<DesktopStateSnapshot>>,
     supervisor: SharedSupervisor,
@@ -81,10 +84,28 @@ pub struct AppState {
     shutdown_started: AtomicBool,
     connections: ConnectionRuntimes,
     update_check: tokio::sync::Mutex<()>,
+    updates: Arc<crate::updates::UpdateManager>,
 }
 
 impl AppState {
     pub fn new(data_dir: PathBuf, resource_dir: PathBuf) -> DesktopResult<Self> {
+        let desktop_data_dir = crate::desktop_data_dir::DesktopDataDir {
+            effective: data_dir,
+            source: crate::desktop_data_dir::DesktopDataDirSource::Tauri,
+            physical_resolution_changed: false,
+        };
+        Self::new_resolved(desktop_data_dir, resource_dir)
+    }
+
+    pub fn new_resolved(
+        desktop_data_dir: crate::desktop_data_dir::DesktopDataDir,
+        resource_dir: PathBuf,
+    ) -> DesktopResult<Self> {
+        let data_dir = desktop_data_dir.effective.clone();
+        let managed_instructions = Arc::new(crate::managed_instructions::ManagedInstructions::new(
+            data_dir.clone(),
+        ));
+        let updates = crate::updates::UpdateManager::new(data_dir.clone());
         let core = DesktopCore::new(data_dir, resource_dir)?;
         let published = Arc::clone(&core.published);
         let supervisor = Arc::clone(&core.supervisor);
@@ -92,6 +113,8 @@ impl AppState {
         let connections = core.connections.clone();
         Ok(Self {
             core: Mutex::new(Some(core)),
+            desktop_data_dir,
+            managed_instructions,
             ssh_resources: Mutex::new(crate::ssh_resources::SshResourcesManager::default()),
             published,
             supervisor,
@@ -101,6 +124,7 @@ impl AppState {
             shutdown_signal: CancellationSignal::new(),
             shutdown_started: AtomicBool::new(false),
             update_check: tokio::sync::Mutex::new(()),
+            updates,
         })
     }
 
@@ -262,6 +286,7 @@ impl AppState {
         project_path: Option<&str>,
     ) -> DesktopResult<DesktopStateSnapshot> {
         self.configure_environment(crate::models::EnvironmentInput {
+            service_scope: None,
             mode: "create".into(),
             server_url: None,
             project_path: project_path.map(str::to_owned),
@@ -325,6 +350,7 @@ impl AppState {
         project_path: &str,
     ) -> DesktopResult<DesktopStateSnapshot> {
         self.configure_environment(crate::models::EnvironmentInput {
+            service_scope: None,
             mode: "join".into(),
             server_url: Some(server_url.to_owned()),
             project_path: Some(project_path.to_owned()),
@@ -397,6 +423,7 @@ impl AppState {
             return;
         }
         self.shutdown_signal.cancel();
+        self.updates.cancel_download(false);
         self.operations.cancel_active_for_shutdown();
         self.connections.cancel_all();
         self.supervisor.lock().await.stop_all().await;
@@ -460,7 +487,12 @@ impl AppState {
         if result.is_ok() && cancellation.is_cancelled() {
             result = Err(cancelled_error());
         }
-        if result.is_err() && operation.kind == DesktopOperationKind::EnvironmentMigration {
+        if result.is_err()
+            && matches!(
+                operation.kind,
+                DesktopOperationKind::EnvironmentMigration | DesktopOperationKind::DesktopUpdate
+            )
+        {
             // Core's durable migration coordinator owns both restoration and
             // the unknown-result state. Generic supervisor cleanup could kill
             // a successfully restored original generation.
@@ -1290,9 +1322,11 @@ impl DesktopCore {
         );
         self.publish_snapshot();
 
-        let local_dir = self.data_dir.join("runtime").join("local");
-        let env_file = local_dir.join("webcodex.env");
-        let data_dir = local_dir.join("data");
+        let (env_file, data_dir) = local_runtime_paths(&self.data_dir);
+        let local_dir = env_file
+            .parent()
+            .expect("Desktop local runtime env file always has a parent")
+            .to_path_buf();
         tokio::fs::create_dir_all(&local_dir).await.map_err(|_| {
             DesktopError::new(
                 "desktop_state_unavailable",
@@ -2598,6 +2632,11 @@ fn machine_event_overflow_error(event: &Value) -> DesktopError {
     }))
 }
 
+pub(crate) fn local_runtime_paths(data_dir: &Path) -> (PathBuf, PathBuf) {
+    let local_dir = data_dir.join("runtime").join("local");
+    (local_dir.join("webcodex.env"), local_dir.join("data"))
+}
+
 fn local_enrollment_directory(data_dir: &Path, config: &StoredDesktopConfig) -> PathBuf {
     // Two reusable slots bound local credential storage while keeping login's
     // --overwrite away from the currently committed recovery identity. Resolve
@@ -3277,7 +3316,10 @@ fn preferred_connection(config: &StoredDesktopConfig) -> RegularConnectionPrefer
 fn apply_config_projection(snapshot: &mut DesktopStateSnapshot, config: &StoredDesktopConfig) {
     snapshot.persistent_environment = config.persistent_environment.clone();
     snapshot.can_repair_runner_credential = cfg!(windows)
-        && config.persistent_environment.is_some()
+        && config
+            .persistent_environment
+            .as_deref()
+            .is_some_and(environment::runner_uses_system_service)
         && config
             .topology
             .as_ref()

@@ -111,6 +111,30 @@ pub async fn update_tunnel_config(
     project_state_result(&app, state.update_tunnel_config(request).await)
 }
 
+#[tauri::command]
+pub async fn managed_instructions_read(
+    state: State<'_, AppState>,
+) -> DesktopResult<crate::managed_instructions::Snapshot> {
+    state.managed_instructions_read().await
+}
+
+#[tauri::command]
+pub async fn managed_instructions_save(
+    state: State<'_, AppState>,
+    request: crate::managed_instructions::SaveRequest,
+) -> DesktopResult<crate::managed_instructions::Snapshot> {
+    state.managed_instructions_save(request).await
+}
+
+#[tauri::command]
+pub async fn managed_instructions_enable(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: crate::managed_instructions::EnableRequest,
+) -> DesktopResult<DesktopStateSnapshot> {
+    project_state_result(&app, state.managed_instructions_enable(request).await)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRequest {
@@ -583,6 +607,47 @@ pub async fn check_for_updates(
     state.check_for_updates(manual).await
 }
 #[tauri::command]
+pub fn get_update_download_state(state: State<'_, AppState>) -> crate::updates::DownloadStatus {
+    state.get_update_download_state()
+}
+
+#[tauri::command]
+pub async fn download_update(
+    version: String,
+    state: State<'_, AppState>,
+) -> DesktopResult<crate::updates::UpdateStatus> {
+    state.download_update(&version).await
+}
+
+#[tauri::command]
+pub fn cancel_update_download(state: State<'_, AppState>) -> crate::updates::DownloadStatus {
+    state.cancel_update_download()
+}
+
+#[tauri::command]
+pub async fn set_automatic_update_download(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> DesktopResult<crate::updates::UpdateStatus> {
+    state.set_automatic_update_download(enabled).await
+}
+
+#[tauri::command]
+pub async fn install_verified_update(
+    version: String,
+    confirmed: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> DesktopResult<()> {
+    if state.install_verified_update(&version, confirmed).await? {
+        // Only the explicit Install confirmation authorizes this exit. The
+        // normal exit path closes Desktop-owned processes, not persistent services.
+        app.exit(0);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn remind_update_later(
     state: State<'_, AppState>,
 ) -> DesktopResult<crate::updates::UpdateStatus> {
@@ -595,7 +660,7 @@ pub async fn open_latest_release(state: State<'_, AppState>) -> DesktopResult<()
 
 #[tauri::command]
 pub fn get_desktop_build_info() -> webcodex_core::desktop_runtime_contract::MachineBuildInfo {
-    let mut info = webcodex_core::build_info::machine_build_info("webcodex-desktop");
+    let mut info = webcodex_build_info::machine_build_info("webcodex-desktop");
     info.version = env!("CARGO_PKG_VERSION").to_string();
     info
 }

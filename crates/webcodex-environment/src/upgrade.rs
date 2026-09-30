@@ -11,6 +11,8 @@ use std::io::Read;
 use std::path::{Component as PathComponent, Path, PathBuf};
 use webcodex_core::desktop_runtime_contract::{MachineBuildInfo, DESKTOP_RUNTIME_CONTRACT};
 mod desktop_tree;
+mod observation;
+pub use observation::{upgrade_observation, UpgradeObservation, UpgradeOutcome};
 
 const COMPONENTS: [&str; 4] = [
     "webcodex",
@@ -1219,7 +1221,7 @@ pub async fn verify_same_installed_package(
             != candidate
                 .artifacts
                 .get(name)
-                .ok_or_else(|| SetupDiagnostic::io())?
+                .ok_or_else(SetupDiagnostic::io)?
                 .sha256
         {
             return Err(error(
@@ -1714,7 +1716,7 @@ impl NativeEnvironment {
         journal: &mut UpgradeJournal,
     ) -> SetupResultValue<()> {
         journal.phase = Phase::Verifying;
-        save(store, &journal)?;
+        save(store, journal)?;
         for backup in &journal.programs {
             let artifact = &journal.candidate.artifacts[&backup.name];
             if digest(&backup.target)? != artifact.sha256 {
@@ -1759,7 +1761,7 @@ impl NativeEnvironment {
                     .any(|spec| spec.component == component)
             {
                 journal.replacement_started = true;
-                save(store, &journal)?;
+                save(store, journal)?;
             }
             for spec in journal
                 .services
@@ -2821,6 +2823,7 @@ mod tests {
                 schema_version: 1,
                 environment_id: "env-fixture".into(),
                 request: SetupRequest {
+                    service_scope: service::ServiceScope::System,
                     mode: EnvironmentMode::Join,
                     server_url: "http://127.0.0.1:1".into(),
                     project: None,

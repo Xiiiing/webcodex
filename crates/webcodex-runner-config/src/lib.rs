@@ -278,6 +278,10 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             // The running binary advertises this process-lifetime protocol
             // capability after installing its exact Go argv boundary.
             structured_go_test_json: false,
+            project_validation_v1: false,
+            project_build_v1: false,
+            project_validation_package_scope_v1: false,
+            project_validation_test_options_v1: false,
             // Like JSON parsing, first-class durable go_test support is
             // advertised by the running binary, never by generated static config.
             structured_go_test_tool: false,
@@ -318,6 +322,7 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             browser_observe: false,
             browser_control: false,
             browser_element_action_admission: false,
+            browser_batch: false,
             browser_launch: false,
             // Desktop observation is a runtime/platform capability and is never
             // claimed by generated static config.

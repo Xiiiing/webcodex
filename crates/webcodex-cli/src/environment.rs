@@ -3,7 +3,7 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use webcodex_environment::*;
 
-const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--project PATH | --no-project]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--credentials-file PATH]\ntunnel-status [PROFILE]\nremove-tunnel [PROFILE]\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\nmigrate-legacy-runner --join URL --project PATH --token-file PATH [--profile PROFILE] (Linux)\nmigrate-legacy-server --user NAME --token-file PATH --listen ORIGINAL_ADDR [--server-url URL] (Linux)\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-verify --candidate-dir PATH\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure and explicit migration).\n--runner enables local work without requiring an initial project.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nTunnel credentials use hidden input or a protected JSON file with tunnel_id and api_key.\n";
+const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--credentials-file PATH]\ntunnel-status [PROFILE]\nremove-tunnel [PROFILE]\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\nmigrate-legacy-runner --join URL --project PATH --token-file PATH [--profile PROFILE] (Linux)\nmigrate-legacy-server --user NAME --token-file PATH --listen ORIGINAL_ADDR [--server-url URL] (Linux)\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure and explicit migration).\n--runner enables local work without requiring an initial project.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nTunnel credentials use hidden input or a protected JSON file with tunnel_id and api_key.\n";
 
 #[derive(Default)]
 struct Input {
@@ -13,6 +13,7 @@ struct Input {
     project: Option<PathBuf>,
     no_project: bool,
     runner: bool,
+    scope: Option<service::ServiceScope>,
     directory: Option<PathBuf>,
     bin_dir: Option<PathBuf>,
     token_file: Option<PathBuf>,
@@ -25,6 +26,8 @@ struct Input {
     credentials_file: Option<PathBuf>,
     profile: Option<String>,
     upgrade_receipt: Option<PathBuf>,
+    installer_file: Option<PathBuf>,
+    installer_target: Option<String>,
     expected_runtime_dir: Option<PathBuf>,
     username: Option<String>,
     listen: Option<String>,
@@ -57,6 +60,7 @@ fn parse(args: &[String]) -> Result<Input, String> {
             "--project" => input.project = Some(PathBuf::from(value(&mut iter)?)),
             "--no-project" => input.no_project = true,
             "--runner" => input.runner = true,
+            "--scope" => input.scope = Some(value(&mut iter)?.parse()?),
             "--environment-dir" => input.directory = Some(PathBuf::from(value(&mut iter)?)),
             "--bin-dir" => input.bin_dir = Some(PathBuf::from(value(&mut iter)?)),
             "--candidate-dir" => input.candidate_dir = Some(PathBuf::from(value(&mut iter)?)),
@@ -64,6 +68,8 @@ fn parse(args: &[String]) -> Result<Input, String> {
             "--credentials-file" => input.credentials_file = Some(PathBuf::from(value(&mut iter)?)),
             "--profile" => input.profile = Some(value(&mut iter)?),
             "--upgrade-receipt" => input.upgrade_receipt = Some(PathBuf::from(value(&mut iter)?)),
+            "--installer-file" => input.installer_file = Some(PathBuf::from(value(&mut iter)?)),
+            "--installer-target" => input.installer_target = Some(value(&mut iter)?),
             "--expected-runtime-dir" => {
                 input.expected_runtime_dir = Some(PathBuf::from(value(&mut iter)?))
             }
@@ -89,6 +95,9 @@ fn parse(args: &[String]) -> Result<Input, String> {
             "Provide the credential for the selected path: a pairing code or a user token".into(),
         );
     }
+    if input.scope.is_some() && input.command != "configure" {
+        return Err("--scope selects a new environment during configure; resume/control use its saved scope".into());
+    }
     if input.runner && input.command != "configure" {
         return Err("--runner applies only to environment configure".into());
     }
@@ -99,6 +108,9 @@ fn parse(args: &[String]) -> Result<Input, String> {
         )
     {
         return Err("--development-build applies only to upgrade candidate verification".into());
+    }
+    if input.installer_file.is_some() && input.command != "installer-apply" {
+        return Err("--installer-file applies only to verified unified installer handoff".into());
     }
     if input.credentials_file.is_some() && input.command != "configure-tunnel" {
         return Err("--credentials-file applies only to configure-tunnel".into());
@@ -156,6 +168,82 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
         return Ok(USAGE.into());
     }
     let mut input = parse(args)?;
+    if input.command == "installer-apply" {
+        #[cfg(unix)]
+        {
+            use webcodex_environment::unified_update::{
+                apply_verified_installer, InstallerLaunchNotice, UpdateError,
+            };
+            let mut options = args.iter().skip(1);
+            while let Some(option) = options.next() {
+                match option.as_str() {
+                    "--json" => {},
+                    "--upgrade-receipt" | "--candidate-dir" | "--installer-file" | "--installer-target" => {
+                        options.next().ok_or("Missing installer handoff argument")?;
+                    }
+                    _ => return Err("installer-apply accepts only an owner receipt, candidate directory, verified installer file and exact installer target".into()),
+                }
+            }
+            let receipt = absolute(
+                &input
+                    .upgrade_receipt
+                    .take()
+                    .ok_or("--upgrade-receipt is required")?,
+            )?;
+            let candidate = absolute(
+                &input
+                    .candidate_dir
+                    .take()
+                    .ok_or("--candidate-dir is required")?,
+            )?;
+            let installer = absolute(
+                &input
+                    .installer_file
+                    .take()
+                    .ok_or("--installer-file is required")?,
+            )?;
+            let target = webcodex_environment::unified_update::InstallerTarget::parse(
+                input
+                    .installer_target
+                    .as_deref()
+                    .ok_or("--installer-target is required")?,
+            )
+            .ok_or("invalid --installer-target")?;
+            let emit = |notice: &InstallerLaunchNotice| {
+                if let Ok(mut bytes) = serde_json::to_vec(notice) {
+                    bytes.push(b'\n');
+                    let mut stdout = std::io::stdout().lock();
+                    // Losing the Desktop acknowledgement must not abort an
+                    // already-running package transaction or its recovery.
+                    let _ = stdout.write_all(&bytes);
+                    let _ = stdout.flush();
+                }
+            };
+            let mut acknowledged = false;
+            let result =
+                apply_verified_installer(&receipt, &candidate, &installer, target, |notice| {
+                    acknowledged = true;
+                    emit(&notice);
+                })
+                .await;
+            if !acknowledged {
+                emit(&InstallerLaunchNotice::not_started(
+                    result
+                        .as_ref()
+                        .err()
+                        .copied()
+                        .unwrap_or(UpdateError::RecoveryRequired),
+                ));
+            }
+            return result
+                .map(|()| String::new())
+                .map_err(|kind| serde_json::json!({"ok":false,"error_kind":kind}).to_string());
+        }
+        #[cfg(not(unix))]
+        return Err(
+            "Windows upgrade orchestration belongs to the verified unified NSIS installer".into(),
+        );
+    }
     #[cfg(unix)]
     if input.command == "installer-finish" {
         if args.iter().skip(1).any(|arg| arg != "--json") {
@@ -309,6 +397,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             };
             let default_url = format!("http://{reachable}");
             let request = SetupRequest {
+                service_scope: service::ServiceScope::System,
                 mode: EnvironmentMode::Create {
                     listen: listen.into(),
                 },
@@ -347,6 +436,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 return Err("Legacy migration preserves the original Runner and requires --join URL --project PATH --token-file PATH".into());
             }
             let request = SetupRequest {
+                service_scope: service::ServiceScope::System,
                 mode: EnvironmentMode::Join,
                 server_url: canonical_server_url(
                     input
@@ -465,6 +555,8 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                         .map_err(|e| e.to_string())?;
                 let binaries = discover_binaries(input.bin_dir.as_deref())?;
                 SetupRequest {
+                    service_scope: resolve_service_scope(&store, input.scope)
+                        .map_err(|e| e.to_string())?,
                     mode: if input.create {
                         EnvironmentMode::Create {
                             listen: "127.0.0.1:8080".into(),
@@ -699,12 +791,25 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
     }
 }
 
+fn observed_boolean(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "not observed",
+    }
+}
+
 fn render(result: &SetupResult, json: bool) -> Result<String, String> {
     if json {
         return serde_json::to_string_pretty(result)
             .map_err(|_| "Could not encode environment status".into());
     }
     let mut lines = vec![
+        format!(
+            "Service scope: {} ({})",
+            result.environment.request.service_scope.as_str(),
+            result.environment.request.service_scope.lifecycle()
+        ),
         format!("Server: {}", result.environment.request.server_url),
         format!("Configuration saved: {}", result.environment.configured),
         format!("Server reachable: {}", result.observation.server_reachable),
@@ -716,6 +821,53 @@ fn render(result: &SetupResult, json: bool) -> Result<String, String> {
             "Projects registered and visible: {}",
             result.observation.projects_visible.len()
         ));
+    }
+    if let Some(local) = &result.observation.local {
+        if let Some(linger) = local.linger_enabled {
+            lines.push(format!("Continue after Linux logout (linger): {linger}"));
+        }
+        lines.push(format!(
+            "User credential file: {}",
+            local.user_credential_file
+        ));
+        for row in &local.components {
+            let name = row
+                .profile
+                .as_ref()
+                .map(|p| format!("{} [{p}]", row.component))
+                .unwrap_or_else(|| row.component.clone());
+            if let Some(service) = &row.service {
+                lines.push(format!(
+                    "{name}: ownership={:?}, running={}, enabled={}",
+                    service.ownership,
+                    observed_boolean(service.running),
+                    observed_boolean(service.enabled)
+                ));
+            } else {
+                lines.push(format!("{name}: status unobserved"));
+            }
+            if row.component == "tunnel" {
+                lines.push(format!(
+                    "  Control plane ready: {}; local MCP ready: {}",
+                    observed_boolean(row.tunnel_ready),
+                    observed_boolean(row.local_mcp_ready)
+                ));
+            }
+            if let Some(error) = &row.diagnostic {
+                lines.push(error.to_string());
+            }
+        }
+        lines.push(match local.local_connection_ready {
+            Some(ready) => format!(
+                "Ready for ChatGPT connection: {} (local evidence only)",
+                observed_boolean(Some(ready))
+            ),
+            None => "Remote Server exposure: not checked by local environment status".into(),
+        });
+        lines.push("ChatGPT tool scan/use: not observed by environment status".into());
+        if local.profiles_truncated {
+            lines.push("Tunnel profiles truncated at 16; inspect exact profiles separately".into());
+        }
     }
     if let Some(fleet) = &result.observation.fleet {
         let display = |value: &str| {

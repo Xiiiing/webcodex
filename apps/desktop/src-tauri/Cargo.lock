@@ -5028,11 +5028,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "webcodex-admin"
+name = "webcodex-build-info"
 version = "0.4.3"
 dependencies = [
- "reqwest 0.12.28",
- "serde_json",
+ "webcodex-core",
 ]
 
 [[package]]
@@ -5066,10 +5065,12 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
+ "tempfile",
  "tokio",
  "toml_edit 0.25.13+spec-1.1.0",
  "url",
  "uuid",
+ "webcodex-build-info",
  "webcodex-core",
  "webcodex-environment",
  "webcodex-process",
@@ -5086,6 +5087,7 @@ dependencies = [
  "libc",
  "quick-xml",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -5093,7 +5095,6 @@ dependencies = [
  "toml 0.8.2",
  "url",
  "uuid",
- "webcodex-admin",
  "webcodex-core",
  "webcodex-runner-config",
  "windows-sys 0.61.2",

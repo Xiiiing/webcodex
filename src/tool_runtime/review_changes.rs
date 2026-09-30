@@ -5,8 +5,7 @@ use crate::auth::AuthContext;
 use webcodex_tool_contracts::tool_call::GitReviewScopeInput;
 
 use super::git_review_snapshot::{
-    caller_fingerprint, get_snapshot, insert_snapshot, GitReviewScope, GitReviewSnapshot,
-    GitReviewSourceIdentity,
+    caller_fingerprint, GitReviewScope, GitReviewSnapshot, GitReviewSourceIdentity,
 };
 use super::{ToolResult, ToolRuntime};
 
@@ -118,7 +117,8 @@ fn review_next_call(
     // Optional inputs are omitted, not nullable in the published tool schema.
     // Preserve explicit zero/empty values and the exact snapshot-bound scope.
     arguments.retain(|_, value| !value.is_null());
-    json!({"tool": "review_changes", "arguments": arguments})
+    super::SuggestedToolCall::mechanically_followable("review_changes", Value::Object(arguments))
+        .to_value()
 }
 
 fn encode_review_continuation(snapshot_id: &str, inner: &str) -> Option<String> {
@@ -243,7 +243,7 @@ impl ToolRuntime {
             let Some((snapshot_id, inner)) = decode_review_continuation(&continuation) else {
                 return review_changes_failure(&project, "invalid_continuation");
             };
-            let Some(snapshot) = get_snapshot(
+            let Some(snapshot) = self.review_snapshot(
                 snapshot_id,
                 &caller,
                 &resolved_project,
@@ -584,7 +584,7 @@ impl ToolRuntime {
                 )
             }
         };
-        let snapshot = insert_snapshot(GitReviewSnapshot::new(
+        let snapshot = self.insert_review_snapshot(GitReviewSnapshot::new(
             caller,
             resolved_project,
             session_id.clone(),
@@ -661,6 +661,9 @@ mod tests {
         expected["session_id"] = json!("wc_sess_test");
         expected["continuation"] = json!("exact-token");
         assert_eq!(next["arguments"], expected);
+        assert_eq!(next["follow_up_kind"], "mechanically_followable");
+        webcodex_tool_contracts::test_support::validate_generated_tool_call_against_registered_input_schema(&next)
+            .expect("review_changes next_call must pass the registered inputSchema");
     }
 
     #[test]

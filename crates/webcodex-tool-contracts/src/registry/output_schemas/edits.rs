@@ -298,42 +298,38 @@ fn conflicting_edit_ranges_schema() -> Value {
             },
             "required": ["edit_index", "start_line", "end_line"]
         }),
-        "At most the resolved source-line ranges for conflicting edits; derived from the authoritative transactional edit plan and contains no source or replacement text.",
+        "At most two resolved source ranges for conflicting edits; no source or replacement text.",
     );
     schema["maxItems"] = json!(2);
     schema
 }
 
 fn read_files_recovery_call_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-            "tool": {"type": "string", "const": "read_files"},
-            "arguments": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "project": {"type": "string", "minLength": 1},
+    super::common::suggested_tool_call_schema(
+        webcodex_core::runtime_contract::GeneratedFollowUpKind::MechanicallyFollowable,
+        "read_files",
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "project": {"type": "string", "minLength": 1},
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
                     "items": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 1,
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {"path": {"type": "string", "minLength": 1}},
-                            "required": ["path"]
-                        }
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {"path": {"type": "string", "minLength": 1}},
+                        "required": ["path"]
                     }
-                },
-                "required": ["project", "items"]
-            }
-        },
-        "required": ["tool", "arguments"]
-    })
+                }
+            },
+            "required": ["project", "items"]
+        }),
+        "Exact stale-source reread.",
+    )
 }
-
 pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
     match name {
         "apply_unified_diff" => Some(wrapped_output_schema(vec![
@@ -422,16 +418,17 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             ("recovery", apply_patch_recovery_schema()),
             ("retry_guidance", schema_type("string", "Bounded recovery guidance for deterministic no-mutation rejection.")),
         ])),
-        "edit_project_files" => Some(wrapped_output_schema(vec![
+        "edit_project_files" => {
+            let mut schema = wrapped_output_schema(vec![
             (
                 "dry_run",
-                schema_type("boolean", "No-write plan."),
+                json!({"type":"boolean"}),
             ),
             (
                 "applied_count",
-                schema_type("integer", "Applied file changes; zero for dry_run."),
+                json!({"type":"integer"}),
             ),
-            ("planned_count", schema_type("integer", "Planned file changes.")),
+            ("planned_count", json!({"type":"integer"})),
             ("change_summary", json!({"type":"object","additionalProperties":false,"properties":{
                 "requested_changes":{"type":"integer","minimum":1,"maximum":16},
                 "changed_files":{"type":"integer","minimum":0,"maximum":16},
@@ -441,20 +438,20 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             },"required":["requested_changes","changed_files","logical_edits","resolved_matches","warnings"]})),
             (
                 "ignored_noop_count",
-                schema_type("integer", "Ignored empty inserts."),
+                json!({"type":"integer"}),
             ),
             (
                 "changed",
-                schema_type("boolean", "Confirmed worktree change."),
+                json!({"type":"boolean"}),
             ),
             (
                 "would_change",
-                schema_type("boolean", "Plan would change the worktree."),
+                json!({"type":"boolean"}),
             ),
             ("files", apply_text_edits_file_summary_schema()),
             (
                 "changed_paths",
-                schema_type("array", "Touched paths."),
+                json!({"type":"array"}),
             ),
             (
                 "state_changed",
@@ -487,7 +484,7 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
                     "minItems": 2,
                     "maxItems": 2,
                     "items": {"type": "integer", "minimum": 0, "maximum": 15},
-                    "description": "Server-preflight indices [first occupant, conflicting change] for a repeated source/destination path. May be equal for a self-conflict. Identifies the conflict, not permission to merge sequential edits."
+                    "description": "Indices [first occupant, conflicting change] for a repeated path; equal means self-conflict."
                 }),
             ),
             (
@@ -513,7 +510,7 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             ("reread_required", schema_type("boolean", "Fresh read required.")),
             (
                 "candidate_ranges",
-                json!({"type":"array","maxItems":webcodex_core::apply_edits_shared::MAX_APPLY_TEXT_CONFLICT_CANDIDATES,"items":edit_candidate_range_schema(),"description":"Bounded candidate ranges; occurrence appears only when retry is revision-safe."}),
+                json!({"type":"array","maxItems":webcodex_core::apply_edits_shared::MAX_APPLY_TEXT_CONFLICT_CANDIDATES,"items":edit_candidate_range_schema(),"description":"Bounded candidates; occurrence only when revision-safe."}),
             ),
             (
                 "candidates_truncated",
@@ -531,7 +528,29 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
                 "recovery",
                 read_files_recovery_call_schema(),
             ),
-        ])),
+        ]);
+            let constraints = schema["allOf"]
+                .as_array_mut()
+                .expect("wrapped output schema allOf");
+            // On success the six model-compacted effect echoes are all-or-nothing
+            // (planned_count is optional in the canonical full form). Express only
+            // the presence relation here: canonical execution validation owns the
+            // value relationships, while this keeps the published schema bounded.
+            constraints.push(json!({
+                "not": {"allOf": [
+                    {"properties": {"success": {"const": true}}, "required": ["success"]},
+                    {"properties": {"output": {
+                        "anyOf": [
+                            {"required": ["dry_run"]}, {"required": ["execution_state"]},
+                            {"required": ["state_changed"]}, {"required": ["would_change"]},
+                            {"required": ["applied_count"]}, {"required": ["planned_count"]}
+                        ],
+                        "not": {"required": ["dry_run", "execution_state", "state_changed", "would_change", "applied_count"]}
+                    }}, "required": ["output"]}
+                ]}
+            }));
+            Some(schema)
+        },
         _ => None,
     }
 }

@@ -432,7 +432,11 @@ fn trace_reader_is_stateless_protocol_extension_admin_scoped_and_schema_static()
         .iter()
         .find(|tool| tool["name"] == "read_tool_trace")
         .expect("admin Stateless MCP 2026 trace reader");
-    assert_eq!(tool["inputSchema"]["required"], json!(["trace_ref"]));
+    // An omitted trace selects the bounded ActionAudit query; exact trace and
+    // query remain mutually exclusive at the shared reader boundary.
+    assert_eq!(tool["inputSchema"]["required"], json!([]));
+    assert!(tool["inputSchema"]["properties"]["query"].is_object());
+    assert!(tool["inputSchema"]["properties"]["trace_ref"].is_object());
     assert_eq!(tool["inputSchema"]["additionalProperties"], false);
     assert!(tool["inputSchema"]["properties"]["payload_index"].is_object());
     assert!(tool["outputSchema"]["properties"]["output"]["properties"]["payload"].is_object());
@@ -466,12 +470,19 @@ fn skill_runtime_tools_are_stateless_protocol_extensions_and_schema_static() {
         .collect::<Vec<_>>();
     assert_eq!(skill_names, vec!["skill_load"]);
 
-    let run_skill_resource = before["tools"]
+    assert!(!before["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "run_skill_resource")
-        .expect("run_skill_resource must be exposed");
+        .any(|tool| tool["name"] == "run_skill_resource"));
+    // The trusted execution contract stays canonical behind exact discovery.
+    let run_skill_resource = serde_json::to_value(
+        registered_tool_specs()
+            .into_iter()
+            .find(|spec| spec.name == "run_skill_resource")
+            .unwrap(),
+    )
+    .unwrap();
     assert!(run_skill_resource["inputSchema"]["properties"]
         .get("stdin")
         .is_none());
@@ -1869,10 +1880,10 @@ async fn mcp_compact_preserves_safety_patterns_and_wrapper_bounds() {
         schema("run_skill_resource")["properties"]["expected_definition_revision"]["pattern"],
         "^[0-9a-f]{64}$"
     );
-    // The identical opaque Session pattern remains on business Session inputs.
+    // Business Session selectors retain the canonical-or-ref pattern in compact schemas.
     assert_eq!(
         schema("work_on_project")["properties"]["session_id"]["pattern"],
-        "^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$"
+        "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
     );
     let properties = &schema("run_process")["properties"];
     let envelope = &properties["_wc"];
@@ -2072,8 +2083,24 @@ async fn mcp_compact_stateless_wrapper_ids_still_reject_malformed_invocations() 
 #[test]
 fn mcp_compact_common_copy_respects_tool_and_argument_boundaries() {
     use crate::mcp::discovery::{bound_description, compact_tool, INPUT_DESCRIPTION_MAX_CHARS};
-    let full = mcp_tools_list_payload_with_compact(false);
-    let compact = mcp_tools_list_payload_with_compact(true);
+    let mut full = mcp_tools_list_payload_with_compact(false);
+    let mut compact = mcp_tools_list_payload_with_compact(true);
+    // Exercise the same copy projection for the now gateway-only specialist,
+    // without asserting that it belongs in the Direct inventory.
+    let specialist = serde_json::to_value(
+        registered_tool_specs()
+            .into_iter()
+            .find(|spec| spec.name == "run_skill_resource")
+            .unwrap(),
+    )
+    .unwrap();
+    let mut compact_specialist = specialist.clone();
+    compact_tool(&mut compact_specialist);
+    full["tools"].as_array_mut().unwrap().push(specialist);
+    compact["tools"]
+        .as_array_mut()
+        .unwrap()
+        .push(compact_specialist);
     for (name, field, hints) in [
         (
             "run_process",
@@ -2181,15 +2208,15 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
             vec![
                 "observation_token",
                 "after_observation_token",
-                "never redispatches",
+                "Never redispatch",
             ],
         ),
         (
             "wait_for_job_terminal",
             vec![
-                "exact existing Job",
-                "returned continuation",
-                "Host continuation",
+                "Optional durable terminal attention",
+                "Not a blocking wait",
+                "current turn",
             ],
         ),
         (
@@ -2202,9 +2229,26 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
             ],
         ),
     ] {
-        let description = tools.iter().find(|tool| tool["name"] == name).unwrap()["description"]
-            .as_str()
-            .unwrap();
+        let descriptor = if matches!(name, "wait_for_job_terminal" | "present_agent_continuation") {
+            assert!(!tools.iter().any(|tool| tool["name"] == name));
+            // Keep testing dormant/gateway compact copy without asserting that
+            // these tools still occupy the ordinary direct inventory.
+            let definition = webcodex_tool_contracts::lookup_tool_definition(name).unwrap();
+            let mut descriptor = json!({
+                "name": name,
+                "description": definition.model_spec.unwrap().description,
+                "inputSchema": webcodex_tool_contracts::input_schema_for_tool(name),
+            });
+            compact_tool(&mut descriptor);
+            descriptor
+        } else {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap()
+                .clone()
+        };
+        let description = descriptor["description"].as_str().unwrap();
         for phrase in phrases {
             assert!(description.contains(phrase), "{name}: {description}");
         }
@@ -2360,15 +2404,14 @@ async fn mcp_tools_list_stateless_serialized_size_budget() {
     ]);
     let mut admin = scoped.clone();
     admin.scopes.push(crate::auth::SCOPE_ADMIN.to_string());
-    // Final Stateless result bytes include the optional _wc envelope and gateways,
-    // not the RPC envelope. Envelope V2 plus review convergence leave about
-    // 76/78/87 KB for anonymous/scoped/admin without Apps; review_changes is
-    // primary, show_changes stays direct for Apps/presentation, and exact legacy
-    // review stays gateway-only. Keep small growth headroom around compact surface.
+    // Final Stateless bytes include the optional _wc envelope and gateways,
+    // not the RPC envelope. Two durable waits use Gateway and two inactive
+    // continuation presentations are hidden. All 18 App-only protocol tools
+    // remain present with Apps on; they are not ordinary model-tool savings.
     for (label, auth, max_tools, max_bytes) in [
-        ("anonymous", None, 29, 77_000),
-        ("scoped", Some(&scoped), 30, 79_000),
-        ("admin", Some(&admin), 36, 88_000),
+        ("anonymous", None, 22, 60_000),
+        ("scoped", Some(&scoped), 23, 62_000),
+        ("admin", Some(&admin), 29, 71_000),
     ] {
         for app_enabled in [false, true] {
             let mut sizes = Vec::new();
@@ -2414,7 +2457,7 @@ async fn mcp_tools_list_stateless_serialized_size_budget() {
                 // Plan/continuation/read helpers.
                 let count_budget = max_tools + if app_enabled { 18 } else { 0 } + feature_tools;
                 let byte_budget =
-                    max_bytes + if app_enabled { 19_000 } else { 0 } + feature_tools * 4096;
+                    max_bytes + if app_enabled { 20_000 } else { 0 } + feature_tools * 4096;
                 if feature_tools == 0 {
                     assert_eq!(
                         count, count_budget,
@@ -2543,8 +2586,9 @@ async fn session_tools_stay_registered_and_follow_adaptive_routes() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert!(names.contains(&"session_handoff_summary"));
+    assert!(names.contains(&"session_discussion_summary"));
     for long_tail in [
+        "session_handoff_summary",
         "session_summary",
         "update_session_context",
         "validation_summary",
@@ -2584,14 +2628,8 @@ async fn session_tools_stay_registered_and_follow_adaptive_routes() {
         .to_lowercase()
         .contains("does not run cargo"));
 
-    let handoff = tools
-        .iter()
-        .find(|tool| tool["name"] == "session_handoff_summary")
-        .expect("Adaptive direct session_handoff_summary");
-    assert!(handoff["description"]
-        .as_str()
-        .unwrap()
-        .contains("exact session_id"));
+    let handoff = registered("session_handoff_summary");
+    assert!(handoff.description.contains("exact session_id"));
 
     let validation_summary = registered("validation_summary");
     assert_eq!(
@@ -3238,11 +3276,14 @@ async fn mcp_show_changes_distinguishes_recording_session_id_from_query_session_
             "tools/call",
             Some(Value::from(34)),
             mcp_2026_params(json!({
-                "name": "show_changes",
+                "name": "call_runtime_tool",
                 "arguments": {
-                    "project": project,
-                    "session_id": &query_session.session_id,
-                    "include_diff": false,
+                    "tool": "show_changes",
+                    "arguments": {
+                        "project": project,
+                        "session_id": &query_session.session_id,
+                        "include_diff": false
+                    },
                     "_wc": {"record": &tracking_session.session_id}
                 }
             })),
@@ -3514,6 +3555,8 @@ async fn project_grant_authority_is_identical_for_project_credential_and_share_o
                         "/tmp/project-grant-sibling".to_string(),
                         None,
                         "grant-scope-test-op".to_string(),
+                        None,
+                        None,
                         None,
                         Some(auth),
                     )
@@ -3809,8 +3852,7 @@ async fn mcp_2026_control_sidecars_gateway_strip_and_closed_schema() {
 #[test]
 fn compact_bootstrap_description_teaches_explicit_context_and_reuse() {
     use crate::mcp::discovery::compact_tool;
-    let mut tool =
-        json!({"name": "work_on_project", "description": "placeholder", "inputSchema": {}});
+    let mut tool = json!({"name": "work_on_project", "description": "placeholder", "inputSchema": {"properties":{"_wc":{}}}});
     compact_tool(&mut tool);
     let description = tool["description"].as_str().unwrap();
     for phrase in [
@@ -3831,4 +3873,77 @@ fn compact_bootstrap_description_teaches_explicit_context_and_reuse() {
     }
     assert!(!description.contains("Defaults return"));
     assert!(!description.contains("context_request"));
+}
+
+#[tokio::test]
+async fn compact_bootstrap_guidance_matches_advertised_context_capability() {
+    let runtime = test_runtime_with_mcp_settings(true, false);
+    for modern in [false, true] {
+        let params = if modern {
+            mcp_2026_params(json!({}))
+        } else {
+            json!({})
+        };
+        let McpOutcome::Ok(body) =
+            handle_mcp_request(&runtime, rpc("tools/list", Some(json!(8000)), params), None).await
+        else {
+            panic!("tools/list");
+        };
+        let tool = body["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "work_on_project")
+            .unwrap();
+        assert_eq!(
+            tool.pointer("/inputSchema/properties/_wc").is_some(),
+            modern
+        );
+        let description = tool["description"].as_str().unwrap();
+        assert_eq!(description.contains("_wc.context"), modern);
+        if !modern {
+            assert!(description.contains("read_files"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_published_validation_success_sparse_schema_contract() {
+    let runtime = test_runtime_with_mcp_settings(false, true);
+    let McpOutcome::Ok(value) = handle_mcp_request(
+        &runtime,
+        rpc("tools/list", Some(json!(8001)), mcp_2026_params(json!({}))),
+        None,
+    )
+    .await
+    else {
+        panic!("tools/list failed");
+    };
+    let tools = value["result"]["tools"].as_array().unwrap();
+    for (name, output) in [
+        ("cargo_check", json!({})),
+        ("cargo_test", json!({"tests_run_count":28})),
+        (
+            "cargo_test",
+            json!({"tests_run_count":28,"test_count_assertion":{"minimum_tests":20}}),
+        ),
+        (
+            "cargo_test",
+            json!({"tests_run_count":0,"require_tests":false}),
+        ),
+        ("cargo_test", json!({"no_run":true})),
+    ] {
+        let published = &tools.iter().find(|tool| tool["name"] == name).unwrap()["outputSchema"];
+        let mut wire = json!({"success":true,"error":null,"output":output});
+        wire["output"]["source_state"] =
+            json!({"freshness":"unproven","observed_mutation_fence":"uncrossed"});
+        crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&wire, published)
+            .unwrap();
+        wire["output"]["tests_failed"] = json!(0);
+        assert!(
+            crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&wire, published)
+                .is_err(),
+            "{name}"
+        );
+    }
 }

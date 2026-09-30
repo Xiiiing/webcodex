@@ -500,7 +500,7 @@ fn tool_specs_describe_default_coding_loop_preferences() {
         "continue independent work",
         "sparse terminal job attention",
         "observe_jobs only for logs/details/recovery",
-        "wait_for_job_terminal only when terminal outcome is a true dependency",
+        "bounded wait_for_job_readiness when terminal outcome blocks progress",
         "duration alone does not select a detached primitive",
     ] {
         assert!(
@@ -521,7 +521,7 @@ fn tool_specs_describe_default_coding_loop_preferences() {
         "continue independent work",
         "sparse terminal job attention",
         "observe_jobs only for logs/details/recovery",
-        "wait_for_job_terminal only when terminal outcome is a true dependency",
+        "bounded wait_for_job_readiness when terminal outcome blocks progress",
         "run_detached_process",
         "survive runner restart/upgrade/stop/replacement",
         "duration alone is not a reason to detach",
@@ -546,7 +546,7 @@ fn tool_specs_describe_default_coding_loop_preferences() {
         "continue independent work",
         "sparse terminal job attention",
         "observe_jobs only for logs/details/recovery",
-        "wait_for_job_terminal only when terminal outcome is a true dependency",
+        "bounded wait_for_job_readiness when terminal outcome blocks progress",
         "script bodies never become shell command text",
         "survive runner restart/upgrade/stop/replacement",
     ] {
@@ -1072,7 +1072,7 @@ fn observe_jobs_wake_policy_schema_is_closed_and_compatible() {
     );
     assert_eq!(
         wake["enum"],
-        serde_json::json!(["change", "terminal", "all_terminal"])
+        serde_json::json!(["change", "meaningful_change", "terminal", "all_terminal"])
     );
     assert_eq!(wake["default"], "change");
     assert!(!spec.input_schema["required"]
@@ -1083,6 +1083,7 @@ fn observe_jobs_wake_policy_schema_is_closed_and_compatible() {
         "No token",
         "no wait_secs",
         "wake_on=change",
+        "wake_on=meaningful_change",
         "wake_on=terminal",
         "useful progress is blocked on terminal outcome",
         "independent work remains",
@@ -1102,7 +1103,7 @@ fn observe_jobs_wake_policy_schema_is_closed_and_compatible() {
     let wake_description = wake["description"].as_str().unwrap();
     assert!(wake_description.contains("any terminal result unblocks progress"));
     assert!(wake_description.contains("predetermined set"));
-    for policy in ["change", "terminal", "all_terminal"] {
+    for policy in ["change", "meaningful_change", "terminal", "all_terminal"] {
         test_support::validate_schema_instance(
             &json!({"items": [{"job_id": "job"}], "wake_on": policy}),
             &spec.input_schema,

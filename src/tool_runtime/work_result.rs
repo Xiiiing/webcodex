@@ -16,6 +16,7 @@ use super::validation_events::{
 use super::{ToolResult, ToolRuntime};
 use webcodex_workflow_session::SessionSummary;
 
+const WORK_RESULT_JOB_LIMIT: usize = 8;
 const WORK_RESULT_SESSION_EVENT_LIMIT: usize = 200;
 const WORK_RESULT_VALIDATION_LIMIT: usize = 20;
 const WORK_RESULT_ACTIVITY_LIMIT: usize = 24;
@@ -26,6 +27,7 @@ const MAX_WORK_RESULT_BRANCH_CHARS: usize = 160;
 const MAX_WORK_RESULT_REVIEW_TOOLS: usize = 12;
 const MAX_WORK_RESULT_TOOL_CHARS: usize = 64;
 const MAX_WORK_RESULT_MESSAGES: usize = 6;
+const MAX_WORK_RESULT_FILE_CONTENT_CHARS: usize = 12_000;
 
 impl ToolRuntime {
     #[cfg(test)]
@@ -292,7 +294,7 @@ impl ToolRuntime {
         // The Results pane uses current Project changes and, when linked, Session
         // check/review evidence separately from sealed final task changes.
         let workspace_result = self
-            .show_changes_for_presentation(resolved_project.clone())
+            .workspace_metadata_for_presentation(resolved_project.clone())
             .await;
         let mut projection = if let Some(summary) = summary.as_ref() {
             let projection_summary = self.refresh_validation_source_summary(summary);
@@ -387,6 +389,11 @@ impl ToolRuntime {
         );
         projection["window_activity"] = work_result_window_activity_projection(&observed);
         projection["activity"] = work_result_activity_projection(&observed, summary.as_ref());
+        // Only the exact business Session supplied to this call selects Jobs.
+        // Window correlation may enrich activity but is never Job inventory authority.
+        projection["jobs"] = self
+            .work_result_jobs(&resolved_project, session_id.as_deref(), auth)
+            .await;
         projection["state_version"] = json!(work_result_state_version(&projection));
 
         if let Some(summary) = summary.as_ref() {
@@ -397,6 +404,65 @@ impl ToolRuntime {
             }
         }
         ToolResult::ok(json!({"work_result": projection}))
+    }
+
+    pub(crate) async fn work_result_jobs(
+        &self,
+        project: &str,
+        session_id: Option<&str>,
+        auth: Option<&AuthContext>,
+    ) -> Value {
+        let Some(session_id) = session_id else {
+            return json!({"available": false});
+        };
+        if auth.is_some_and(|auth| !auth.has_scope(SCOPE_RUNTIME_READ)) {
+            return json!({"available": false});
+        }
+        // This bounded snapshot reads Server records only: no lifecycle refresh,
+        // Runner request, attention cursor, terminal wake or Session event write.
+        let snapshots = self
+            .runner_registry
+            .snapshot_jobs_for_auth_filtered(
+                crate::runner_http::runner_access_from_auth(auth).as_ref(),
+                project,
+                session_id,
+                WORK_RESULT_JOB_LIMIT + 1,
+                WORK_RESULT_JOB_LIMIT + 1,
+            )
+            .await;
+        let active = snapshots
+            .iter()
+            .any(|snapshot| !super::jobs::is_terminal_job_status(&snapshot.job.status));
+        let items: Vec<Value> = snapshots
+            .iter()
+            .take(WORK_RESULT_JOB_LIMIT)
+            .map(|snapshot| self.work_result_job(snapshot))
+            .collect();
+        json!({"available": true, "active": active, "items": items, "truncated": snapshots.len() > WORK_RESULT_JOB_LIMIT})
+    }
+
+    pub(crate) fn work_result_job(
+        &self,
+        snapshot: &webcodex_runner_registry::JobAttentionSnapshot,
+    ) -> Value {
+        let summary = self.passive_job_attention_item(snapshot);
+        let mut item = json!({
+            "job_id": snapshot.job.job_id,
+            "tool": summary["tool"],
+            "status": snapshot.job.status,
+            "state": if super::jobs::is_terminal_job_status(&snapshot.job.status) { "terminal" } else { "active" },
+        });
+        for key in ["outcome", "recovery_state"] {
+            if let Some(value) = summary.get(key) {
+                item[key] = value.clone();
+            }
+        }
+        if summary["outcome"] == "passed"
+            && summary.pointer("/validation/passed") == Some(&Value::Bool(false))
+        {
+            item["outcome"] = json!("failed");
+        }
+        item
     }
 }
 
@@ -848,7 +914,7 @@ fn work_result_workspace(call_succeeded: bool, source: &Value) -> Value {
     let mut files = Vec::new();
     let mut unsafe_file_omitted = false;
     for source_file in source_files.iter().take(MAX_WORK_RESULT_FILES) {
-        match work_result_file(source_file) {
+        match work_result_file(source_file, source) {
             Some(file) => files.push(file),
             None => unsafe_file_omitted = true,
         }
@@ -926,7 +992,7 @@ fn work_result_workspace(call_succeeded: bool, source: &Value) -> Value {
     Value::Object(workspace)
 }
 
-fn work_result_file(source: &Value) -> Option<Value> {
+fn work_result_file(source: &Value, workspace: &Value) -> Option<Value> {
     let path = source
         .get("path")
         .and_then(Value::as_str)
@@ -961,9 +1027,91 @@ fn work_result_file(source: &Value) -> Option<Value> {
         file.insert("additions".to_string(), json!(additions));
         file.insert("deletions".to_string(), json!(deletions));
     }
+    if let Some(content) = work_result_file_content(workspace, &path) {
+        for (key, value) in content {
+            file.insert(key, value);
+        }
+    }
     Some(Value::Object(file))
 }
 
+fn work_result_file_content(workspace: &Value, path: &str) -> Option<Map<String, Value>> {
+    if let Some(file_hunks) = workspace
+        .get("hunks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|file| file.get("path").and_then(Value::as_str) == Some(path))
+    {
+        let mut text = String::new();
+        let mut partial = workspace
+            .get("hunks_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if let Some(hunks) = file_hunks.get("hunks").and_then(Value::as_array) {
+            for hunk in hunks {
+                if let Some(diff) = hunk.get("diff").and_then(Value::as_str) {
+                    if !text.is_empty() && !text.ends_with('\n') {
+                        text.push('\n');
+                    }
+                    text.push_str(diff);
+                }
+                if hunk.get("source_completeness").and_then(Value::as_str) != Some("complete") {
+                    partial = true;
+                }
+            }
+        }
+        if let Some((content, bounded)) =
+            bounded_multiline_text(&text, MAX_WORK_RESULT_FILE_CONTENT_CHARS)
+        {
+            let mut projected = Map::new();
+            projected.insert("content_kind".to_string(), json!("diff"));
+            projected.insert("content".to_string(), json!(content));
+            projected.insert("content_truncated".to_string(), json!(partial || bounded));
+            return Some(projected);
+        }
+    }
+
+    let preview = workspace
+        .get("untracked_previews")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|preview| preview.get("path").and_then(Value::as_str) == Some(path))?;
+    if preview.get("kind").and_then(Value::as_str) != Some("text") {
+        return None;
+    }
+    let mut text = String::new();
+    for line in preview
+        .get("lines")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(line) = line.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(line);
+    }
+    let (content, bounded) = bounded_multiline_text(&text, MAX_WORK_RESULT_FILE_CONTENT_CHARS)?;
+    let mut projected = Map::new();
+    projected.insert("content_kind".to_string(), json!("preview"));
+    projected.insert("content".to_string(), json!(content));
+    projected.insert(
+        "content_truncated".to_string(),
+        json!(
+            bounded
+                || preview
+                    .get("truncated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        ),
+    );
+    Some(projected)
+}
 fn work_result_head(source: Option<&Value>) -> Option<Value> {
     let source = source?.as_object()?;
     let commit = source.get("commit")?.as_str()?;
@@ -1150,6 +1298,21 @@ fn safe_relative_path(value: &str) -> Option<String> {
         return None;
     }
     Some(value.to_string())
+}
+
+fn bounded_multiline_text(value: &str, max_chars: usize) -> Option<(String, bool)> {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+    {
+        return None;
+    }
+    let count = value.chars().count();
+    if count <= max_chars {
+        return Some((value.to_string(), false));
+    }
+    Some((value.chars().take(max_chars).collect(), true))
 }
 
 fn bounded_plain_text(value: &str, max_chars: usize) -> Option<String> {

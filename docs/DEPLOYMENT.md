@@ -196,7 +196,7 @@ WEBCODEX_MCP_HOST_BUDGET_SECS=55
 
 `WEBCODEX_MCP_HOST_BUDGET_SECS` describes the Host-side MCP call/composition budget, not command runtime. Tool `timeout_secs` remains the execution lifetime and may be much larger. WebCodex never infers the profile from `clientInfo`, User-Agent, or a Host product name.
 
-`host_code_mode` describes orchestration supplied by the external MCP Host. It is separate from WebCodex's experimental internal Code Mode feature and its own nested-execution safeguards. `runtime_status` reports the effective non-secret policy under `effective_config.mcp_host`.
+`host_code_mode` describes orchestration supplied by the external MCP Host. It is separate from WebCodex's experimental internal Code Mode feature and its own nested-execution safeguards. `runtime_status.effective_config.mcp_host` reports the non-secret **deployment default**. Mixed clients can override their request strategy with `X-WebCodex-MCP-Profile` and reduce their waiting budget with `X-WebCodex-MCP-Budget-Secs`; configure these headers on each client connection, not as model arguments. See [request-local client policy](MCP.md#request-local-client-policy). No header means the deployment default; client brand is never auto-detected.
 
 ### Tool invocation tracing
 
@@ -434,14 +434,20 @@ manual config generation uses `webcodex runner init`.
 
 ## OAuth2
 
-OAuth2 remains disabled by default when a Server has no public origin. `webcodex server init --public-url https://your-domain.example` writes the public URL, enables OAuth with that exact issuer, and enables the shared-key OAuth bridge for ordinary hosted connect. For a hand-managed env file, the equivalent settings are:
+OAuth2 remains disabled by default when a Server has no public origin. `webcodex server init --public-url https://your-domain.example` writes the public URL and enables OAuth with that exact issuer. Direct shared-key auth and the shared-key OAuth bridge remain disabled across that public boundary unless you explicitly add `--allow-remote-shared-key`.
+
+For a hand-managed env file that intentionally enables remote shared-key auth and the shared-key OAuth bridge, configure:
 
 ```text
 WEBCODEX_PUBLIC_URL=https://your-domain.example
 WEBCODEX_OAUTH2_ENABLED=true
 WEBCODEX_OAUTH2_ISSUER=https://your-domain.example
+WEBCODEX_SHARED_KEY_ENABLED=true
+WEBCODEX_SHARED_KEY_REMOTE_ENABLED=true
 WEBCODEX_OAUTH2_SHARED_KEY_BRIDGE=true
 ```
+
+The same remote opt-in is required when direct shared-key auth is configured and an enabled QUIC Runner listener binds a non-loopback address; the default QUIC listen address is `0.0.0.0:8443`.
 
 For ordinary repository machines, no managed login is required. Connect with the MCP client's exact callback:
 

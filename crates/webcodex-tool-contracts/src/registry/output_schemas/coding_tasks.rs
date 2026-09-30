@@ -17,8 +17,7 @@ use super::files::{
 };
 #[cfg(any(test, feature = "root-test-support"))]
 use webcodex_core::runtime_contract::{
-    BUILTIN_CODING_WORKFLOW_CONTRACT, BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS,
-    BUILTIN_CODING_WORKFLOW_VERSION,
+    BUILTIN_CODING_WORKFLOW_CONTRACT, BUILTIN_CODING_WORKFLOW_VERSION,
 };
 
 fn finish_changes_schema() -> Value {
@@ -487,8 +486,14 @@ fn startup_workspace_schema() -> Value {
             "modified": {"type": "integer", "minimum": 0},
             "untracked": {"type": "integer", "minimum": 0},
             "staged": {"type": "integer", "minimum": 0},
+            "upstream_status": {"type": "string", "enum": ["available", "absent", "gone", "unobserved"]},
+            "upstream_reason_code": nullable_schema("string", "Stable upstream-tracking reason when observed."),
+            "upstream": nullable_schema("string", "Configured upstream branch when observed."),
             "ahead": nullable_schema("integer", "Ahead count when a reliable source is available."),
-            "behind": nullable_schema("integer", "Behind count when a reliable source is available.")
+            "behind": nullable_schema("integer", "Behind count when a reliable source is available."),
+            "changed_paths": {"type": "array", "maxItems": 20, "uniqueItems": true, "items": {"type": "string"}},
+            "changed_paths_total": {"type": "integer", "minimum": 0},
+            "changed_paths_truncated": {"type": "boolean"}
         },
         "required": [
             "status",
@@ -501,8 +506,14 @@ fn startup_workspace_schema() -> Value {
             "modified",
             "untracked",
             "staged",
+            "upstream_status",
+            "upstream_reason_code",
+            "upstream",
             "ahead",
-            "behind"
+            "behind",
+            "changed_paths",
+            "changed_paths_total",
+            "changed_paths_truncated"
         ],
         "additionalProperties": false
     })
@@ -522,8 +533,7 @@ fn startup_workflow_schema() -> Value {
                     "type": "array",
                     "description": "Default behavior for every coding/review task, including tasks without a named role. Guidance never grants authority.",
                     "minItems": 1,
-                    "maxItems": BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS,
-                    "items": {"type": "string", "maxLength": 320}
+                    "items": {"type": "string"}
                 },
                 "tool_strategy": {
                     "type": "object",
@@ -533,8 +543,7 @@ fn startup_workflow_schema() -> Value {
                         "guidance": {
                             "type": "array",
                             "minItems": 1,
-                            "maxItems": BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS,
-                            "items": {"type": "string", "maxLength": 320}
+                            "items": {"type": "string"}
                         }
     ,
                         "host_orchestration": {
@@ -619,8 +628,7 @@ fn startup_workflow_role_schema() -> Value {
             "guidance": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS,
-                "items": {"type": "string", "maxLength": 320}
+                "items": {"type": "string"}
             }
         },
         "required": ["purpose", "guidance"],
@@ -935,11 +943,12 @@ fn startup_semantic_navigation_schema() -> Value {
                     "not_applicable",
                     "agent_unavailable",
                     "agent_capability_unavailable",
+                    "not_observed",
                     "probe_timeout",
                     "probe_failed"
                 ]
             },
-            "available": nullable_schema("boolean", "Observed semantic-navigation availability. Null means the bounded startup status probe timed out or failed without an availability observation; this is advisory, not unavailability."),
+            "available": nullable_schema("boolean", "Observed semantic-navigation availability. Null means startup finished without waiting for availability, or the bounded status probe timed out or failed; this is advisory, not unavailability."),
             "provider": nullable_schema("string", "Semantic provider when applicable."),
             "capability": nullable_schema("string", "Bounded advertised capability summary."),
             "reason_code": nullable_schema("string", "Stable semantic-navigation reason.")
@@ -1094,6 +1103,7 @@ fn semantic_navigation_schema() -> Value {
                     "not_applicable",
                     "agent_unavailable",
                     "agent_capability_unavailable",
+                    "not_observed",
                     "probe_timeout",
                     "probe_failed"
                 ]
@@ -1208,6 +1218,20 @@ fn work_on_project_output_schema() -> Value {
             "git_available": nullable_schema("boolean", "Emitted when bounded Git inspection is explicitly unavailable; omission means no exceptional Git-unavailable fact."),
             "branch": nullable_schema("string", "Current branch when observed."),
             "head": nullable_schema("string", "Current full HEAD commit when observed."),
+            "upstream_status": {"type": "string", "enum": ["available", "absent", "gone"]},
+            "upstream_reason_code": schema_type("string", "Stable noteworthy upstream-tracking reason such as upstream_gone."),
+            "upstream": schema_type("string", "Observed configured upstream branch."),
+            "ahead": {"type": "integer", "minimum": 0, "description": "Observed commits ahead of the configured upstream, including zero."},
+            "behind": {"type": "integer", "minimum": 0, "description": "Observed commits behind the configured upstream, including zero."},
+            "changed_paths": {
+                "type": "array",
+                "maxItems": 20,
+                "uniqueItems": true,
+                "items": {"type": "string"},
+                "description": "Bounded already-observed dirty/conflicted paths from the startup Git snapshot; omitted when none were returned."
+            },
+            "changed_paths_total": {"type": "integer", "minimum": 1, "description": "Total changed paths observed by the same startup snapshot; emitted with changed_paths."},
+            "changed_paths_truncated": {"type": "boolean", "const": true, "description": "Emitted only when changed_paths is a bounded subset."},
             "clean": nullable_schema("boolean", "Legacy compatibility field; normal clean/dirty state is represented by status and may omit this field."),
             "conflicts": {"type": "integer", "minimum": 1}
         },
@@ -1246,7 +1270,7 @@ fn work_on_project_output_schema() -> Value {
         "type": "object",
         "properties": {
             "supported": {"type": "boolean"},
-            "available": nullable_schema("boolean", "Observed semantic-navigation availability. Null means the bounded startup status probe timed out or failed without an availability observation; this does not lower coding readiness."),
+            "available": nullable_schema("boolean", "Observed semantic-navigation availability. Null means startup finished without waiting for availability, or the bounded status probe timed out or failed; this does not lower coding readiness."),
             "status": {
                 "type": "string",
                 "enum": [
@@ -1258,6 +1282,7 @@ fn work_on_project_output_schema() -> Value {
                     "not_applicable",
                     "agent_unavailable",
                     "agent_capability_unavailable",
+                    "not_observed",
                     "probe_timeout",
                     "probe_failed"
                 ]
@@ -1386,26 +1411,21 @@ fn work_on_project_output_schema() -> Value {
         ),
         (
             "suggested_call",
-            json!({
-                "type": "object",
-                "description": "Parser-ready recovery observation emitted when work_on_project can identify one exact safe next call.",
-                "properties": {
-                    "tool": {"type": "string", "const": "list_runners"},
-                    "arguments": {
-                        "type": "object",
-                        "properties": {
-                            "include_projects": {"type": "boolean", "const": false},
-                            "summary_only": {"type": "boolean", "const": true}
-                        },
-                        "required": ["include_projects", "summary_only"],
-                        "additionalProperties": false
-                    }
-                },
-                "required": ["tool", "arguments"],
-                "additionalProperties": false
-            }),
-        ),
-        (
+            super::common::suggested_tool_call_schema(
+                webcodex_core::runtime_contract::GeneratedFollowUpKind::FallbackRecovery,
+                "list_runners",
+                json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "include_projects": {"type": "boolean", "const": false},
+                        "summary_only": {"type": "boolean", "const": true}
+                    },
+                    "required": ["include_projects", "summary_only"]
+                }),
+                "Recovery observation when work_on_project cannot resolve one exact Runner.",
+            ),
+        ),        (
             "suggested_next_actions",
             array_schema(schema_type("string", "Short suggested action."), "Bounded non-default suggested next actions. Omitted when there is nothing more informative than beginning the requested task."),
         ),

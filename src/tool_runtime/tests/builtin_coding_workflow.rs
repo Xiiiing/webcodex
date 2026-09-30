@@ -1,7 +1,8 @@
 use crate::tool_runtime::registry;
 use crate::tool_runtime::startup_brief::{
     builtin_coding_workflow_projection, validate_schema_instance_for_test,
-    BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS,
+    BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEMS,
+    BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEM_CHARS,
 };
 use serde_json::{json, Value};
 
@@ -16,8 +17,23 @@ fn workflow_schema() -> Value {
         .clone()
 }
 
+fn assert_guidance_within_soft_target(guidance: &Value) {
+    let guidance = guidance.as_array().expect("guidance array");
+    assert!(
+        guidance.len() <= BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEMS,
+        "built-in guidance exceeded soft item-count target"
+    );
+    for item in guidance {
+        assert!(
+            item.as_str().expect("guidance string").chars().count()
+                <= BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEM_CHARS,
+            "built-in guidance exceeded soft per-item character target"
+        );
+    }
+}
+
 #[test]
-fn builtin_coding_workflow_defaults_are_required_and_bounded() {
+fn builtin_coding_workflow_defaults_are_required_but_soft_budgets_are_not_wire_limits() {
     let workflow = builtin_coding_workflow_projection(Default::default());
     assert!(workflow["model_protocol"]["context_sidecar"]
         .as_str()
@@ -26,18 +42,33 @@ fn builtin_coding_workflow_defaults_are_required_and_bounded() {
     let schema = workflow_schema();
     validate_schema_instance_for_test(&workflow, &schema).unwrap();
 
+    assert_guidance_within_soft_target(&workflow["guidance"]);
+    assert_guidance_within_soft_target(&workflow["tool_strategy"]["guidance"]);
+    assert_guidance_within_soft_target(&workflow["roles"]["independent_review"]["guidance"]);
+
     let mut missing = workflow.clone();
     missing.as_object_mut().unwrap().remove("guidance");
     assert!(validate_schema_instance_for_test(&missing, &schema).is_err());
 
-    for guidance in [
-        json!([]),
-        json!(vec!["rule"; BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS + 1]),
-        json!(["x".repeat(321)]),
+    let mut empty = workflow.clone();
+    empty["guidance"] = json!([]);
+    assert!(validate_schema_instance_for_test(&empty, &schema).is_err());
+
+    let overflow = json!(vec![
+        "x".repeat(
+            BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEM_CHARS + 1
+        );
+        BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEMS + 1
+    ]);
+    for pointer in [
+        "/guidance",
+        "/tool_strategy/guidance",
+        "/roles/independent_review/guidance",
     ] {
-        let mut invalid = workflow.clone();
-        invalid["guidance"] = guidance;
-        assert!(validate_schema_instance_for_test(&invalid, &schema).is_err());
+        let mut relaxed = workflow.clone();
+        *relaxed.pointer_mut(pointer).expect("guidance path") = overflow.clone();
+        validate_schema_instance_for_test(&relaxed, &schema)
+            .unwrap_or_else(|error| panic!("{pointer} retained ergonomic hard bound: {error}"));
     }
 
     let mut legacy_role = workflow.clone();
@@ -92,8 +123,8 @@ fn builtin_coding_workflow_defaults_cover_unnamed_tasks_without_granting_authori
         "passive Job attention",
         "observe_jobs is for logs/details/recovery",
         "list_jobs is identity recovery",
-        "wait_for_job_terminal only when terminal outcome is a true dependency",
-        "no independent work remains",
+        "no automatic next turn",
+        "finish ready work",
         "After Rust stabilizes, format once",
     ] {
         assert!(defaults.contains(boundary), "missing guidance: {boundary}");
@@ -192,6 +223,7 @@ fn host_code_mode_strategy_is_bounded_guidance_only() {
     let mut direct = builtin_coding_workflow_projection(CodingGuidanceProfile::Direct);
     let mut host = builtin_coding_workflow_projection(CodingGuidanceProfile::HostCodeMode);
     validate_schema_instance_for_test(&host, &workflow_schema()).unwrap();
+    assert_guidance_within_soft_target(&host["tool_strategy"]["guidance"]);
     assert_eq!(host["tool_strategy"]["profile"], "host_code_mode");
     let strategy = strategy_text(&host);
     for phrase in [
@@ -201,19 +233,24 @@ fn host_code_mode_strategy_is_bounded_guidance_only() {
         "cargo_check(packages)",
         "one edit_project_files batch",
         "do not Promise.all same-kind micro-calls",
-        "Known independent cross-tool read-only observations",
-        "Host Promise.allSettled",
-        "partial evidence is useful",
-        "Promise.all only for true all-or-nothing",
+        "Independent cross-tool read-only observations",
+        "Promise.allSettled",
+        "partial evidence",
+        "Promise.all for all-or-nothing",
         "search_and_read",
         "one Host cell",
-        "Do not return to the model merely because one child ToolResult arrived",
+        "Child-call completion alone is not a boundary",
         "mechanically determined",
-        "Natural model-turn boundaries",
+        "Return to the model for",
         "semantic choice",
         "ambiguous result",
         "new user decision",
         "authority/permission",
+        "effect uncertainty",
+        "reread_required=true",
+        "direct_retry_safe=false",
+        "stops effectful replay",
+        "not mutation retry authority",
         "outcome_unknown",
         "competing recovery",
         "unresolved mutation intent",
@@ -222,17 +259,25 @@ fn host_code_mode_strategy_is_bounded_guidance_only() {
         "observation_ref",
         "read_revision",
         "failure/recovery fields",
-        "hide top-level Job bookkeeping",
-        "text(JSON.stringify(fullResult))",
+        "emit compact evidence",
         "execution_state=pending",
-        "retain the continuation as fallback",
-        "does not make observe_jobs mechanically determined",
-        "finish independent calls",
-        "repeated same-Job polling",
-        "return when useful DAG work is exhausted",
-        "Arm one terminal wait only when terminal blocks progress",
+        "retain exact Job identity/continuation as fallback",
+        "Job terminal does not imply mechanically_followable",
+        "currently-ready independent calls",
+        "observe_jobs heartbeat polling",
+        "wait_for_job_readiness join barrier",
+        "entire exact blocked set",
+        "one terminal Job can unlock a useful branch",
+        "all only when every blocked dependency is required",
+        "Never per-Job waits, Promise.race",
+        "largest safe value from the remaining Host activation budget",
+        "45s maximum",
+        "do not prefer fixed 10/15/20s slices",
+        "recompute ready work and the blocked set",
+        "do not mechanically repeat the same-set wait",
+        "Run to quiescence",
         "freeze covered source",
-        "invalidate that evidence",
+        "invalidate evidence",
         "does not require WebCodex nested Code Mode",
         "not verified by WebCodex",
     ] {
@@ -338,19 +383,62 @@ fn code_mode_strategy_changes_only_guidance_and_teaches_compact_composition() {
 }
 
 #[test]
-fn tool_strategy_schema_requires_one_known_bounded_profile() {
+fn tool_strategy_schema_requires_one_known_profile_and_closed_shape() {
     let workflow = builtin_coding_workflow_projection(Default::default());
     let schema = workflow_schema();
     for strategy in [
         json!({}),
         json!({"profile":"unknown","guidance":["rule"]}),
         json!({"profile":"direct","guidance":[]}),
-        json!({"profile":"direct","guidance":["x".repeat(321)]}),
-        json!({"profile":"direct","guidance":vec!["rule"; 9]}),
         json!({"profile":"direct","guidance":["rule"],"code_mode":{}}),
     ] {
         let mut invalid = workflow.clone();
         invalid["tool_strategy"] = strategy;
         assert!(validate_schema_instance_for_test(&invalid, &schema).is_err());
+    }
+}
+
+#[test]
+fn sparse_pending_receipts_rely_on_complete_static_scheduling_guidance() {
+    use crate::tool_runtime::tool_inputs::CodingGuidanceProfile;
+    for profile in [
+        CodingGuidanceProfile::Direct,
+        CodingGuidanceProfile::HostCodeMode,
+    ] {
+        let workflow = builtin_coding_workflow_projection(profile);
+        let text = workflow.to_string();
+        for rule in [
+            "continue independent work",
+            "finish ready work",
+            "wait_for_job_readiness join",
+            "any may unblock a branch",
+            "all requires every blocker",
+            "never mechanically refill",
+            "observe_jobs is for logs/details/recovery",
+            "Never retry/redispatch",
+            "no automatic next turn",
+            "fallback_recovery",
+        ] {
+            assert!(
+                text.contains(rule),
+                "missing static pending guidance: {rule}"
+            );
+        }
+        assert!(!workflow["guidance"]
+            .to_string()
+            .contains("wait_for_job_terminal"));
+        assert!(!workflow["tool_strategy"]
+            .to_string()
+            .contains("wait_for_job_terminal"));
+        if profile == CodingGuidanceProfile::HostCodeMode {
+            for rule in [
+                "join barrier",
+                "Cell return is not turn completion",
+                "do not mechanically repeat the same-set wait",
+                "fallback_recovery never auto-runs",
+            ] {
+                assert!(text.contains(rule), "missing Host guidance: {rule}");
+            }
+        }
     }
 }

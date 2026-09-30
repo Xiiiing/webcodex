@@ -215,8 +215,14 @@ fn assert_builtin_workflow(output: &Value) {
         "passive Job attention",
         "observe_jobs is for logs/details/recovery",
         "list_jobs is identity recovery",
-        "wait_for_job_terminal only when terminal outcome is a true dependency",
-        "no independent work remains",
+        "Keep one execution/Job",
+        "finish ready work",
+        "one wait_for_job_readiness join",
+        "any may unblock a branch",
+        "all requires every blocker",
+        "Deadline recomputes work/set",
+        "no automatic next turn",
+        "Never retry/redispatch",
     ] {
         assert!(defaults.contains(phrase), "workflow guidance: {phrase}");
     }
@@ -271,25 +277,17 @@ fn assert_builtin_workflow(output: &Value) {
         .as_str()
         .unwrap();
     for phrase in [
+        "Goal workflow is on-demand",
+        "do not require a Goal",
         "work_on_project.goal_context",
-        "get_goal/present_goal_plan",
         "choose explicitly among multiple candidates",
         "never infer from Project/Window/title/recency",
-        "ordinary new substantial multi-step/cross-turn",
-        "prepare_goal_workflow",
-        "exact current Workflow Session",
-        "completion_conditions",
-        "optional explicit controller Agent",
-        "Host continuation setup/readiness remains separate",
-        "Low-level create_goal and associate_goal_workflow_session remain available",
-        "Tiny one-step",
-        "independently of AGENTS.md",
+        "webcodex.goal_workflow",
     ] {
         assert!(goal_workflow.contains(phrase), "{phrase}");
     }
-    let continuation = workflow["model_protocol"]["goal_continuation"]
-        .as_str()
-        .unwrap();
+    let details = crate::model_workflow::ModelWorkflowPolicy::default().goal_workflow_projection();
+    let continuation = details["continuation"].as_str().unwrap();
     for phrase in [
         "exact explicit durable controller Agent",
         "Reuse the same Agent",
@@ -301,9 +299,7 @@ fn assert_builtin_workflow(output: &Value) {
     ] {
         assert!(continuation.contains(phrase), "{phrase}");
     }
-    let checkpoint = workflow["model_protocol"]["goal_checkpoint"]
-        .as_str()
-        .unwrap();
+    let checkpoint = details["checkpoint"].as_str().unwrap();
     for phrase in [
         "After a plan phase completes",
         "_wc.control.before.goal_progress",
@@ -345,8 +341,14 @@ fn assert_builtin_workflow(output: &Value) {
     assert!(!review_guidance.is_empty());
     assert!(
         review_guidance.len()
-            <= crate::tool_runtime::startup_brief::BUILTIN_CODING_WORKFLOW_MAX_GUIDANCE_ITEMS
+            <= crate::tool_runtime::startup_brief::BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEMS
     );
+    assert!(review_guidance.iter().all(|item| {
+        item.as_str().is_some_and(|text| {
+            text.chars().count()
+                <= crate::tool_runtime::startup_brief::BUILTIN_CODING_WORKFLOW_GUIDANCE_TARGET_ITEM_CHARS
+        })
+    }));
     let serialized = workflow.to_string().replace("Stalled is not offline", "");
     for forbidden in ["ChatGPT", "browser", "another window", "online", "offline"] {
         assert!(

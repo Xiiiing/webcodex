@@ -110,9 +110,16 @@ pub struct ToolRuntime {
     pub(crate) ssh_resource_gateway: Arc<crate::ssh_resource_gateway::SshResourceGatewayRuntime>,
     pub(crate) coding_agent_runs: Arc<super::coding_agent::CodingAgentServerState>,
     pub runtime_info: Arc<RuntimeInfo>,
-    /// Server-side MCP Host timing policy. This adapts MCP waiting only and is
-    /// never forwarded to Runner execution.
+    /// Effective MCP Host timing/guidance policy for this runtime view. The
+    /// shared deployment runtime uses the deployment policy; request-local MCP
+    /// clones may narrow or switch this preference without changing authority or
+    /// execution lifetime.
     pub(crate) mcp_host_policy: crate::mcp_host::McpHostRuntimePolicy,
+    /// Immutable deployment snapshot reported by runtime diagnostics. Request-local
+    /// views must never rewrite this operator-facing configuration evidence.
+    pub(crate) deployment_mcp_host_policy: crate::mcp_host::McpHostRuntimePolicy,
+    /// Immutable deployment recommendation/interaction snapshot; never admission.
+    pub(crate) model_workflow_policy: crate::model_workflow::ModelWorkflowPolicy,
     #[cfg(feature = "workspace-checkpoints")]
     pub(crate) checkpoint_store: checkpoint::CheckpointStore,
     pub(crate) sessions: sessions::SessionStore,
@@ -123,6 +130,11 @@ pub struct ToolRuntime {
     /// Clones share the registry; a Server runtime restart creates a new epoch.
     pub(crate) read_revisions: Arc<super::read_revisions::ReadRevisionRegistry>,
     pub(crate) read_cache: Arc<super::read_cache::ReadCache>,
+    /// Runtime-owned presentation snapshots. Clones share retention; independent
+    /// runtimes do not. Neither registry survives a runtime restart.
+    pub(super) review_snapshots:
+        Arc<std::sync::Mutex<super::git_review_snapshot::GitReviewSnapshotRegistry>>,
+    pub(super) changes_snapshots: Arc<std::sync::Mutex<super::changes::ChangesSnapshotRegistry>>,
     pub(crate) validation_sources: Arc<super::validation_source::ValidationSourceRegistry>,
     /// Process-local Project mutation serialization used only by orchestration
     /// frontends. Direct first-class mutations deliberately bypass this registry.
@@ -223,6 +235,8 @@ impl ToolRuntime {
             coding_agent_runs: Arc::new(super::coding_agent::CodingAgentServerState::default()),
             runtime_info,
             mcp_host_policy: crate::mcp_host::McpHostRuntimePolicy::default(),
+            deployment_mcp_host_policy: crate::mcp_host::McpHostRuntimePolicy::default(),
+            model_workflow_policy: crate::model_workflow::ModelWorkflowPolicy::default(),
             #[cfg(feature = "workspace-checkpoints")]
             checkpoint_store: checkpoint::CheckpointStore::default(),
             sessions: sessions::SessionStore::default(),
@@ -233,6 +247,8 @@ impl ToolRuntime {
                 super::coding_task::DEFAULT_REPOSITORY_OVERVIEW_PROBE_TIMEOUT,
             read_revisions: Arc::new(super::read_revisions::ReadRevisionRegistry::new()),
             read_cache: Arc::new(super::read_cache::ReadCache::default()),
+            review_snapshots: Arc::default(),
+            changes_snapshots: Arc::default(),
             validation_sources: Arc::new(
                 super::validation_source::ValidationSourceRegistry::default(),
             ),
@@ -293,6 +309,33 @@ impl ToolRuntime {
         policy: crate::mcp_host::McpHostRuntimePolicy,
     ) -> Self {
         self.mcp_host_policy = policy;
+        self.deployment_mcp_host_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_request_mcp_host_policy(
+        mut self,
+        policy: crate::mcp_host::McpHostRuntimePolicy,
+    ) -> Self {
+        self.mcp_host_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_model_workflow_policy(
+        mut self,
+        policy: crate::model_workflow::ModelWorkflowPolicy,
+    ) -> Self {
+        self.model_workflow_policy = policy;
+        // Preserve bindings and durable state when building from a runtime that
+        // already has its communication store. This changes observation only.
+        self.agent_continuations = self
+            .agent_continuations
+            .take()
+            .map(|controller| controller.with_mcp_app_resume_mode(policy.mcp_app_resume));
+        self.job_terminal_continuations = self
+            .job_terminal_continuations
+            .take()
+            .map(|controller| controller.with_mcp_app_resume_mode(policy.mcp_app_resume));
         self
     }
 
@@ -313,9 +356,10 @@ impl ToolRuntime {
     }
 
     pub(crate) fn with_communication_database(mut self, db: Arc<crate::Database>) -> Self {
-        self.agent_continuations = Some(crate::agent_wake::AgentContinuationController::new(
-            db.clone(),
-        ));
+        self.agent_continuations = Some(
+            crate::agent_wake::AgentContinuationController::new(db.clone())
+                .with_mcp_app_resume_mode(self.model_workflow_policy.mcp_app_resume),
+        );
         self.communication_db = Some(db);
         self
     }
@@ -326,7 +370,8 @@ impl ToolRuntime {
         controller: crate::job_terminal_attention::JobTerminalContinuationController,
     ) -> Self {
         self.job_terminal_db = Some(db);
-        self.job_terminal_continuations = Some(controller);
+        self.job_terminal_continuations =
+            Some(controller.with_mcp_app_resume_mode(self.model_workflow_policy.mcp_app_resume));
         self
     }
 

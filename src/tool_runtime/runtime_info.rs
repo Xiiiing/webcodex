@@ -32,6 +32,16 @@ pub(crate) struct ListRunnersOptions {
 #[derive(Debug, Clone)]
 pub struct RuntimeInfo {
     pub auth_enabled: bool,
+    /// Raw base flag (`WEBCODEX_SHARED_KEY_ENABLED`) captured at Runtime
+    /// construction, before the remote-boundary policy is applied.
+    pub shared_key_configured: bool,
+    /// Effective direct shared-key policy captured at Runtime construction.
+    /// Unlike `shared_key_configured`, this is false at a remote boundary
+    /// unless the explicit remote opt-in is configured.
+    pub shared_key_enabled: bool,
+    /// Raw explicit remote opt-in (`WEBCODEX_SHARED_KEY_REMOTE_ENABLED`)
+    /// captured at Runtime construction.
+    pub shared_key_remote_enabled: bool,
     pub configured_public_url: Option<String>,
     pub oauth2_enabled: bool,
     pub oauth2_shared_key_bridge_enabled: bool,
@@ -69,6 +79,9 @@ impl RuntimeInfo {
             .filter(|s| !s.is_empty());
         Self {
             auth_enabled,
+            shared_key_configured: crate::auth::shared_key_enabled(),
+            shared_key_enabled: crate::auth::direct_shared_key_enabled_with_quic(config, quic_cfg),
+            shared_key_remote_enabled: crate::auth::shared_key_remote_enabled(),
             configured_public_url,
             oauth2_enabled: config.oauth2.enabled,
             oauth2_shared_key_bridge_enabled: config.oauth2.enabled
@@ -89,19 +102,23 @@ impl ToolRuntime {
     pub(crate) fn effective_config_status(&self) -> Value {
         json!({
             "auth": {
+                "shared_key_configured": self.runtime_info.auth_enabled
+                    && self.runtime_info.shared_key_configured,
                 "shared_key_enabled": self.runtime_info.auth_enabled
-                    && crate::auth::shared_key_enabled(),
+                    && self.runtime_info.shared_key_enabled,
+                "shared_key_remote_enabled": self.runtime_info.auth_enabled
+                    && self.runtime_info.shared_key_remote_enabled,
                 "anonymous_enabled": self.runtime_info.auth_enabled
                     && crate::auth::allow_anonymous_enabled(),
                 "oauth2_enabled": self.runtime_info.oauth2_enabled,
                 "oauth2_shared_key_bridge_enabled": self.runtime_info.oauth2_shared_key_bridge_enabled,
             },
             "mcp_host": {
-                "profile": self.mcp_host_policy.profile.as_str(),
-                "host_budget_secs": self.mcp_host_policy.host_budget_secs,
-                "initial_job_handoff_secs": self.mcp_host_policy.initial_job_handoff_secs,
-                "max_sync_wait_secs": self.mcp_host_policy.max_sync_wait_secs,
-                "continuation_wait_secs": self.mcp_host_policy.continuation_wait_secs,
+                "profile": self.deployment_mcp_host_policy.profile.as_str(),
+                "host_budget_secs": self.deployment_mcp_host_policy.host_budget_secs,
+                "initial_job_handoff_secs": self.deployment_mcp_host_policy.initial_job_handoff_secs,
+                "max_sync_wait_secs": self.deployment_mcp_host_policy.max_sync_wait_secs,
+                "continuation_wait_secs": self.deployment_mcp_host_policy.continuation_wait_secs,
             },
             "tool_request_trace_mode": crate::config::tool_request_trace_mode().as_str(),
         })
@@ -525,7 +542,7 @@ impl ToolRuntime {
             "service": "webcodex",
             "version": env!("CARGO_PKG_VERSION"),
             "build": {"git_commit": build.git_commit, "git_dirty": build.git_dirty},
-            "mcp_host": {"profile": self.mcp_host_policy.profile.as_str()},
+            "mcp_host": {"profile": self.deployment_mcp_host_policy.profile.as_str()},
             "projects": {"count": projects, "online_count": online_projects, "status": if projects > 0 { "ok" } else { "no_projects" }},
             "jobs": sparse_job_counts(&runtime_job_counts(jobs)),
             "connection": connection
@@ -596,15 +613,15 @@ impl ToolRuntime {
         let clients = std::slice::from_ref(client);
         if sparse {
             return ToolResult::ok(self.sparse_runtime_status(
-                &clients,
+                clients,
                 &selected_jobs,
-                Some(&client),
+                Some(client),
             ));
         }
         let now = chrono::Utc::now().timestamp();
-        let project_count = enabled_projects_count(&client);
+        let project_count = enabled_projects_count(client);
         let online_project_count = if client.connected { project_count } else { 0 };
-        let target_compatibility = version_compatibility(&clients);
+        let target_compatibility = version_compatibility(clients);
         let target_runner = target_compatibility
             .pointer("/runners/0")
             .cloned()
@@ -659,16 +676,16 @@ impl ToolRuntime {
                 "runner_protocol_generation": client.runner_protocol_generation.get(),
                 "transport": client.transport,
                 "last_seen": client.last_seen,
-                "last_seen_age_secs": last_seen_age_secs(&client, now),
+                "last_seen_age_secs": last_seen_age_secs(client, now),
                 "pending_requests": client.pending_requests,
                 "active_jobs": active_jobs_for_client(&selected_jobs, &client.client_id),
-                "job_concurrency": job_concurrency_for_client(&client, &selected_jobs),
+                "job_concurrency": job_concurrency_for_client(client, &selected_jobs),
                 "projects_count": project_count,
                 "project_inventory": client.project_inventory,
                 "build": client.build,
                 "coding_agent_providers": safe_provider_inventory(client.coding_agent_providers.as_deref()),
             }],
-            "summary": runner_health_summary(&clients),
+            "summary": runner_health_summary(clients),
         });
         let tool_names: Vec<String> = model_visible_tool_definitions()
             .map(|definition| definition.name.to_string())
@@ -687,7 +704,7 @@ impl ToolRuntime {
             "coding_agent_providers": safe_provider_inventory(client.coding_agent_providers.as_deref()),
             "project_count": project_count,
             "active_jobs": runner_active,
-            "job_concurrency": job_concurrency_for_client(&client, &selected_jobs),
+            "job_concurrency": job_concurrency_for_client(client, &selected_jobs),
             "compatibility_status": target_runner.get("status").cloned().unwrap_or(Value::Null),
             "protocol_compatibility": target_runner.get("protocol_compatibility").cloned().unwrap_or(Value::Null),
             "build_alignment": target_runner.get("build_alignment").cloned().unwrap_or(Value::Null),
@@ -1605,6 +1622,9 @@ impl Default for RuntimeInfo {
     fn default() -> Self {
         Self {
             auth_enabled: false,
+            shared_key_configured: false,
+            shared_key_enabled: false,
+            shared_key_remote_enabled: false,
             configured_public_url: None,
             oauth2_enabled: false,
             oauth2_shared_key_bridge_enabled: false,
