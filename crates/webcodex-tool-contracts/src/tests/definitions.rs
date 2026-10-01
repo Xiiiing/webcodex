@@ -575,7 +575,9 @@ fn every_runtime_tool_has_an_explicit_fail_closed_audit_contract() {
                 "{} Session context policy must declare at least one bounded field",
                 definition.name
             ),
-            ToolAuditContextPolicy::Omit | ToolAuditContextPolicy::WorkingTreeStatus => {}
+            ToolAuditContextPolicy::Omit
+            | ToolAuditContextPolicy::WorkingTreeStatus
+            | ToolAuditContextPolicy::TaskOutputs => {}
         }
         if definition.audit_policy().execution.detail == ToolAuditExecutionDetail::Omit {
             assert_eq!(
@@ -931,6 +933,7 @@ fn adaptive_runtime_direct_declarations_are_visible_ranked_and_unique() {
     for (name, expected_rank) in [
         ("import_conversation_files_to_project", 55),
         ("project_artifact", 56),
+        ("job_write_input", 71),
         ("run_script", 74),
         ("run_shell", 75),
         ("observe_jobs", 80),
@@ -1214,11 +1217,11 @@ fn turn_economy_descriptors_stay_converged_and_bounded() {
         "expected_read_revision",
         "Exact edits fail closed on ambiguity",
         "replace_range",
-        "same original snapshot",
-        "preflighted transactionally",
+        "from that snapshot",
+        "preflight transactionally",
         "dry_run",
-        "show_changes",
-        "structured validation",
+        "review_changes when Git review is useful",
+        "task-appropriate validation",
         "outcome_unknown",
     ] {
         assert!(

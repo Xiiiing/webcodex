@@ -38,6 +38,7 @@ mod git;
 mod runner_authorization;
 mod runner_config;
 mod runner_instructions;
+mod task_outputs;
 mod trace_diagnostics;
 #[cfg(test)]
 pub(crate) use git::{framed_clean_show_changes_test_stdout, framed_show_changes_test_block};
@@ -53,6 +54,7 @@ mod helpers;
 mod hygiene;
 mod hygiene_tools;
 mod job_attention;
+mod job_input;
 mod job_query;
 mod job_terminal_wait;
 mod job_tools;
@@ -181,6 +183,7 @@ pub(crate) use webcodex_tool_runtime_contracts::tool_result::{
     RECOVERY_KIND_VALUES,
 };
 
+pub(crate) use model_references::SessionSelectorError;
 #[cfg(test)]
 pub(crate) use project_resolution::ProjectResolverErrorKind;
 pub(crate) use project_resolution::{runner_project_runtime_id, ProjectResolverError};
