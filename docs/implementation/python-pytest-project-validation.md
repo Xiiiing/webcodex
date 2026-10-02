@@ -19,8 +19,10 @@ Virtual environments are selected through the existing profile/PATH configuratio
 without creating or searching for environments. A five-second Runner-owned probe
 checks Python 3 and pytest availability with null stdin/output and managed process
 tree cleanup. Probe and actual spawn use the same resolved executable and profile
-environment, including configured PYTHONPATH. Missing tooling returns definite
-not-started validation unavailability. No installation or fallback occurs.
+environment, including configured PYTHONPATH. `PYTEST_ADDOPTS` is removed because
+pytest parses it as extra command-line argv before root/config discovery; structured
+validation owns that argv. Missing tooling returns definite not-started validation
+unavailability. No installation or fallback occurs.
 
 The parser accepts a complete final pytest terminal summary only. Missing,
 truncated, duplicate, malformed or contradictory summaries cannot prove counts.
@@ -50,8 +52,10 @@ target and policy; existing Cargo/Go sparse receipts are unchanged.
 running binary advertises it independently of local Python/pytest installation.
 Explicit Python planning and every Python Job admission check that capability;
 Auto may discover Python on the Runner but cannot enqueue it without current
-support. Admission and post-queue replan fences cover pyproject/pytest.ini/
-.pytest.ini/tox.ini/setup.cfg content, in addition to existing root/argv identity.
+support. Admission and post-queue replan fences cover pytest configuration from
+the selected Python cwd through the registered Project root. If no recognized
+Project-local config stops pytest's upward discovery, an ambient parent
+pytest/config/setup marker fails closed instead of influencing the Job.
 
 Focused validation commands:
 

@@ -2416,7 +2416,7 @@ fn project_validation_pytest_probe_uses_profile_python3_and_pins_spawn_program()
     let temp = crate::tests::executable_tempdir();
     let python = temp.path().join("python3");
     let capture = temp.path().join("probe");
-    std::fs::write(&python,"#!/bin/sh\nif [ \"$1\" = '-c' ]; then printf 'probe' > \"$CAPTURE\"; exit 0; fi\nprintf 'spawn' >> \"$CAPTURE\"\n").unwrap();
+    std::fs::write(&python,"#!/bin/sh\nif [ \"$1\" = '-c' ]; then printf 'probe' > \"$CAPTURE\"; exit 0; fi\nif [ -n \"${PYTEST_ADDOPTS+x}\" ]; then printf 'leaked' >> \"$CAPTURE\"; else printf 'spawn' >> \"$CAPTURE\"; fi\n").unwrap();
     std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o700)).unwrap();
     let profile = PreparedShellProfile {
         profile_name: "python-profile".into(),
@@ -2426,6 +2426,10 @@ fn project_validation_pytest_probe_uses_profile_python3_and_pins_spawn_program()
         env_snapshot: std::collections::HashMap::from([
             ("PATH".into(), temp.path().to_string_lossy().into_owned()),
             ("CAPTURE".into(), capture.to_string_lossy().into_owned()),
+            (
+                "PYTEST_ADDOPTS".into(),
+                "-c ../../outside/pytest.ini".into(),
+            ),
         ]),
     };
     let mut command = configured_pytest_job_command(

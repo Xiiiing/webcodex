@@ -212,6 +212,10 @@ pub(crate) fn configured_pytest_job_command(
         .stderr(Stdio::null());
     super::scripts::apply_script_environment(&mut probe, shell, profile)
         .map_err(|_| unavailable())?;
+    // PYTEST_ADDOPTS is parsed as additional command-line argv before pytest
+    // resolves rootdir/config. Structured validation owns the complete argv, so
+    // ambient profile/shell values must not widen selection or inject flags.
+    probe.env_remove("PYTEST_ADDOPTS");
     if stop_requested.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
         return Err(unavailable());
     }
@@ -237,6 +241,7 @@ pub(crate) fn configured_pytest_job_command(
     command.args(args);
     super::scripts::apply_script_environment(&mut command, shell, profile)
         .map_err(|_| unavailable())?;
+    command.env_remove("PYTEST_ADDOPTS");
     Ok(command)
 }
 
