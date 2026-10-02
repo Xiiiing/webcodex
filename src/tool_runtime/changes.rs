@@ -954,7 +954,7 @@ dd if="$tmp" bs=1 count={CHANGES_METADATA_SOURCE_BYTES} 2>/dev/null
         let script = format!(
             "git --no-pager ls-tree -z {} -- {}",
             snapshot.final_tree,
-            shell_single_quote(&file.path)
+            shell_single_quote(&format!(":(literal){}", file.path))
         );
         let entry = self
             .run_project_internal_posix_script_capture(&snapshot.project, script, 30, None)

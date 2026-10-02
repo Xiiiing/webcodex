@@ -1035,6 +1035,8 @@ async fn work_result_content_pages_preserve_utf8_snapshot_scope_and_preview_boun
     fs::create_dir(tmp.path().join("nested")).unwrap();
     fs::write(tmp.path().join("nested/file[1].md"), "# nested\n").unwrap();
     #[cfg(unix)]
+    fs::write(tmp.path().join(":(glob)*.md"), "# literal pathspec magic\n").unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink("unicode.md", tmp.path().join("link.md")).unwrap();
     let runtime = test_runtime();
     let auth = auth_context(None, true);
@@ -1149,6 +1151,24 @@ async fn work_result_content_pages_preserve_utf8_snapshot_scope_and_preview_boun
         let result = ui_files(&runtime, client, &project, None, request(path, 0), &auth).await;
         assert!(result.success, "{path}: {:?}", result.error);
         assert_eq!(result.output["work_result_files"]["content"], expected);
+        assert_eq!(result.output["work_result_files"]["complete"], true);
+    }
+    #[cfg(unix)]
+    {
+        let result = ui_files(
+            &runtime,
+            client,
+            &project,
+            None,
+            request(":(glob)*.md", 0),
+            &auth,
+        )
+        .await;
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            result.output["work_result_files"]["content"],
+            "# literal pathspec magic\n"
+        );
         assert_eq!(result.output["work_result_files"]["complete"], true);
     }
     for (path, offset) in [
