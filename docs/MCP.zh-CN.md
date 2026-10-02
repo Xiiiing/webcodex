@@ -51,7 +51,7 @@ WebCodex scope 不会扩大这些客户端侧权限。
 
 如果 ChatGPT 自身返回 `FORBIDDEN: This conversation does not support developer MCPs`
 （或提示当前会话已禁用 developer MCP server），在有相反证据之前应先按 Host/conversation
-admission 问题处理。如果 Host 根本没有 dispatch `runtime_status`，这段文本并不是
+admission 问题处理。如果 Host 根本没有 dispatch `get_runtime_status`，这段文本并不是
 WebCodex tool result。修改 credential 或 Runner 配置前，先从独立路径确认 Server/Runner；
 完整流程见[故障排查](TROUBLESHOOTING.zh-CN.md)。
 
@@ -82,7 +82,7 @@ Direct 默认执行 handoff=10 秒、同步/观察上限=50 秒；Host Code Mode
 命令 `timeout_secs`、Job 身份、权限、执行生命周期及内部编排上限不变。
 `work_on_project.guidance_profile` 仍只覆盖当次指导文本；后续 context refresh
 按其自身请求策略处理。API transport、tools/list、App admission、错误语义及
-`WEBCODEX_MCP_TEXT_JSON_COMPAT` 均不改变。runtime_status 中的 mcp_host 继续
+`WEBCODEX_MCP_TEXT_JSON_COMPAT` 均不改变。get_runtime_status 中的 mcp_host 继续
 表示部署默认值，而非所有客户端当前请求的策略。
 
 默认在当前 turn 完成工作：先做独立工作，依赖 Job 时进行一次有界
@@ -119,6 +119,32 @@ credential。独立/network-accessible Server 仍默认关闭，不应使用它�
 
 如果在 Windows 上使用普通独立 Server + Runner 并通过 OpenAI Tunnel 接入，或排查“本地 `/readyz` 正常但 ChatGPT Connector 创建失败”的情况，见 [Windows + OpenAI Secure MCP Tunnel 深入实操](WINDOWS_OPENAI_TUNNEL.zh-CN.md)。它是深入配置/排障文档，不是普通用户第一次必须阅读的教程。
 
+## 对话侧边栏中的 Work Result
+
+`present_work_result` 在首次成功的 Project 操作后展示一次当前 Window 的工作结果。
+支持对话侧边栏的 Host 可以用空参数对象调用公开的界面展示
+`work_result_thread_panel` 入口。入口只恢复同一认证主体、同一 Host Window 中最近一次
+成功展示的 Project，以及该次展示显式传入的业务 Session。其他操作或失败的展示不能
+重新指定侧边栏目标。
+
+侧边栏默认打开 Review，依次展示 Changed files / 按需 Diff、Session 检查结果和
+sealed Final Changes。Activity / Collaboration 保留在次级页签；Project / Window /
+Session 标识收进默认折叠的 Diagnostics。inline card 继续采用 Activity 优先的布局，
+打开 Review 不会提前加载所有 Diff。
+
+已打开的侧边栏在刷新时保留原 Project 和显式 Session 选择；Window 关联的 Session
+证据不会成为刷新授权依据。重新打开才选择更新的成功展示记录。缺少稳定 Window
+或展示绑定时拒绝打开，每次读取仍校验当前授权和快照边界。完整文件 / Markdown
+预览、行或选区回传对话留待后续版本。
+
+展示调用会保存这条窗口绑定，但不会启动 live Window activity；侧边栏入口和 App
+刷新调用也不会启动 live Window activity。当前界面资源是
+`ui://webcodex/work-result/v16`，旧版资源 URI 不再提供模板，避免缓存界面调用已退役的工具名。
+
+界面展示入口保留默认的 model/App 可见性；App-only 桥接工具只返回数据，不声明
+`ui.resourceUri`。ChatGPT 刷新工具时会拒绝声明界面资源的私有工具。更新 Server
+的工具描述后，应先在 ChatGPT 插件设置中刷新已有 App 的工具，再验证新入口。
+
 ## 已有 Server
 
 对于已经明确配置为 shared-key client 接入的 hosted Server，使用 operator 提供的 credential
@@ -141,7 +167,7 @@ OAuth 仍是独立的高级身份路径。
 
 ### Adaptive Runtime routing
 
-WebCodex 只有一个 model-facing MCP runtime contract：**Adaptive Runtime**。Canonical `ToolDefinition` rank 决定 direct tools；普通 model-visible long-tail tools 通过 `call_runtime_tool` 调用；server-owned protocol capability 与 MCP App admission 可以为对应请求加入 hidden extension。启动时不再选择 model surface。`tool_manifest(tool_name=...)` 只负责 discovery，不会动态向 Host 注册一个新 tool。exact manifest 的 `route.primary` 给出首选 callable；普通 direct tool 还会给出经 `call_runtime_tool` 的 `route.fallback`，用于 Host 当前没有该 direct callable 的情况；显式 MCP App presentation tool 会标明 Apps enabled 时该 fallback 被禁止。direct/gateway 只改变 presentation，不会绕过目标工具的 authentication、Project authority、permission、Runner capability、Session 或 safety checks。
+WebCodex 只有一个 model-facing MCP runtime contract：**Adaptive Runtime**。Canonical `ToolDefinition` rank 决定 direct tools；普通 model-visible long-tail tools 通过 `call_runtime_tool` 调用；server-owned protocol capability 与 MCP App admission 可以为对应请求加入 hidden extension。启动时不再选择 model surface。`read_tool_manifest(tool_name=...)` 只负责 discovery，不会动态向 Host 注册一个新 tool。exact manifest 的 `route.primary` 给出首选 callable；普通 direct tool 还会给出经 `call_runtime_tool` 的 `route.fallback`，用于 Host 当前没有该 direct callable 的情况；显式 MCP App presentation tool 会标明 Apps enabled 时该 fallback 被禁止。direct/gateway 只改变 presentation，不会绕过目标工具的 authentication、Project authority、permission、Runner capability、Session 或 safety checks。
 
 ### Tool result framing
 
@@ -161,7 +187,7 @@ hosted Server 可以通过同一个 `/mcp` 暴露 Runner-owned 本地 stdio MCP 
 
 ### Managed SSH resource 接入
 
-`ssh_resource` 工具提供一条窄化的 Runner-local 命名 SSH resource 接入路径。`list`
+`manage_ssh_resource` 工具提供一条窄化的 Runner-local 命名 SSH resource 接入路径。`list`
 观察安全逻辑名称并返回 opaque exact-Runner/revision binding；`register` 与 `remove`
 消费该 binding，只修改 durable desired state。它们不会把旧 mutation 静默重定向到
 replacement Runner，也不会在 uncertain outcome 后自动 replay。Raw SSH target 不会出现在
@@ -261,7 +287,7 @@ work_on_project
 → edit_project_files 或其它 canonical edit 工具
 → substantial work 进入真实状态后调用一次 present_work_result
 → 按需 run_process / run_shell / focused validation
-→ show_changes
+→ read_workspace_changes
 → finish_coding_task
 ```
 
@@ -279,7 +305,7 @@ work_on_project
 
 Adaptive Runtime 可以把常用工具直接暴露，把 long-tail 工具通过 `call_runtime_tool` 暴露。direct/gateway 只影响 model exposure，不改变 schema validation、OAuth scope、Project authority、permission policy、Runner capability、Session fence 或 tool effects。
 
-已删除的 ProjectConnector capability 名称（`task_start`、`files_read`、`edits_apply`、`task_finish` 等）不会作为 runtime 工具的 compatibility alias 保留。请使用当前 `tools/list` / `tool_manifest` 返回的 ToolRuntime 名称。
+已删除的 ProjectConnector capability 名称（`task_start`、`files_read`、`edits_apply`、`task_finish` 等）不会作为 runtime 工具的 compatibility alias 保留。请使用当前 `tools/list` / `read_tool_manifest` 返回的 ToolRuntime 名称。
 
 ### 长任务使用 Job lifecycle
 
@@ -363,12 +389,12 @@ workspace／依赖策略仍是 #599 后续工作；现有 cargo_*、go_test 与�
 
 当当前 MCP protocol/host admission 允许 artifact capability 时，WebCodex 支持双向的 host-native 文件传输，不需要把完整二进制经由模型文本搬运：
 
-- `import_conversation_files_to_project` 通过 ChatGPT host 的
+- `import_host_files` 通过 ChatGPT host 的
   `openai/fileParams` 导入 1..10 个文件。它既适用于用户选择的当前会话附件，也
   适用于 host 能绑定为 file parameter 的本轮新生成文件。Control 端负责下载原始
   bytes，并通过现有有界 artifact write 路径提交；调用方不应自行构造下载 URL，
   也不应手工 Base64 转运这些文件。
-- `project_artifact` 是首选的 Project → Model / Host 读取入口：
+- `inspect_project_artifact` 是首选的 Project → Model / Host 读取入口：
   `action=metadata` 用于 existence/size/MIME/digest/image/archive metadata；
   `action=inspect` 只读取一个有 snapshot fence 的有界 Base64 segment；
   `action=image` 通过 MCP native image delivery 给模型查看图片；
@@ -381,9 +407,9 @@ workspace／依赖策略仍是 #599 后续工作；现有 cargo_*、go_test 与�
   URI 本身不是独立 bearer authority；export handle 只是短期、process-local 的
   presentation state，现有大小、MIME、路径与 authorization 边界继续生效。
 
-底层 `read_project_artifact_metadata` 与 `read_project_artifact` 继续作为
+底层 `read_project_artifact_metadata` 与 `read_project_artifact_chunk` 继续作为
 operator/gateway primitive 保留。旧的 `export_project_artifact` compatibility tool 已
-删除；完整 host 交付统一通过 `project_artifact(action=export)` 暴露。DOCX/PPTX/XLSX
+删除；完整 host 交付统一通过 `inspect_project_artifact(action=export)` 暴露。DOCX/PPTX/XLSX
 等 Office artifact 与 PDF 仍复用同一底层 artifact transport，因此在支持这些 host
 能力的 ChatGPT 中，可以在 project 与 host 之间直接传递，而不需要模型手工搬运 Base64。
 

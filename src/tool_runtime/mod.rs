@@ -1,4 +1,4 @@
-//! Tool Runtime — unified execution layer for MCP and GPT Actions.
+//! Tool Runtime — unified execution layer for MCP.
 //!
 //! Both protocol adapters call `ToolRuntime::dispatch()`.
 //! No HTTP framework types here — pure Rust input/output.
@@ -85,6 +85,7 @@ mod read_files;
 mod read_revisions;
 #[cfg(test)]
 pub(crate) use read_revisions::ReadRevisionTarget;
+pub(crate) mod resource_references;
 mod result_projection;
 mod return_timing;
 mod runtime;

@@ -122,6 +122,15 @@ pub trait ToolCallAuditProjection {
 impl ToolCallAuditProjection for ToolCall {
     fn session_log_arguments(&self) -> Value {
         match self {
+            Self::OpenWebcodexWorkbench { .. } => serde_json::json!({"workbench_open":true}),
+            Self::SearchWebcodexResources {
+                kind,
+                offset,
+                limit,
+                ..
+            } => serde_json::json!({"kind":kind,"offset":offset,"limit":limit}),
+            Self::ReadWebcodexResource { .. } => serde_json::json!({"resource_read":true}),
+
             #[cfg(feature = "experimental-code-mode")]
             Self::CodeModeExec {
                 project,
@@ -757,6 +766,7 @@ impl ToolCallAuditProjection for ToolCall {
                 )
             }
             Self::ListGoals {
+                query: _,
                 lifecycle,
                 offset,
                 limit,
@@ -1057,21 +1067,7 @@ impl ToolCallAuditProjection for ToolCall {
                     "idempotency_key": idempotency_key,
                 }),
             ),
-            #[cfg(feature = "legacy-gpt-actions")]
-            Self::AttachAgentEndpoint {
-                agent_id,
-                host,
-                client_attachment_id,
-                idempotency_key,
-            } => typed_communication_request_audit(
-                CommunicationRequestAudit::AttachEndpoint,
-                &serde_json::json!({
-                    "agent_id": agent_id,
-                    "host": host,
-                    "client_attachment_id": client_attachment_id,
-                    "idempotency_key": idempotency_key,
-                }),
-            ),
+
             Self::PresentAgentContinuation {
                 agent_continuation_ref,
                 agent_id,
