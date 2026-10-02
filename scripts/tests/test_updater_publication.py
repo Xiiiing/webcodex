@@ -77,15 +77,17 @@ class UpdaterPublicationTests(unittest.TestCase):
             token.assert_not_called(); execute.assert_not_called()
             self.assertFalse((root / "stage").exists())
 
-    def test_workflow_gate_accepts_release_and_verification_but_rejects_total_absence(self):
+    def test_workflow_gate_respects_explicit_core_or_unified_selection(self):
         import os, subprocess, textwrap
         repository = Path(__file__).resolve().parents[2]
         workflow = (repository / ".github/workflows/release-build.yml").read_text()
-        step = workflow.split("      - name: Verify complete unified bundle", 1)[1].split(
+        step = workflow.split("      - name: Verify complete selected bundle", 1)[1].split(
             "      - name: Upload assembled candidate set", 1)[0]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
-        for kind, unified in (("release", True), ("verification", True), ("release", False), ("verification", False)):
-            with self.subTest(kind=kind, unified=unified), tempfile.TemporaryDirectory() as temp:
+        for kind, unified, include in (("release", True, True), ("verification", True, True),
+                                      ("release", False, True), ("verification", False, True),
+                                      ("release", False, False), ("verification", False, False)):
+            with self.subTest(kind=kind, unified=unified, include=include), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp); bundle = root / "release-bundle"; bundle.mkdir()
                 tag = f"v{VERSION}" if kind == "release" else "release-build-test-updater"
                 stem, _ = _write_bundle(bundle, tag, kind, unified=unified)
@@ -93,10 +95,11 @@ class UpdaterPublicationTests(unittest.TestCase):
                     self.assertFalse((bundle / "manifest.json").exists())
                 env = {**os.environ, "PYTHONPATH": str(repository),
                        "GITHUB_REPOSITORY": verifier.REPO, "GITHUB_RUN_ID": str(RUN_ID),
-                       "SOURCE_SHA": SOURCE_SHA, "INPUT_TAG": tag, "ARCHIVE_STEM": stem}
+                       "SOURCE_SHA": SOURCE_SHA, "INPUT_TAG": tag, "ARCHIVE_STEM": stem,
+                       "INCLUDE_UNIFIED_INSTALLERS": str(include).lower()}
                 result = subprocess.run(["bash", "-euc", script], cwd=root, env=env,
                                         capture_output=True, text=True, input="", timeout=30)
-                if unified:
+                if unified or not include:
                     self.assertEqual(result.returncode, 0, result.stderr)
                 else:
                     self.assertNotEqual(result.returncode, 0)

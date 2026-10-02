@@ -92,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_start.add_argument("--tag", required=True)
     build_start.add_argument("--state-file", type=Path, required=True)
     build_start.add_argument("--repo", default=collector.DEFAULT_REPO)
+    build_start.add_argument("--include-unified-installers", action="store_true")
     build_start.add_argument("--timeout", type=float, default=30.0)
     build_start.add_argument("--resolve-secs", type=int, default=60)
 
@@ -248,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             summary, exit_code = publication.start_build(
                 repo=args.repo,
+                include_unified_installers=args.include_unified_installers,
                 source_sha=args.source_sha,
                 tag=args.tag,
                 state_file=args.state_file,

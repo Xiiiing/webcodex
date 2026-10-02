@@ -88,6 +88,45 @@ class PrepareReleaseMetadataInstallerTests(unittest.TestCase):
         self.assertIn("required unified installer set", result.stderr)
         self.assertEqual(self.prepare().returncode, 0)
 
+    def test_generates_core_metadata_without_unified_installers(self):
+        for platform in metadata.PLATFORMS:
+            (self.artifacts / metadata.source_manifest_filename("0.3.0", platform)).unlink()
+        result = self.prepare()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((self.output / "manifest.json").read_text())
+        self.assertNotIn("installers", manifest)
+        self.assertEqual(len(manifest["artifacts"]), 6)
+        sums = (self.output / "SHA256SUMS").read_text()
+        self.assertNotIn("webcodex-unified-", sums)
+        self.assertNotIn("webcodex-source-", sums)
+
+    def test_workflow_metadata_requires_installers_only_for_the_explicit_input(self):
+        import os, subprocess, textwrap
+        workflow = (metadata.ROOT / ".github/workflows/release-build.yml").read_text()
+        options = workflow.split("            metadata_options=()", 1)[1].split(
+            "            python3 scripts/desktop_runtime_manifest.py", 1)[0]
+        script = "metadata_options=()\n" + textwrap.dedent(options).strip()
+        script = script.replace("python3 scripts/prepare_release_metadata.py", 'python3 "$METADATA_SCRIPT"')
+        script = script.replace("--artifact-dir candidate-input", '--artifact-dir "$ARTIFACT_DIR"')
+        script = script.replace("--output-dir release-bundle", '--output-dir "$OUTPUT_DIR" --package-json "$PACKAGE_JSON"')
+        for platform in metadata.PLATFORMS:
+            (self.artifacts / metadata.source_manifest_filename("0.3.0", platform)).unlink()
+        env = {**os.environ, "METADATA_SCRIPT": str(metadata.ROOT / "scripts/prepare_release_metadata.py"),
+               "ARTIFACT_DIR": str(self.artifacts), "OUTPUT_DIR": str(self.output),
+               "PACKAGE_JSON": str(self.package), "VERSION": "0.3.0", "SOURCE_SHA": "a" * 40,
+               "GITHUB_RUN_ID": "123", "GITHUB_WORKFLOW_REF": "repo/.github/workflows/release-build.yml@refs/tags/v0.3.0"}
+        for include in (False, True):
+            with self.subTest(include=include):
+                result = subprocess.run(["bash", "-euc", script], cwd=self.root,
+                                        env={**env, "INCLUDE_UNIFIED_INSTALLERS": str(include).lower()},
+                                        input="", capture_output=True, text=True, timeout=30)
+                if include:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("required unified installer set", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn("installers", json.loads((self.output / "manifest.json").read_text()))
+
     def test_rejects_partial_unified_installer_set(self):
         path = self.artifacts / metadata.installer_filename("0.3.0", next(iter(metadata.INSTALLER_TARGETS)))
         path.write_bytes(b"!<arch>\nfixture")

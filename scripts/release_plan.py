@@ -291,11 +291,21 @@ def _existing_bundle_is_valid(state: dict) -> bool:
     return summary.get("source_sha") == state["source_sha"] and summary.get("tag") == state["tag"]
 
 
+def _require_build_selection(state: dict, build: dict) -> None:
+    if state["require_unified_installers"] and build.get("include_unified_installers") is not True:
+        raise ReleasePlanError("bound release-build did not request required unified installers; reconcile the existing build state before proceeding")
+
+
 def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[dict, int]:
     if wait_secs < 0 or wait_secs > 7200:
         raise ReleasePlanError("wait_secs must be within 0..7200")
     state_path = state_file.absolute()
     state = _load_state(state_path)
+    if state["require_unified_installers"] and state["phase"] in {
+        PHASE_BUILD_PASSED, PHASE_BUNDLE, PHASE_NPM_STAGED,
+        PHASE_AWAIT_DRAFT, PHASE_DRAFT_VERIFIED, PHASE_AWAIT_PUBLICATION,
+    }:
+        _require_build_selection(state, publication._load_state(Path(state["build_state_file"])))
 
     # Advance through locally safe/recoverable phases until external work is
     # still running or an explicit human authorization boundary is reached.
@@ -371,6 +381,7 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
                 continue
             summary, _ = publication.start_build(
                 repo=state["repo"],
+                include_unified_installers=state["require_unified_installers"],
                 source_sha=state["source_sha"],
                 tag=state["tag"],
                 state_file=build_state,
@@ -387,6 +398,7 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
                 timeout=timeout,
                 wait_secs=wait_secs,
             )
+            _require_build_selection(state, summary)
             state["build_run_id"] = summary.get("run_id")
             if exit_code == 2:
                 _update(state_path, state, action="build_waiting")

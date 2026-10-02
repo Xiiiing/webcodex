@@ -44,9 +44,13 @@ preference save is also shown when no update is available.
 The current unified release workflow uses an explicit shared Cargo target directory
 before compiling the independent Desktop workspace; native binaries and macOS app
 bundles are collected from that same directory. Before upload, the retained bundle
-is verified with `require_unified_installers=True`. New durable release plans
-record this requirement and carry it through collection, npm staging and draft
-verification. Low-level metadata/collection/public-verification commands expose
+is verified according to the explicit `include_unified_installers` input:
+true requires all eight installers and six source manifests; the default false
+retains normal core-only validation. New durable release plans record a unified
+requirement, actually dispatch that input as true, and carry the requirement
+through collection, npm staging and draft verification. Build state records the
+selection; a strict plan never accepts an older/core-only build state as unified
+success. Low-level metadata/collection/public-verification commands expose
 `--require-unified-installers` for current unified deliveries. Entirely absent
 installer/source sets fail this requirement; historical read-only verification
 without it and Desktop's **View release** fallback remain supported. Present but
