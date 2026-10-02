@@ -149,6 +149,82 @@ pub fn resolve_validation_recipe_with_packages(
     )
 }
 
+/// Canonical project gateway planning. Ordinary recipe workflows retain their
+/// existing Python Ruff/mypy/unittest choices; this gateway supports pytest only.
+pub fn resolve_project_validation_recipe(
+    execution_root: &Path,
+    cwd: Option<&str>,
+    explicit_recipe: Option<RecipeId>,
+    checks: &[SemanticCheck],
+    test_filter: Option<&str>,
+    package_scope: Option<&[String]>,
+    dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
+) -> Result<ResolvedValidationRecipe, RecipeError> {
+    let resolved = resolve_project_recipe_root(execution_root, cwd, explicit_recipe)
+        .map_err(map_project_recipe_error)?;
+    if resolved.recipe != RecipeId::Python {
+        return resolve_validation_recipe_with_project_policy(
+            execution_root,
+            cwd,
+            explicit_recipe,
+            checks,
+            test_filter,
+            package_scope,
+            dependency_policy,
+        );
+    }
+    let mut steps = Vec::with_capacity(checks.len());
+    for check in checks {
+        let operation = crate::project_validation_operation(
+            "python",
+            *check,
+            package_scope.map(<[String]>::to_vec),
+        )
+        .and_then(|operation| operation.with_dependency_policy(dependency_policy))
+        .and_then(|operation| operation.with_test_filter(test_filter))
+        .map_err(RecipeError::new)?;
+        steps.push(
+            operation
+                .build_readonly_plan()
+                .map_err(|_| check_unavailable())?
+                .structured_step,
+        );
+    }
+    let test_filter = test_filter
+        .map(webcodex_core::runner_protocol::normalize_pytest_filter)
+        .transpose()
+        .map_err(|_| filter_unsupported())?
+        .flatten();
+    // pytest chooses from these configuration files. Their exact content is
+    // fenced again at admission and after a local queue wait, independently of
+    // source freshness. Missing files are harmless; escaping symlinks fail closed.
+    let manifest_digest = digest_project_recipe_files(
+        &resolved.execution_root,
+        [
+            "pyproject.toml",
+            "pytest.ini",
+            ".pytest.ini",
+            "tox.ini",
+            "setup.cfg",
+        ]
+        .into_iter()
+        .map(|name| resolved.absolute_root.join(name)),
+    )
+    .map_err(map_project_recipe_error)?;
+    let invocation_digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&steps).map_err(|_| manifest_invalid())?)
+    );
+    Ok(ResolvedValidationRecipe {
+        recipe_id: "python",
+        recipe_root_relative: resolved.relative_root,
+        steps,
+        manifest_digest,
+        invocation_digest,
+        test_filter,
+    })
+}
+
 pub fn resolve_validation_recipe_with_project_policy(
     execution_root: &Path,
     cwd: Option<&str>,
