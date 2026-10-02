@@ -159,6 +159,7 @@ jobs:
             plugins/repo-context/package-lock.json
             plugins/campus-application/package-lock.json
             plugins/agent-browser/package-lock.json
+            plugins/agent-environment/package-lock.json
       - name: Install frontend dependencies
         if: needs.changes.outputs.needs_frontend == 'true' || needs.changes.outputs.needs_desktop_frontend == 'true'
         run: npm ci --prefix frontend
@@ -186,6 +187,7 @@ jobs:
           npm ci --prefix plugins/repo-context
           npm ci --prefix plugins/campus-application
           npm ci --prefix plugins/agent-browser
+          npm ci --prefix plugins/agent-environment
       - name: Check Plugin SDK contracts and first-party dogfood
         if: needs.changes.outputs.needs_plugin_sdk == 'true'
         run: |
@@ -203,6 +205,8 @@ jobs:
           npm --prefix plugins/campus-application test
           npm --prefix plugins/agent-browser run typecheck
           npm --prefix plugins/agent-browser test
+          npm --prefix plugins/agent-environment test
+          npm --prefix plugins/agent-environment run test:pi
       - name: Verify workspace boundaries
         run: |
           bash scripts/workspace_boundary_check.sh --self-test
@@ -224,7 +228,7 @@ jobs:
           bash scripts/test_inventory.sh
       - name: Check macOS signing setup and release evidence contracts
         # Fake signing commands and synthetic artifacts only; no Apple credentials.
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_macos_signing_setup scripts.tests.test_macos_release_evidence
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_macos_signing_setup scripts.tests.test_macos_self_signed scripts.tests.test_macos_release_evidence
       - name: Check canonical contracts including optional tool surfaces
         # Root MCP/HTTP integration tests already run in the mandatory server
         # shard. Do not compile the full Server a second time for three filters.
@@ -671,6 +675,7 @@ jobs:
       - name: Run Windows unified upgrade transactions including native v0.4.3 fixture
         run: |
           cargo test --locked -p webcodex-environment --lib upgrade::
+          cargo test --locked -p webcodex-environment --lib service::windows::
       - name: Test Windows unified installer routing and Desktop build freshness
         run: python -m unittest scripts.tests.test_prepare_windows_unified_installer scripts.tests.test_desktop_runtime_manifest scripts.tests.test_desktop_frontend_build
       - name: Test optional Codex observation adapter on Windows

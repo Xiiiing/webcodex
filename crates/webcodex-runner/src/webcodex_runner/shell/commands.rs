@@ -196,7 +196,8 @@ pub(crate) fn configured_pytest_job_command(
     cwd: &Path,
     stop_requested: Option<&AtomicBool>,
 ) -> Result<Command, String> {
-    let unavailable = || crate::runner_protocol::VALIDATION_TOOL_UNAVAILABLE_CODE.to_string();
+    let unavailable =
+        || webcodex_core::runner_protocol::VALIDATION_TOOL_UNAVAILABLE_CODE.to_string();
     let program = configured_script_interpreter(shell, profile, ShellScriptLanguage::Python)
         .map_err(|_| unavailable())?;
     let mut probe = Command::new(&program);

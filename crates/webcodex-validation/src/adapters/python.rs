@@ -29,6 +29,7 @@ impl ValidationAdapter for PytestValidationAdapter {
             || options.features.is_some()
             || options.package.is_some()
             || options.cargo_packages.is_some()
+            || options.all_packages
             || options.go_packages.is_some()
             || options.no_run.is_some()
             || options.dependency_mode.is_some()

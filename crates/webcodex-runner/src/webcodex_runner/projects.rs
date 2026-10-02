@@ -7,18 +7,19 @@ use serde::{Deserialize, Serialize};
 use super::config::default_true;
 #[cfg(test)]
 use super::config::RunnerPolicy;
-use crate::runner_protocol::RunnerProjectSummary;
-#[cfg(test)]
-use crate::runner_protocol::RunnerRequest;
-use crate::CommandResult;
+use crate::webcodex_runner::output::CommandResult;
 #[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
 use webcodex_core::runner_operation::RunnerOperation;
 #[cfg(test)]
 use webcodex_core::runner_operation::RunnerProjectOperation;
+use webcodex_core::runner_protocol::RunnerProjectSummary;
+#[cfg(test)]
+use webcodex_core::runner_protocol::RunnerRequest;
 
 mod catalog;
+mod created_paths;
 mod lifecycle;
 mod managed_worktree;
 mod registration;
@@ -135,6 +136,8 @@ pub(crate) struct RunnerProjectCache {
 pub(crate) struct RunnerProjectShellContext {
     pub(crate) id: String,
     pub(crate) path: String,
+    /// Current registry write authority; avoids Git/status probes on tool admission.
+    pub(crate) allow_patch: bool,
     pub(crate) shell_profile: Option<String>,
 }
 

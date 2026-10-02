@@ -3,7 +3,7 @@
 `project_validate(action=test, adapter=python)` plans a bounded pytest run on the
 owning Runner. `auto` uses the existing nearest `pyproject.toml` recipe root;
 explicit Python also works without a manifest. Ambiguous recipes, escaping paths,
-check/format actions, `scope.packages` and dependency policy fail closed. `cwd`
+check/format actions, package scope (including `scope.all_packages`) and dependency policy fail closed. `cwd`
 selects a recipe root, not a free pytest positional argument. Ordinary recipe
 workflows retain their existing Python unittest/Ruff/mypy choices.
 
