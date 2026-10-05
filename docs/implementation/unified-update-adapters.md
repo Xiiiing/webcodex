@@ -23,6 +23,8 @@ Public status JSON is schema 1 and limited to 64 KiB. Mixed private configuratio
 
 Unified candidate validation still requires the four declared components to satisfy its existing version/source/data compatibility contract. Independent component rows do not relax that validator. Source, dirty, standalone and custom Runtime installations remain manual; the adapters do not convert installation types.
 
+Windows target propagation through the outer NSIS installer is a separate prerequisite contribution: the existing path-only handoff cannot establish the newly selected Environment/candidate fence. This extraction does not claim that legacy Windows handoff is fenced. The Desktop UX contribution requires that prerequisite before guarded Windows application.
+
 The subsequent Desktop and Linux CLI contributions consume these adapters separately. Linux CLI uses normal TTY sudo authorization for the narrow installed helper; non-TTY effects and macOS/Windows headless application are not admitted. Remote Runner installations are outside all local update operations.
 
 Tests and source builds establish adapter behavior only. Real package installation, authorization, logout/reboot, service ownership and native upgrade/rollback acceptance remain recorded separately in `unified-deployment-validation.md`. This work performs no deployment or changes to existing host services.
