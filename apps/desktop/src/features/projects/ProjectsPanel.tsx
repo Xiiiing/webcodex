@@ -17,12 +17,16 @@ export function ProjectsPanel({ onComputerSettings, onState }: { onComputerSetti
   const [query, setQuery] = useState("");
   const [deviceSelection, setDeviceSelection] = useState<{ context: string; id: string } | null>(null);
   const authorizationLost = workspace.error && ["authenticationRequired", "permissionDenied"].includes(workspace.errorReason);
-  const device = !authorizationLost && deviceSelection?.context === workspace.contextKey ? deviceSelection.id : "";
+  const selectedDevice = !authorizationLost && deviceSelection?.context === workspace.contextKey ? deviceSelection.id : "";
   const observedDeviceIds = useMemo(() => Array.from(new Set([
     ...workspace.runners.map(runner => runner.client_id),
     ...workspace.projects.map(projectRunnerId).filter((id): id is string => Boolean(id)),
   ])).sort(), [workspace.runners, workspace.projects]);
   const inventoryComplete = !workspace.loading && !workspace.fleetStale && runnerInventoryComplete(workspace.runner);
+  // Derive the displayed filter from the same inventory as the results, before
+  // the cleanup effect. A removed option must never make the select show All
+  // while the rows still use the previous device.
+  const device = inventoryComplete && !observedDeviceIds.includes(selectedDevice) ? "" : selectedDevice;
   // An incomplete refresh cannot revoke a prior observation. Keep the selected
   // option alongside the filter so the select never silently displays All.
   const deviceIds = device && !inventoryComplete && !observedDeviceIds.includes(device)

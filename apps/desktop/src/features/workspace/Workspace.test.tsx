@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceProject, ServerRunnerSummary } from "../../models/workspace";
@@ -648,6 +649,32 @@ describe("project device filters", () => {
       expect(screen.getAllByRole("article", { name: "shared" })).toHaveLength(1);
       expect(screen.getByRole("combobox", { name: productText("en-US", "executionDevice") })).toHaveFocus();
     } finally { media.mockRestore(); }
+  });
+
+  it("keeps the select and results consistent in the first complete refresh frame", async () => {
+    const frames: Array<{ device: string; count: string | null }> = [];
+    function ObserveFrame() {
+      const workspace = useWorkspace();
+      useLayoutEffect(() => {
+        if (!workspace.loading && workspace.projects.length === 1) frames.push({
+          device: (screen.getByRole("combobox", { name: productText("en-US", "executionDevice") }) as HTMLSelectElement).value,
+          count: screen.getByRole("status").textContent,
+        });
+      });
+      return null;
+    }
+    fleet(); render(wrap(<><ProjectsPanel /><ObserveFrame /></>, viewer));
+    fireEvent.click(await screen.findByRole("button", { name: "View projects · remote" }));
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => {
+      if (value.request.kind === "overview") return Promise.resolve({ ...overview, runners: [devices[0]], projects: [sharedLocal], recent_sessions: undefined });
+      if (value.request.kind === "projects") return Promise.resolve({ projects: [sharedLocal], total: 1, truncated: false });
+      return normal(command, value);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Showing 1 of 1 loaded projects");
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every(frame => frame.device === "" && frame.count === "Showing 1 of 1 loaded projects")).toBe(true);
   });
 
   it("clears a device absent from a complete refreshed inventory", async () => {
