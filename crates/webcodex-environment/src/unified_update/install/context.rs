@@ -1,6 +1,8 @@
 use super::super::download::InstallationKind;
+#[cfg(target_os = "linux")]
+use crate::unified_update::PackageFormat;
 use crate::unified_update::{
-    self as unified, InstallerTarget, PackageFormat, RuntimePlatform, UpdateError, UpdateResult,
+    self as unified, InstallerTarget, RuntimePlatform, UpdateError, UpdateResult,
 };
 use crate::{EnvironmentStore, RuntimeBinaries};
 use std::path::{Path, PathBuf};
@@ -132,6 +134,8 @@ fn aligned_release_build(build: &MachineBuildInfo, binaries: &InstalledBinaries)
 }
 
 fn package_layout(target: InstallerTarget, executable: &Path, runtime: &Path) -> bool {
+    #[cfg(not(target_os = "linux"))]
+    let _ = target;
     #[cfg(target_os = "macos")]
     {
         executable.parent()

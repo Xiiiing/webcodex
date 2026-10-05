@@ -11,6 +11,7 @@ Recorded 2026-10-06 on Linux x64, against `upstream/main` `ed22e5c0`, with a dir
 | Desktop native `cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml updates` | 11 passed: existing update/cache and literal native handoff adapter tests. |
 | Guarded terminal reconciliation, cache and status focused tests | 24 passed with `--locked --offline`: exact pending operation, stale/missing targets, exclusive existing fences, rollback reconciliation and unchanged files on rejected cleanup. |
 | Workspace and Desktop Rust formatting, `git diff --check` | Passed. |
+| Initial Windows production CI | Compiled, but failed its zero-warning gate with 11 platform-unused imports/constants/parameters introduced by the extraction. These were scoped to their Unix/Linux consumers; the Linux unified-update suite passed all 53 tests again. Replacement Windows CI remains a separate check, not a local Windows acceptance claim. |
 
 Query tests use temporary private stores and prove missing roots/fences stay missing, existing permissions/mtime stay unchanged, and unknown probe fields do not cross the public status. The earlier creation-capable query constructor was identified by source inspection; no prior Linux permission mutation was reproduced.
 
