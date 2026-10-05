@@ -74,9 +74,9 @@ private temporary state. None install, stop, restart or deploy user services.
 Commands use the Desktop working directory for Vitest/typecheck/build, and
 `--profile dogfood --locked` for Cargo tests/builds. Rust test filters are
 `state::environment_invitation::tests`, `operation_completion`, and
-`native::tests::invitation` in their respective packages. One accidental Vitest
-invocation from the repository root lacked Desktop's jsdom configuration and
-failed with `localStorage` undefined; the configured Desktop run above passed.
+`native::tests::invitation` in their respective packages. Accidental direct frontend
+invocations from the repository root lacked Desktop's jsdom/package configuration
+and failed with `localStorage` undefined or a missing root package.json; the configured Desktop run above passed.
 A direct rustfmt invocation without the crate edition was also corrected to the
 package-aware Cargo formatting command. These were invocation errors, not fixes
 or weakened product assertions.

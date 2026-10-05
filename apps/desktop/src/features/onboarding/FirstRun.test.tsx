@@ -116,7 +116,7 @@ describe("explicit environment setup", () => {
     const { container } = mount(); action(container, "choose-viewer-setup");
     fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "https://server.example/" } });
     fireEvent.change(screen.getByLabelText("User API credential"), { target: { value: "wc_user_secret" } });
-    expect(screen.queryByLabelText("One-time login code")).toBeNull();
+    expect(screen.queryByLabelText("One-time pairing code")).toBeNull();
     action(container, "configure-remote");
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith({
       mode: "join", serverUrl: "https://server.example", projectPath: null, runner: false, serviceScope: "user",
@@ -129,7 +129,7 @@ describe("explicit environment setup", () => {
     api.configureEnvironment.mockRejectedValue({ code: "pairing_code_invalid", message: "Invalid code", next_action: "Use a new code." });
     const { container } = mount(); action(container, "choose-remote-setup");
     fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "https://server.example" } });
-    const code = screen.getByLabelText("One-time login code");
+    const code = screen.getByLabelText("One-time pairing code");
     fireEvent.change(code, { target: { value: "wc_pair_once" } });
     action(container, "configure-remote");
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({ runner: true, projectPath: null, pairingCode: "wc_pair_once" })));
@@ -139,7 +139,7 @@ describe("explicit environment setup", () => {
 
   it.each([true, false])("reuses a saved projectless Runner with canonical Server matching (persistent=%s)", async persistent => {
     const { container } = mount(remote(true, persistent), false);
-    expect(screen.queryByLabelText("One-time login code")).toBeNull();
+    expect(screen.queryByLabelText("One-time pairing code")).toBeNull();
     expect(screen.getByLabelText("Allow AI to work on this computer")).toBeDisabled();
     action(container, "configure-remote");
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({
@@ -165,7 +165,7 @@ describe("explicit environment setup", () => {
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({ runner: false, userToken: null })));
     await waitFor(() => expect(screen.getByLabelText("Allow AI to work on this computer")).toBeEnabled());
     fireEvent.click(screen.getByLabelText("Allow AI to work on this computer"));
-    expect(screen.getByLabelText("One-time login code")).toBeInTheDocument();
+    expect(screen.getByLabelText("One-time pairing code")).toBeInTheDocument();
     expect(container.querySelector('[data-webcodex-action="configure-remote"]')).toBeDisabled();
   });
 
@@ -173,7 +173,7 @@ describe("explicit environment setup", () => {
     api.configureEnvironment.mockRejectedValueOnce({ code: "pairing_recovery_required", message: "Recovery required", next_action: "Use a new code." });
     const { container } = mount(remote(true), false); action(container, "configure-remote");
     fireEvent.click(await screen.findByRole("button", { name: "Use a new one-time pairing code" }));
-    fireEvent.change(screen.getByLabelText("One-time login code"), { target: { value: "wc_pair_replacement" } });
+    fireEvent.change(screen.getByLabelText("One-time pairing code"), { target: { value: "wc_pair_replacement" } });
     action(container, "configure-remote");
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenLastCalledWith(expect.objectContaining({
       pairingCode: "wc_pair_replacement", replacePairingCode: true,
@@ -183,7 +183,7 @@ describe("explicit environment setup", () => {
   it("clears secrets when the target changes and does not submit invalid URL forms", () => {
     const { container } = mount(); action(container, "choose-remote-setup");
     fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "https://server.example" } });
-    const code = screen.getByLabelText("One-time login code");
+    const code = screen.getByLabelText("One-time pairing code");
     fireEvent.change(code, { target: { value: "wc_pair_once" } });
     fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "https://other.example/path" } });
     expect(code).toHaveValue("");
@@ -226,7 +226,7 @@ describe("explicit environment setup", () => {
   it.each(["http://localhost:8787", "https://api.openai.com", "https://server.example/path"])("explains unsuitable ordinary join address %s", url => {
     const { container } = mount(); action(container, "choose-remote-setup");
     fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: url } });
-    fireEvent.change(screen.getByLabelText("One-time login code"), { target: { value: "private-code" } });
+    fireEvent.change(screen.getByLabelText("One-time pairing code"), { target: { value: "private-code" } });
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(container.querySelector('[data-webcodex-action="configure-remote"]')).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
@@ -259,20 +259,20 @@ describe("explicit environment setup", () => {
     expect(screen.getByLabelText("Server URL")).toHaveAttribute("readonly");
     expect(screen.queryByLabelText("Background startup")).toBeNull();
     expect(container.querySelector('[data-webcodex-action="choose-project"]')).toBeNull();
-    fireEvent.change(screen.getByLabelText("One-time login code"), { target: { value: "private-code" } });
+    fireEvent.change(screen.getByLabelText("One-time pairing code"), { target: { value: "private-code" } });
     action(container, "configure-remote");
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({ runner: true, serverUrl: "https://pending.example", projectPath: null, serviceScope: "system" })));
   });
 
   it("refreshes a changed saved projection without automatically configuring or carrying secrets", () => {
     const { container, rerender, onState } = mount(); action(container, "choose-remote-setup");
-    fireEvent.change(screen.getByLabelText("One-time login code"), { target: { value: "private-code" } });
+    fireEvent.change(screen.getByLabelText("One-time pairing code"), { target: { value: "private-code" } });
     const next = { ...remote(false), environment_setup: { environment_id: "new", mode: "join", server_url: "https://next.example", runner: false, project_path: null, service_scope: "system", configured: true } } as DesktopState;
     rerender(<DesktopMantineProvider><LocaleProvider><FirstRun state={next} onState={onState} chooseModeFirst /></LocaleProvider></DesktopMantineProvider>);
     action(container, "choose-remote-setup");
     expect(screen.getByLabelText("Server URL")).toHaveValue("https://next.example");
     expect(screen.getByLabelText("Allow AI to work on this computer")).not.toBeChecked();
-    expect(screen.queryByLabelText("One-time login code")).toBeNull();
+    expect(screen.queryByLabelText("One-time pairing code")).toBeNull();
     expect(container).not.toHaveTextContent("private-code");
     expect(api.configureEnvironment).not.toHaveBeenCalled();
   });
