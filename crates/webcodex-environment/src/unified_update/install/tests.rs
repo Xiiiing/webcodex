@@ -168,3 +168,162 @@ fn verified_installed_disk_identity_owns_committed_reconciliation() {
         Reconciliation::RecoveryRequired
     );
 }
+
+fn guarded_fixture() -> (
+    tempfile::TempDir,
+    std::sync::Arc<UpdateManager>,
+    crate::EnvironmentStore,
+    UpgradeTarget,
+) {
+    let directory = crate::test_tempdir().unwrap();
+    let store = crate::EnvironmentStore::open(directory.path().join("environment")).unwrap();
+    let manager = UpdateManager::with_environment_root(
+        directory.path().join("desktop"),
+        store.root().to_path_buf(),
+    );
+    let target = UpgradeTarget {
+        environment_id: "environment".into(),
+        manifest_sha256: "b".repeat(64),
+        operation_id: Some(uuid::Uuid::new_v4().to_string()),
+    };
+    let saved = crate::EnvironmentRecord {
+        schema_version: 1,
+        environment_id: target.environment_id.clone(),
+        request: crate::SetupRequest {
+            service_scope: crate::service::ServiceScope::System,
+            mode: crate::EnvironmentMode::Join,
+            server_url: "http://127.0.0.1:1".into(),
+            project: None,
+            runner: None,
+            account: crate::current_account().unwrap(),
+            binaries: crate::RuntimeBinaries {
+                cli: store.root().join("webcodex"),
+                server: store.root().join("webcodex-server"),
+                runner: store.root().join("webcodex-runner"),
+            },
+        },
+        username: None,
+        runner_client_id: None,
+        projects: vec![],
+        configured: true,
+    };
+    let _setup_lock = store.lock().unwrap();
+    store.save_environment(&saved).unwrap();
+    store.write_json("upgrade.json", &serde_json::json!({
+        "schema_version":1,"operation_id":target.operation_id,"phase":"rolled_back",
+        "record":saved,"services":[],"all_services":[],"inventory_complete":true,
+        "programs":[],"data":null,"data_snapshot":null,
+        "candidate":{"version":"1.2.3","source_sha":"a".repeat(40),
+            "platform":"linux-x64","source_workflow_run_id":1,
+            "source_workflow_ref":"yyjeqhc/webcodex/.github/workflows/release-build.yml@main",
+            "manifest_sha256":target.manifest_sha256,"root":store.root(),"artifacts":{}}
+    })).unwrap();
+    let cache = PrivateUpdateCache::open(manager.root.clone()).unwrap();
+    let _cache_lock = cache.lock().unwrap();
+    let mut pending = record();
+    pending.pending.as_mut().unwrap().operation_id = target.operation_id.clone();
+    manager.change(|state| *state = pending);
+    manager.persist(&cache).unwrap();
+    (directory, manager, store, target)
+}
+
+#[tokio::test]
+async fn guarded_terminal_reconciliation_clears_only_exact_rolled_back_pending() {
+    let (_directory, manager, store, target) = guarded_fixture();
+    let before_journal = std::fs::read(store.root().join("upgrade.json")).unwrap();
+    manager.reconcile_pending_guarded(&target).await.unwrap();
+    let cache = PrivateUpdateCache::open_existing(manager.root.clone())
+        .unwrap()
+        .unwrap();
+    let state: UpdateRecord =
+        serde_json::from_slice(&cache.read("update-state.json", 24 * 1024).unwrap().unwrap())
+            .unwrap();
+    assert!(state.pending.is_none());
+    assert_eq!(state.phase, DownloadPhase::Failed);
+    assert_eq!(state.error_kind, Some(UpdateError::UpgradeRolledBack));
+    assert!(state.cancelled);
+    assert_eq!(
+        std::fs::read(store.root().join("upgrade.json")).unwrap(),
+        before_journal
+    );
+    manager.reconcile_pending_guarded(&target).await.unwrap();
+}
+
+#[tokio::test]
+async fn guarded_reconciliation_rejects_stale_bindings_before_any_saved_cleanup() {
+    let (_directory, manager, store, target) = guarded_fixture();
+    let state_file = manager.root.join("update-state.json");
+    let before = std::fs::read(&state_file).unwrap();
+    let version = manager.root.join("1.2.3");
+    crate::storage::ensure_private_directory(&version).unwrap();
+    let marker = version.join("installer.part");
+    std::fs::write(&marker, b"retained-private-candidate").unwrap();
+    for stale in [
+        UpgradeTarget {
+            environment_id: "other-environment".into(),
+            ..target.clone()
+        },
+        UpgradeTarget {
+            manifest_sha256: "c".repeat(64),
+            ..target.clone()
+        },
+        UpgradeTarget {
+            operation_id: Some(uuid::Uuid::new_v4().to_string()),
+            ..target.clone()
+        },
+        UpgradeTarget {
+            operation_id: None,
+            ..target.clone()
+        },
+    ] {
+        assert!(manager.reconcile_pending_guarded(&stale).await.is_err());
+        assert_eq!(std::fs::read(&state_file).unwrap(), before);
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            b"retained-private-candidate"
+        );
+    }
+    let mut journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(store.root().join("upgrade.json")).unwrap()).unwrap();
+    journal["operation_id"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+    store.write_json("upgrade.json", &journal).unwrap();
+    assert!(manager.reconcile_pending_guarded(&target).await.is_err());
+    assert_eq!(std::fs::read(&state_file).unwrap(), before);
+    journal["operation_id"] = serde_json::json!(target.operation_id);
+    journal["phase"] = serde_json::json!("snapshot_ready");
+    store.write_json("upgrade.json", &journal).unwrap();
+    assert!(manager.reconcile_pending_guarded(&target).await.is_err());
+    assert_eq!(std::fs::read(&state_file).unwrap(), before);
+}
+
+#[tokio::test]
+async fn guarded_reconciliation_never_provisions_missing_cache_root_or_fences() {
+    let directory = crate::test_tempdir().unwrap();
+    let data = directory.path().join("absent-desktop");
+    let environment = directory.path().join("absent-environment");
+    let manager = UpdateManager::with_environment_root(data.clone(), environment.clone());
+    let target = UpgradeTarget {
+        environment_id: "environment".into(),
+        manifest_sha256: "b".repeat(64),
+        operation_id: Some(uuid::Uuid::new_v4().to_string()),
+    };
+    manager.reconcile_pending_guarded(&target).await.unwrap();
+    assert!(!data.exists());
+    assert!(!environment.exists());
+    let cache = PrivateUpdateCache::open(manager.root.clone()).unwrap();
+    assert!(manager.reconcile_pending_guarded(&target).await.is_err());
+    assert!(!cache.root().join("update.lock").exists());
+    let _lock = cache.lock().unwrap();
+    let mut pending = record();
+    pending.pending.as_mut().unwrap().operation_id = target.operation_id.clone();
+    manager.change(|state| *state = pending);
+    manager.persist(&cache).unwrap();
+    drop(_lock);
+    let before = std::fs::read(manager.root.join("update-state.json")).unwrap();
+    assert!(manager.reconcile_pending_guarded(&target).await.is_err());
+    assert_eq!(
+        std::fs::read(manager.root.join("update-state.json")).unwrap(),
+        before
+    );
+    assert!(!environment.exists());
+}

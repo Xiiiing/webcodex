@@ -17,6 +17,7 @@ mod desktop_tree;
 mod observation;
 mod status;
 pub mod windows_legacy;
+pub(crate) use observation::upgrade_observation_under_lock;
 pub use observation::{upgrade_observation, UpgradeObservation, UpgradeOutcome};
 pub use status::{
     upgrade_status, upgrade_status_at, UpgradeFileComponent, UpgradePhase, UpgradeServiceComponent,

@@ -345,13 +345,89 @@ impl UpdateManager {
     }
 
     pub(super) async fn reconcile_pending(&self, cache: &PrivateUpdateCache) -> UpdateResult<()> {
+        self.reconcile_pending_with_target(cache, None).await
+    }
+
+    /// Reconcile only the selected terminal operation after an explicit owner
+    /// action. Status remains read-only; this never starts or recovers services.
+    pub async fn reconcile_pending_guarded(&self, target: &UpgradeTarget) -> UpdateResult<()> {
+        let operation_id = target
+            .operation_id
+            .as_deref()
+            .ok_or(UpdateError::RecoveryRequired)?;
+        if uuid::Uuid::parse_str(operation_id).is_err()
+            || !unified::valid_sha256(&target.manifest_sha256)
+        {
+            return Err(UpdateError::RecoveryRequired);
+        }
+        let _attempt = self
+            .attempt
+            .try_lock()
+            .map_err(|_| UpdateError::RecoveryRequired)?;
+        let Some(cache) = PrivateUpdateCache::open_existing_for_update(self.root.clone())? else {
+            return Ok(());
+        };
+        let _lock = cache.lock_existing_exclusive()?;
+        let record = match cache.read("update-state.json", 24 * 1024)? {
+            Some(bytes) => serde_json::from_slice::<UpdateRecord>(&bytes)
+                .map_err(|_| UpdateError::RecoveryRequired)?,
+            None => return Ok(()),
+        };
+        if !record.valid()
+            || record
+                .target
+                .is_some_and(|value| Some(value.platform) != unified::RuntimePlatform::current())
+        {
+            return Err(UpdateError::RecoveryRequired);
+        }
+        if record.pending.is_none() {
+            return Ok(());
+        }
+        if !pending_matches_guard(&record, target) {
+            return Err(UpdateError::RecoveryRequired);
+        }
+        self.change(|state| *state = record);
+        self.reconcile_pending_with_target(&cache, Some(target))
+            .await?;
+        if self.current().pending.is_some() {
+            return Err(UpdateError::RecoveryRequired);
+        }
+        Ok(())
+    }
+
+    async fn reconcile_pending_with_target(
+        &self,
+        cache: &PrivateUpdateCache,
+        target: Option<&UpgradeTarget>,
+    ) -> UpdateResult<()> {
         let record = self.current();
         let root = self.environment_root.clone();
         if !root.join("environment.json").is_file() {
             return Err(UpdateError::RecoveryRequired);
         }
-        let store = EnvironmentStore::open(root).map_err(|_| UpdateError::RecoveryRequired)?;
-        let observation = upgrade_observation(&store).map_err(|_| UpdateError::RecoveryRequired)?;
+        let store = if target.is_some() {
+            EnvironmentStore::open_existing(root)
+                .map_err(|_| UpdateError::RecoveryRequired)?
+                .ok_or(UpdateError::RecoveryRequired)?
+        } else {
+            EnvironmentStore::open(root).map_err(|_| UpdateError::RecoveryRequired)?
+        };
+        let observation = if let Some(target) = target {
+            let _lock = store
+                .lock_existing()
+                .map_err(|_| UpdateError::RecoveryRequired)?;
+            let observation = crate::upgrade::upgrade_observation_under_lock(&store)
+                .map_err(|_| UpdateError::RecoveryRequired)?;
+            if !observation
+                .as_ref()
+                .is_some_and(|observed| terminal_matches_guard(&record, observed, target))
+            {
+                return Err(UpdateError::RecoveryRequired);
+            }
+            observation
+        } else {
+            upgrade_observation(&store).map_err(|_| UpdateError::RecoveryRequired)?
+        };
         let current = match observation
             .as_ref()
             .filter(|o| o.outcome == UpgradeOutcome::Committed)
@@ -383,6 +459,26 @@ impl UpdateManager {
             }
             None => None,
         };
+        // The cache fence prevents another updater from replacing pending;
+        // retain the Core fence through the final recheck and cleanup as well.
+        let _environment_lock = target
+            .map(|_| store.lock_existing())
+            .transpose()
+            .map_err(|_| UpdateError::RecoveryRequired)?;
+        if let Some(target) = target {
+            let latest = crate::upgrade::upgrade_observation_under_lock(&store)
+                .map_err(|_| UpdateError::RecoveryRequired)?;
+            if !latest.as_ref().is_some_and(|latest| {
+                terminal_matches_guard(&record, latest, target)
+                    && observation.as_ref().is_some_and(|before| {
+                        latest.outcome == before.outcome
+                            && latest.version == before.version
+                            && latest.source_sha == before.source_sha
+                    })
+            }) {
+                return Err(UpdateError::RecoveryRequired);
+            }
+        }
         match reconcile(
             &record,
             observation.as_ref(),
@@ -410,6 +506,31 @@ impl UpdateManager {
         }
         self.persist(cache)
     }
+}
+
+fn pending_matches_guard(record: &UpdateRecord, target: &UpgradeTarget) -> bool {
+    target.operation_id.is_some()
+        && record.source_manifest_sha256.as_deref() == Some(&target.manifest_sha256)
+        && record.pending.as_ref().is_some_and(|pending| {
+            pending.environment_id == target.environment_id
+                && pending.operation_id == target.operation_id
+        })
+}
+
+fn terminal_matches_guard(
+    record: &UpdateRecord,
+    observed: &UpgradeObservation,
+    target: &UpgradeTarget,
+) -> bool {
+    pending_matches_guard(record, target)
+        && target.operation_id.as_deref() == Some(&observed.operation_id)
+        && target.environment_id == observed.environment_id
+        && target.manifest_sha256 == observed.manifest_sha256
+        && matches!(
+            observed.outcome,
+            UpgradeOutcome::Committed | UpgradeOutcome::RolledBack
+        )
+        && matches_target(record, observed)
 }
 
 fn matches_target(record: &UpdateRecord, observed: &UpgradeObservation) -> bool {
