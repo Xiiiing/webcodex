@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkflowSession } from "../../models/workspace";
 import type { DesktopState } from "../../models/topology";
 import { LocaleProvider } from "../../i18n/locale";
 import { PRODUCT_LOCALES, PRODUCT_MESSAGES, productText } from "../../i18n/product";
@@ -533,4 +534,157 @@ it("keeps Runner overview when only the default display Project disappears", asy
   view.rerender(wrap(<ProjectsPanel />, projectless));
   expect(screen.getByRole("row", { name: "beta" })).toBeInTheDocument();
   expect(native.invoke.mock.calls.filter(([, value]) => value.request.kind === "overview")).toHaveLength(calls);
+});
+
+describe("Workflow Session loaded-record filters", () => {
+  function record(title: string, changes: Partial<WorkflowSession> = {}): WorkflowSession {
+    return { ...session, session_id: `fixture-${title}`, title, running_call: false, running_jobs: 0,
+      overview: { attention: { open_todos: 0, open_questions: 0, open_risks: 0 } }, ...changes };
+  }
+  function inventory(rows: WorkflowSession[], truncated = false) {
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
+      ? Promise.resolve({ ...overview, recent_sessions: { sessions: rows, truncated, scan_truncated: false } }) : normal(command, value));
+  }
+  async function openSessions(count: number) {
+    fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+    await waitFor(() => expect(screen.getByText("Loaded sessions")).toHaveTextContent(`Loaded sessions ${count}`));
+    return screen.getByRole("combobox", { name: "Session filter" });
+  }
+
+  it("counts loaded records and selects actual calls or jobs, not idle open sessions or uncertain job inventories", async () => {
+    inventory([record("Idle fixture"), record("Call fixture", { running_call: true }), record("Job fixture", { running_jobs: 1 }), record("Unknown jobs fixture", { running_jobs_complete: false })]);
+    render(wrap(<ActivityPanel activity={[]} />));
+    const filter = await openSessions(4);
+    expect(screen.getByRole("button", { name: /Idle fixture/ })).toHaveTextContent("Open");
+    native.invoke.mockClear();
+    fireEvent.change(filter, { target: { value: "running" } });
+    expect(screen.getByRole("button", { name: /Call fixture/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Job fixture/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Idle fixture/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Unknown jobs fixture/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Matching loaded sessions")).toHaveTextContent("Matching loaded sessions 2");
+    expect(native.invoke).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(filter).toHaveValue("all");
+    expect(screen.getByText("Matching loaded sessions")).toHaveTextContent("Matching loaded sessions 4");
+    expect(native.invoke).not.toHaveBeenCalled();
+  });
+
+  it.each(["open_todos", "open_questions", "open_risks"] as const)("finds positive %s without requiring running work", async field => {
+    inventory([record("Attention fixture", { overview: { attention: { open_todos: 0, open_questions: 0, open_risks: 0, [field]: 1 } } }), record("Idle fixture")]);
+    render(wrap(<ActivityPanel activity={[]} />));
+    fireEvent.change(await openSessions(2), { target: { value: "attention" } });
+    expect(screen.getByRole("button", { name: /Attention fixture/ })).toHaveTextContent("Open");
+    expect(screen.queryByRole("button", { name: /Idle fixture/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Matching loaded sessions")).toHaveTextContent("Matching loaded sessions 1");
+  });
+
+  it("includes failed checks and excludes unavailable, inconclusive, not-run and passed checks", async () => {
+    const states = ["failed", "unavailable", "inconclusive", "not_run", "passed"];
+    inventory(states.map(state => record(`${state} fixture`, { overview: { attention: { open_todos: 0, open_questions: 0, open_risks: 0 }, validation: { state } } })));
+    render(wrap(<ActivityPanel activity={[]} />));
+    fireEvent.change(await openSessions(5), { target: { value: "attention" } });
+    expect(screen.getByRole("button", { name: /failed fixture/ })).toHaveTextContent("Checks failed");
+    for (const state of states.slice(1)) expect(screen.queryByRole("button", { name: new RegExp(`${state} fixture`) })).not.toBeInTheDocument();
+  });
+
+  it("combines Project and session filters, clears both on no matches, and preserves partial-history warnings", async () => {
+    inventory([record("Alpha running fixture", { running_call: true }), record("Beta idle fixture", { project_id: beta.id })], true);
+    render(wrap(<ActivityPanel activity={[]} />));
+    const filter = await openSessions(2);
+    fireEvent.change(filter, { target: { value: "running" } });
+    fireEvent.click(screen.getByRole("button", { name: "Project: All Projects" }));
+    const picker = screen.getByRole("dialog", { name: "Project" });
+    fireEvent.click(within(picker).getByRole("button", { name: /beta/ }));
+    expect(screen.getByText("No matching sessions")).toBeInTheDocument();
+    expect(screen.queryByText(productText("en-US", "noSessions"))).not.toBeInTheDocument();
+    expect(screen.getByText("Loaded sessions")).toHaveTextContent("Loaded sessions 2");
+    expect(screen.getByText("Matching loaded sessions")).toHaveTextContent("Matching loaded sessions 0");
+    expect(screen.getByText("History is partial")).toBeInTheDocument();
+    expect(screen.getByText(/Counts describe loaded records only/)).toBeInTheDocument();
+    native.invoke.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(filter).toHaveValue("all");
+    expect(screen.getByRole("button", { name: "Project: All Projects" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Alpha running fixture/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Beta idle fixture/ })).toBeInTheDocument();
+    expect(native.invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps Window and System views independent of the session filter", async () => {
+    inventory([record("Idle fixture")]);
+    render(wrap(<ActivityPanel activity={[]} />));
+    fireEvent.change(await openSessions(1), { target: { value: "running" } });
+    expect(screen.getByText("No matching sessions")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Tool calls" }));
+    expect(screen.queryByRole("combobox", { name: "Session filter" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Open call details/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Service events" }));
+    expect(screen.queryByRole("combobox", { name: "Session filter" })).not.toBeInTheDocument();
+    expect(screen.queryByText("No matching sessions")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+    expect(screen.getByRole("combobox", { name: "Session filter" })).toHaveValue("running");
+  });
+
+  it("resets session filters on Server changes and authorization loss", async () => {
+    inventory([record("Idle fixture")]);
+    const normal = native.invoke.getMockImplementation()!;
+    const view = render(wrap(<ActivityPanel activity={[]} />));
+    fireEvent.change(await openSessions(1), { target: { value: "running" } });
+    view.rerender(wrap(<ActivityPanel activity={[]} />, { ...state, topology: { ...state.topology!, server: { kind: "remote", url: "https://fixture.example" } } }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Session filter" })).toHaveValue("all"));
+    await screen.findByRole("button", { name: /Idle fixture/ });
+    fireEvent.change(screen.getByRole("combobox", { name: "Session filter" }), { target: { value: "attention" } });
+    native.invoke.mockRejectedValue({ code: "workspace_permission_denied" });
+    fireEvent.click(within(screen.getByRole("heading", { name: "Activity" }).parentElement!).getByRole("button", { name: "Refresh" }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("combobox", { name: "Session filter" })).toHaveValue("all");
+    expect(screen.queryByRole("button", { name: /Idle fixture/ })).not.toBeInTheDocument();
+    native.invoke.mockImplementation(normal);
+    fireEvent.click(within(screen.getByRole("heading", { name: "Activity" }).parentElement!).getByRole("button", { name: "Refresh" }));
+    await screen.findByRole("button", { name: /Idle fixture/ });
+    expect(screen.getByRole("combobox", { name: "Session filter" })).toHaveValue("all");
+  });
+
+  it("keeps focus and Project keyboard navigation usable at a narrow viewport", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
+    try {
+      inventory([record("Idle fixture"), record("Beta running fixture", { project_id: beta.id, running_jobs: 1 })]);
+      render(wrap(<ActivityPanel activity={[]} />));
+      const first = screen.getByRole("tab", { name: "Tool calls" }); first.focus();
+      fireEvent.keyDown(first, { key: "ArrowRight" });
+      expect(screen.getByRole("tab", { name: "Workflow Sessions" })).toHaveFocus();
+      await waitFor(() => expect(screen.getByText("Loaded sessions")).toHaveTextContent("Loaded sessions 2"));
+      const filter = screen.getByRole("combobox", { name: "Session filter" }); filter.focus();
+      expect(filter).toHaveFocus(); fireEvent.change(filter, { target: { value: "running" } });
+      const trigger = screen.getByRole("button", { name: "Project: All Projects" });
+      fireEvent.click(trigger);
+      const picker = screen.getByRole("dialog", { name: "Project" });
+      fireEvent.keyDown(picker, { key: "ArrowDown" });
+      expect(within(picker).getByRole("button", { name: /alpha/ })).toHaveFocus();
+      fireEvent.keyDown(picker, { key: "ArrowDown" });
+      expect(within(picker).getByRole("button", { name: /beta/ })).toHaveFocus();
+      fireEvent.click(document.activeElement!);
+      expect(trigger).toHaveFocus();
+      expect(screen.getByRole("button", { name: /Beta running fixture/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Clear filters" })).toBeInTheDocument();
+    } finally { Object.defineProperty(window, "innerWidth", { configurable: true, value: width }); }
+  });
+
+  it.each(PRODUCT_LOCALES)("localizes the session filters and loaded-record counts in %s", async locale => {
+    localStorage.setItem("webcodex.desktop.locale", locale);
+    inventory([record("Idle fixture")]);
+    render(wrap(<ActivityPanel activity={[]} />));
+    fireEvent.click(screen.getByRole("tab", { name: productText(locale, "sessions") }));
+    const filter = screen.getByRole("combobox", { name: productText(locale, "sessionFilter") });
+    expect(within(filter).getByRole("option", { name: productText(locale, "allSessions") })).toBeInTheDocument();
+    expect(within(filter).getByRole("option", { name: productText(locale, "runningSessions") })).toBeInTheDocument();
+    expect(within(filter).getByRole("option", { name: productText(locale, "sessionsNeedAttention") })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(productText(locale, "loadedSessions"))).toHaveTextContent("1"));
+    fireEvent.change(filter, { target: { value: "attention" } });
+    expect(screen.getByText(productText(locale, "noMatchingSessions"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: productText(locale, "clearActivityFilters") })).toBeInTheDocument();
+  });
 });
