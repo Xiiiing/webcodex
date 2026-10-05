@@ -210,13 +210,17 @@ export function FirstRun({ state, onState, chooseModeFirst = false, onComplete }
         </details>
       </div>
       {runner && canChooseProject && <div className="project-picker-card">
-        <strong>{t("setup.initialProject")}</strong>
-        <p className="field-help">{t("setup.initialProjectHelp")}</p>
-        {projectPath && <span>{projectPath}</span>}
-        <button type="button" className="secondary-button" disabled={mutationBusy} onClick={() => void chooseProject()}
-          data-webcodex-action="choose-project">{t(projectPath ? "setup.changeFolder" : "setup.chooseFolder")}</button>
-        {projectPath && <button type="button" className="secondary-button" disabled={mutationBusy} onClick={() => setProjectPath(null)}
-          data-webcodex-action="clear-project">{t("setup.clearInitialProject")}</button>}
+        <div>
+          <strong>{t("setup.initialProject")}</strong>
+          <p className="field-help">{t("setup.initialProjectHelp")}</p>
+          {projectPath && <code>{projectPath}</code>}
+        </div>
+        <div className="setup-project-actions">
+          <button type="button" className="secondary-button" disabled={mutationBusy} onClick={() => void chooseProject()}
+            data-webcodex-action="choose-project">{t(projectPath ? "setup.changeFolder" : "setup.chooseFolder")}</button>
+          {projectPath && <button type="button" className="secondary-button" disabled={mutationBusy} onClick={() => setProjectPath(null)}
+            data-webcodex-action="clear-project">{t("setup.clearInitialProject")}</button>}
+        </div>
       </div>}
       {mode === "join" && <div className="form-card">
         <div className="field-group">
