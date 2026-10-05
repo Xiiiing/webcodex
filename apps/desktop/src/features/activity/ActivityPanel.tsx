@@ -54,18 +54,23 @@ function useWindowPreviews(rows: WindowSummary[], enabled: boolean, revision: nu
 
 export function ActivityPanel({ activity }: { activity: ActivityEntry[] }) {
   const p = useProduct(); const s = useShellText(); const { locale } = useLocale(); const workspace = useWorkspace();
-  const [tab, setTab] = useState<Tab>("windows"); const [project, setProject] = useState(""); const [page, setPage] = useState(0);
-  const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
-  const context = JSON.stringify([workspace.state.topology?.server, workspace.state.workspace_runner, workspace.state.persistent_environment]);
-  useEffect(() => { setSessionFilter("all"); setProject(""); }, [context]);
+  const [tab, setTab] = useState<Tab>("windows"); const [selectedProject, setProject] = useState(""); const [page, setPage] = useState(0);
+  const [selectedSessionFilter, setSessionFilter] = useState<SessionFilter>("all");
+  const [filterContext, setFilterContext] = useState(workspace.contextKey);
+  const authorizationLost = workspace.error && ["authenticationRequired", "permissionDenied"].includes(workspace.errorReason);
+  // A new inventory or permission boundary must never render with the previous
+  // context's filters while the cleanup effect is waiting to run.
+  const filtersInvalid = filterContext !== workspace.contextKey || authorizationLost;
+  const project = filtersInvalid ? "" : selectedProject;
+  const sessionFilter = filtersInvalid ? "all" : selectedSessionFilter;
+  useEffect(() => { setFilterContext(workspace.contextKey); setSessionFilter("all"); setProject(""); }, [workspace.contextKey]);
   useEffect(() => {
-    if (workspace.error && ["authenticationRequired", "permissionDenied"].includes(workspace.errorReason)) {
-      setSessionFilter("all"); setProject("");
-    }
-  }, [workspace.error, workspace.errorReason]);
+    if (authorizationLost) { setSessionFilter("all"); setProject(""); }
+  }, [authorizationLost]);
   const clearSessionFilters = () => { setSessionFilter("all"); setProject(""); };
   const windows = useMemo(() => workspace.windows.filter(row => !project || row.last_project === project)
     .slice().sort((a, b) => (b.active_count > 0 ? 1 : 0) - (a.active_count > 0 ? 1 : 0) || (b.last_meaningful_activity_at_ms ?? b.last_seen_at_ms) - (a.last_meaningful_activity_at_ms ?? a.last_seen_at_ms)), [workspace.windows, project]);
+  const historyPartial = Boolean(workspace.runner?.recent_sessions?.truncated || workspace.runner?.recent_sessions?.scan_truncated);
   const sessions = workspace.sessions.filter(row => (!project || row.project_id === project) && sessionMatchesFilter(row, sessionFilter));
   const visible = windows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const previews = useWindowPreviews(visible, tab === "windows" && !workspace.state.current_operation, workspace.revision);
@@ -133,8 +138,8 @@ export function ActivityPanel({ activity }: { activity: ActivityEntry[] }) {
           </span>
         </button>;
       })}
-      {!sessions.length && !workspace.loading && <WorkspaceEmptyState kind="activity" message={p(project || sessionFilter !== "all" ? "noMatchingSessions" : "noSessions")} action={project || sessionFilter !== "all" ? <button type="button" className="secondary-button" onClick={clearSessionFilters}>{p("clearActivityFilters")}</button> : <button type="button" className="secondary-button" onClick={workspace.refresh}>{p("refresh")}</button>} />}
-      {workspace.runner?.recent_sessions?.truncated && <p className="field-help">{s("History is partial")}</p>}
+      {!sessions.length && !workspace.loading && <WorkspaceEmptyState kind="activity" message={p(project || sessionFilter !== "all" ? "noMatchingSessions" : historyPartial ? "noObservedSessions" : "noSessions")} action={project || sessionFilter !== "all" ? <button type="button" className="secondary-button" onClick={clearSessionFilters}>{p("clearActivityFilters")}</button> : <button type="button" className="secondary-button" onClick={workspace.refresh}>{p("refresh")}</button>} />}
+      {historyPartial && <p className="field-help">{s("History is partial")}</p>}
     </>}
     {tab === "system" && <SystemActivity activity={activity} />}
     </section>

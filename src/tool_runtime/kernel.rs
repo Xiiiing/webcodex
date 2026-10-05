@@ -157,6 +157,22 @@ fn session_selector_failure(error: super::SessionSelectorError) -> ToolCallOutco
     }
 }
 
+/// Shared scope projection for authenticated discovery surfaces. Operator
+/// extensions always require their declared authority; ordinary non-OAuth
+/// catalogs retain their established visibility behavior.
+pub(crate) fn runtime_tool_scope_allows_discovery(
+    auth: Option<&AuthContext>,
+    tool_name: &str,
+) -> bool {
+    let requires_check = auth.is_some_and(AuthContext::is_oauth_token)
+        || runtime_tool_operator_extension_family(tool_name).is_some()
+        || matches!(
+            crate::auth::scopes::oauth_scope_policy_for_runtime_tool(tool_name),
+            OAuthToolScopePolicy::RequireAny(_)
+        );
+    !requires_check || check_runtime_tool_scope(auth, tool_name).is_ok()
+}
+
 pub(crate) fn check_runtime_tool_scope(
     auth: Option<&AuthContext>,
     tool_name: &str,
@@ -538,7 +554,11 @@ impl ToolRuntime {
                 correlation: Default::default(),
             };
         }
-        if request.tool_name == "read_pdf_chunk" && !capabilities.pdf_app {
+        if matches!(
+            request.tool_name.as_str(),
+            "read_pdf_chunk" | "read_app_artifact_chunk"
+        ) && !capabilities.pdf_app
+        {
             return ToolCallOutcome {
                 success: false,
                 result: None,
