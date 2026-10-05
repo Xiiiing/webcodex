@@ -126,77 +126,32 @@ fn record(root: &Path, url: String, local: bool) -> EnvironmentRecord {
     }
 }
 
-#[cfg(windows)]
-fn copy_windows_private_security(source: &Path, target: &Path) {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
-    };
-    use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    };
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut owner = std::ptr::null_mut();
-    let mut dacl = std::ptr::null_mut();
-    let mut descriptor = std::ptr::null_mut();
-    let status = unsafe {
-        GetNamedSecurityInfoW(
-            source.as_ptr(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            &mut owner,
-            std::ptr::null_mut(),
-            &mut dacl,
-            std::ptr::null_mut(),
-            &mut descriptor,
-        )
-    };
-    assert_eq!(status, 0, "fixture security source must be readable");
-    assert!(!owner.is_null() && !dacl.is_null() && !descriptor.is_null());
-    let status = unsafe {
-        SetNamedSecurityInfoW(
-            target.as_mut_ptr(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION
-                | DACL_SECURITY_INFORMATION
-                | PROTECTED_DACL_SECURITY_INFORMATION,
-            owner,
-            std::ptr::null_mut(),
-            dacl,
-            std::ptr::null_mut(),
-        )
-    };
-    unsafe { LocalFree(descriptor) };
-    assert_eq!(status, 0, "fixture path must inherit private test security");
-}
-
 fn private_file(path: &Path, bytes: &[u8]) {
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    assert!(!path.exists(), "fixture file must be new");
+    let store = EnvironmentStore::open(path.parent().unwrap().to_owned()).unwrap();
+    // The Core writer provisions a private, owner-correct file before any bytes
+    // are written. Each fixture path is new, so move its released lock file into
+    // place and preserve that security when writing the fixture contents.
+    drop(store.lock().unwrap());
+    std::fs::rename(store.root().join("setup.lock"), path).unwrap();
     std::fs::write(path, bytes).unwrap();
     #[cfg(windows)]
-    {
-        let root = path
-            .ancestors()
-            .find(|candidate| candidate.join("environment.json").is_file())
-            .expect("fixture environment root");
-        let reference = root.join("environment.json");
-        if path.parent() != Some(root) {
-            copy_windows_private_security(&reference, path.parent().unwrap());
-        }
-        copy_windows_private_security(&reference, path);
-    }
+    webcodex_environment::runtime_entry::validate_windows_env_acl(path).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            path.parent().unwrap(),
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            std::fs::metadata(store.root())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }
 
