@@ -57,25 +57,41 @@ fn os_release_family(text: &str) -> Option<PackageFormat> {
 
 #[cfg(target_os = "linux")]
 fn installed_linux_package_format() -> Option<PackageFormat> {
+    use crate::process::CommandOutputExt;
+    const QUERY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+    const QUERY_OUTPUT_BYTES: usize = 4096;
     let deb = std::process::Command::new("/usr/bin/dpkg-query")
         .args(["-W", "-f=${db:Status-Status}", "webcodex"])
-        .output()
+        .output_with_limits(QUERY_DEADLINE, QUERY_OUTPUT_BYTES)
         .ok()
         .is_some_and(|output| output.status.success() && output.stdout == b"installed");
     let rpm = std::process::Command::new("/usr/bin/rpm")
         .args(["-q", "--quiet", "webcodex"])
-        .status()
+        .output_with_limits(QUERY_DEADLINE, QUERY_OUTPUT_BYTES)
         .ok()
-        .is_some_and(|status| status.success());
+        .is_some_and(|output| output.status.success());
     match (deb, rpm) {
         (true, false) => Some(PackageFormat::Deb),
         (false, true) => Some(PackageFormat::Rpm),
         (true, true) => None,
-        (false, false) => std::fs::read_to_string("/etc/os-release")
-            .ok()
-            .as_deref()
-            .and_then(os_release_family),
+        (false, false) => os_release_path_family(Path::new("/etc/os-release")),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn os_release_path_family(path: &Path) -> Option<PackageFormat> {
+    use std::io::Read;
+    const LIMIT: u64 = 16 * 1024;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > LIMIT {
+        return None;
+    }
+    std::str::from_utf8(&bytes).ok().and_then(os_release_family)
 }
 
 fn current_installer_target(platform: RuntimePlatform) -> Option<InstallerTarget> {
@@ -157,6 +173,18 @@ fn package_layout(target: InstallerTarget, executable: &Path, runtime: &Path) ->
     }
 }
 
+fn assessed_environment(root: &Path, environment_id: &str) -> Option<crate::EnvironmentRecord> {
+    let store = EnvironmentStore::open_existing(root.to_path_buf()).ok()??;
+    let record = store.load_environment().ok()??;
+    if !record.configured
+        || record.environment_id != environment_id
+        || record.request.account.identity != crate::current_account().ok()?.identity
+    {
+        return None;
+    }
+    Some(record)
+}
+
 /// Cheap installation classification, separate from Runtime readiness. A later
 /// explicit Install rechecks the *published bytes* of this installed generation.
 pub fn assess_installation(
@@ -193,17 +221,7 @@ pub fn assess_installation(
     };
     let context = (|| {
         let root = environment_root.clone();
-        if !root.join("environment.json").is_file() {
-            return None;
-        }
-        let store = EnvironmentStore::open(root.clone()).ok()?;
-        let record = store.load_environment().ok()??;
-        if !record.configured
-            || record.environment_id != environment_id
-            || record.request.account.identity != crate::current_account().ok()?.identity
-        {
-            return None;
-        }
+        let record = assessed_environment(&root, &environment_id)?;
         for (stored, resolved, name) in [
             (
                 &record.request.binaries.cli,
@@ -392,6 +410,78 @@ mod tests {
             None
         );
         assert_eq!(os_release_family("ID=unknown\n"), None);
+    }
+
+    #[test]
+    fn installation_environment_assessment_never_creates_an_absent_root() {
+        let directory = crate::test_tempdir().unwrap();
+        let root = directory.path().join("absent-environment");
+        assert!(assessed_environment(&root, "selected-environment").is_none());
+        assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installation_environment_assessment_preserves_existing_permissions_and_mtime() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let directory = crate::test_tempdir().unwrap();
+        let root = directory.path().join("environment");
+        let store = EnvironmentStore::open(root.clone()).unwrap();
+        let record = crate::EnvironmentRecord {
+            schema_version: 1,
+            environment_id: "selected-environment".into(),
+            request: crate::SetupRequest {
+                service_scope: crate::service::ServiceScope::System,
+                mode: crate::EnvironmentMode::Join,
+                server_url: "http://127.0.0.1:1".into(),
+                project: None,
+                runner: None,
+                account: crate::current_account().unwrap(),
+                binaries: RuntimeBinaries {
+                    cli: root.join("webcodex"),
+                    server: root.join("webcodex-server"),
+                    runner: root.join("webcodex-runner"),
+                },
+            },
+            username: None,
+            runner_client_id: None,
+            projects: vec![],
+            configured: true,
+        };
+        store.save_environment(&record).unwrap();
+        let state = root.join("environment.json");
+        let metadata = std::fs::metadata(&root).unwrap();
+        let state_mtime = std::fs::metadata(&state).unwrap().modified().unwrap();
+        assert!(assessed_environment(&root, &record.environment_id).is_some());
+        assert!(assessed_environment(&root, "stale-selection").is_none());
+        let after = std::fs::metadata(&root).unwrap();
+        assert_eq!(after.mode(), metadata.mode());
+        assert_eq!(after.modified().unwrap(), metadata.modified().unwrap());
+        assert_eq!(
+            std::fs::metadata(&state).unwrap().modified().unwrap(),
+            state_mtime
+        );
+        assert!(!root.join("setup.lock").exists());
+        // An unsafe root is rejected as it stands, without repairing its ACL.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let metadata = std::fs::metadata(&root).unwrap();
+        assert!(assessed_environment(&root, &record.environment_id).is_none());
+        let after = std::fs::metadata(&root).unwrap();
+        assert_eq!(after.mode(), metadata.mode());
+        assert_eq!(after.modified().unwrap(), metadata.modified().unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn os_release_file_bytes_are_bounded_before_classification() {
+        let directory = crate::test_tempdir().unwrap();
+        let file = directory.path().join("os-release");
+        std::fs::write(&file, b"ID=ubuntu\n").unwrap();
+        assert_eq!(os_release_path_family(&file), Some(PackageFormat::Deb));
+        let mut oversized = b"ID=ubuntu\n".to_vec();
+        oversized.resize(16 * 1024 + 1, b' ');
+        std::fs::write(&file, oversized).unwrap();
+        assert_eq!(os_release_path_family(&file), None);
     }
 }
 

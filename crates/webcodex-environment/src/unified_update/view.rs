@@ -67,10 +67,37 @@ fn components(builds: &[MachineBuildInfo]) -> Vec<ComponentBuild> {
             binary: binary.into(),
             build: builds
                 .iter()
-                .find(|b| b.binary == binary && b.validate(binary).is_ok())
-                .cloned(),
+                .find_map(|build| safe_component_build(build, binary)),
         })
         .collect()
+}
+
+/// Build probes are diagnostic input and may describe custom programs. Only
+/// known platform identities and plain release versions cross this surface.
+/// This does not narrow the underlying MachineBuildInfo wire contract.
+fn safe_component_build(build: &MachineBuildInfo, binary: &str) -> Option<MachineBuildInfo> {
+    build.validate(binary).ok()?;
+    let version = semver::Version::parse(&build.version).ok()?;
+    if !version.pre.is_empty() || !version.build.is_empty() || version.to_string() != build.version
+    {
+        return None;
+    }
+    let platform = RuntimePlatform::ALL.into_iter().find(|platform| {
+        build.target == platform.target() && build.architecture == platform.architecture()
+    })?;
+    Some(MachineBuildInfo {
+        schema_version: build.schema_version,
+        binary: binary.into(),
+        version: version.to_string(),
+        git_commit: build.git_commit.clone(),
+        git_dirty: build.git_dirty,
+        built_at: build.built_at.clone(),
+        target: platform.target().into(),
+        architecture: platform.architecture().into(),
+        desktop_runtime_contract: build.desktop_runtime_contract,
+        agent_protocol_generation: build.agent_protocol_generation,
+        environment_data_format: build.environment_data_format,
+    })
 }
 impl UpdateManager {
     pub fn candidate_identity(&self) -> UpdateResult<Option<CandidateIdentity>> {
