@@ -1,0 +1,207 @@
+{
+  "evidence_kind": "read_only_preflight; not native acceptance",
+  "observed_at_utc": "2026-10-05T17:48:57+00:00",
+  "reviewed_source_sha": "ed22e5c060ae05e5be354d600be20a05b6ffed7c",
+  "public_sources": [
+    "https://api.github.com/repos/yyjeqhc/webcodex/releases?per_page=100",
+    "https://api.github.com/repos/yyjeqhc/webcodex/releases/latest",
+    "https://api.github.com/repos/yyjeqhc/webcodex/git/ref/tags/v0.4.6"
+  ],
+  "public_release": {
+    "tag": "v0.4.6",
+    "url": "https://github.com/yyjeqhc/webcodex/releases/tag/v0.4.6",
+    "published_at": "2026-10-03T14:24:34Z",
+    "tag_object_sha": "675d301804bf36a22f3581c9b0fe0d91b2b166ad",
+    "source_sha": "5072608fe74b2bfa6e8f208515c04242f475582f",
+    "assets": [
+      {
+        "id": 607940472,
+        "name": "SHA256SUMS",
+        "size": 1028,
+        "state": "uploaded",
+        "digest": "sha256:18d43ee6ae3d25a05defee28bf7bb85f7cdaa15857970f2c7528fb8543f0def9",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/SHA256SUMS"
+      },
+      {
+        "id": 607940456,
+        "name": "webcodex-desktop-v0.4.6-darwin-arm64.dmg",
+        "size": 42501922,
+        "state": "uploaded",
+        "digest": "sha256:925f8cf15981d0df7da0d65d7c51097c9ebdb4e764ffe76a0fe66efdf4f1a7b3",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-desktop-v0.4.6-darwin-arm64.dmg"
+      },
+      {
+        "id": 607963175,
+        "name": "webcodex-desktop-v0.4.6-darwin-x64.dmg",
+        "size": 46252364,
+        "state": "uploaded",
+        "digest": "sha256:9e4b2eded2247d932e8f02fe3fe2b28a3a0363718f633ec3826eb58c267d34ad",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-desktop-v0.4.6-darwin-x64.dmg"
+      },
+      {
+        "id": 607963259,
+        "name": "webcodex-desktop-v0.4.6-darwin-x64.dmg.sha256",
+        "size": 105,
+        "state": "uploaded",
+        "digest": "sha256:e4c52abc925ea5c98dd390d4f7b43b7a1731ac6b4b941420caef8c78c485bed5",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-desktop-v0.4.6-darwin-x64.dmg.sha256"
+      },
+      {
+        "id": 607940466,
+        "name": "webcodex-desktop-v0.4.6-win32-arm64-setup.exe",
+        "size": 25099915,
+        "state": "uploaded",
+        "digest": "sha256:1781d2c9867fb51d9a7cf87f8149a17cee82c02d86d7245c8293e28166fc7a08",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-desktop-v0.4.6-win32-arm64-setup.exe"
+      },
+      {
+        "id": 607940455,
+        "name": "webcodex-desktop-v0.4.6-win32-x64-setup.exe",
+        "size": 28648526,
+        "state": "uploaded",
+        "digest": "sha256:ceb4ac6a0261b31cf366c59af2ad5b29b9fdcfbce50b660b02a2563499fec599",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-desktop-v0.4.6-win32-x64-setup.exe"
+      },
+      {
+        "id": 607940483,
+        "name": "webcodex-release-manifest.json",
+        "size": 172,
+        "state": "uploaded",
+        "digest": "sha256:b8feb8e99fbbeca11d42efa1b1700c20677b770b9f3540f8ef083c859e582f92",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-release-manifest.json"
+      },
+      {
+        "id": 607959041,
+        "name": "webcodex-server-bootstrap.sh",
+        "size": 28210,
+        "state": "uploaded",
+        "digest": "sha256:d1d8265c6eabc3cf8dbf2b6bbb4ed46bf29b8b6a3337225ee8620c3d3401ceb1",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-server-bootstrap.sh"
+      },
+      {
+        "id": 607959086,
+        "name": "webcodex-server-image.json",
+        "size": 743,
+        "state": "uploaded",
+        "digest": "sha256:8199df68955deec57f78ccdf3a48efc0eff2b2fb334d18a025b79665a6988614",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-server-image.json"
+      },
+      {
+        "id": 607940403,
+        "name": "webcodex-v0.4.6-darwin-arm64.tar.gz",
+        "size": 29403126,
+        "state": "uploaded",
+        "digest": "sha256:19b43b791db58aedb027173695a747fa79bfd24c8e2a23becbf96baee05a70d9",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-v0.4.6-darwin-arm64.tar.gz"
+      },
+      {
+        "id": 607940407,
+        "name": "webcodex-v0.4.6-darwin-x64.tar.gz",
+        "size": 31755389,
+        "state": "uploaded",
+        "digest": "sha256:2e1770719bf333f7fe90ac1ffb12ace6cf8982825df950f831084da0f9c4e094",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-v0.4.6-darwin-x64.tar.gz"
+      },
+      {
+        "id": 607940405,
+        "name": "webcodex-v0.4.6-linux-arm64.tar.gz",
+        "size": 29905279,
+        "state": "uploaded",
+        "digest": "sha256:a1bc865a0ccf4d994d44c5752ec06523fe30c11c15a35a81ee54b4fd3f999189",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-v0.4.6-linux-arm64.tar.gz"
+      },
+      {
+        "id": 607940404,
+        "name": "webcodex-v0.4.6-linux-x64.tar.gz",
+        "size": 32426007,
+        "state": "uploaded",
+        "digest": "sha256:491e48cea25d6af8c707247f5e743eb698514d9127d2a8f3da623db917384e71",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-v0.4.6-linux-x64.tar.gz"
+      },
+      {
+        "id": 607940451,
+        "name": "webcodex-v0.4.6-win32-arm64.tar.gz",
+        "size": 30635148,
+        "state": "uploaded",
+        "digest": "sha256:9ef69ae640144cd547f5014f000fbbdd3b5cb6b4bc2e88c03ce3521d177e2b96",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-v0.4.6-win32-arm64.tar.gz"
+      },
+      {
+        "id": 607940406,
+        "name": "webcodex-v0.4.6-win32-x64.tar.gz",
+        "size": 32892335,
+        "state": "uploaded",
+        "digest": "sha256:0c226e1b047e02616fd95523b42bc3c6dffc9b8ac75aedaffeac2a46d7e7d1b3",
+        "browser_download_url": "https://github.com/yyjeqhc/webcodex/releases/download/v0.4.6/webcodex-v0.4.6-win32-x64.tar.gz"
+      }
+    ],
+    "package_bytes_verified": false,
+    "metadata_bytes_verified": [
+      {
+        "name": "SHA256SUMS",
+        "sha256": "18d43ee6ae3d25a05defee28bf7bb85f7cdaa15857970f2c7528fb8543f0def9",
+        "bytes_verified": true,
+        "size": 1028
+      },
+      {
+        "name": "webcodex-desktop-v0.4.6-darwin-x64.dmg.sha256",
+        "sha256": "e4c52abc925ea5c98dd390d4f7b43b7a1731ac6b4b941420caef8c78c485bed5",
+        "bytes_verified": true,
+        "size": 105
+      },
+      {
+        "name": "webcodex-release-manifest.json",
+        "sha256": "b8feb8e99fbbeca11d42efa1b1700c20677b770b9f3540f8ef083c859e582f92",
+        "bytes_verified": true,
+        "size": 172,
+        "schema_version": 1,
+        "classification": "runtime_generation_compatibility_metadata; not a unified installer/source manifest"
+      }
+    ]
+  },
+  "catalog": {
+    "public_releases_in_response": 20,
+    "unified_or_source_assets_in_response": {},
+    "response_is_catalog_observation_not_package_verification": true
+  },
+  "available_host_observation": {
+    "label": "development-host-observation-only",
+    "os": {
+      "PRETTY_NAME": "Ubuntu 24.04.4 LTS",
+      "VERSION_ID": "24.04",
+      "ID": "ubuntu"
+    },
+    "kernel": "7.0.0-34-generic",
+    "architecture": "x86_64",
+    "uid": 1000,
+    "euid": 1000,
+    "pid1": "systemd",
+    "authorized_as_install_target": false,
+    "test_account": null,
+    "installation_scope": null,
+    "tools_present": {
+      "systemctl": true,
+      "loginctl": true,
+      "sudo": true,
+      "ssh": true,
+      "qemu-system-x86_64": false,
+      "qemu-system-aarch64": false,
+      "virsh": false,
+      "VBoxManage": false,
+      "docker": true,
+      "dpkg": true,
+      "rpm": false
+    },
+    "kvm_present": true
+  },
+  "native_execution": {
+    "status": "blocked",
+    "selected_package": null,
+    "old_installed_package": null,
+    "test_target": null,
+    "service_operations_executed": false,
+    "installation_executed": false,
+    "reboot_or_logout_executed": false,
+    "reason": "No explicitly authorized disposable native target or selected unified candidate has been supplied."
+  }
+}

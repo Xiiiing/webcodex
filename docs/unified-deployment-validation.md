@@ -2,7 +2,7 @@
 
 [简体中文](#中文)
 
-This checklist records scope and evidence for the unified environment work. The unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installers for x64 and arm64 are defined by this branch’s build pipeline; the six installer variants have not yet received native build/installation acceptance or a unified release. Source changes and CI/package construction do not prove real-machine behavior. No cross-platform equivalence claim is made.
+This checklist records scope and evidence for the unified environment work. The optional unified build defines eight installer targets: Windows NSIS `.exe`, macOS `.pkg`, and Linux `.deb` and `.rpm`, each for x64 and arm64. Runtime/source identities remain six. Debian 12 / Ubuntu 22.04+ are the declared DEB scope; RPM distribution limits are recorded below. These targets have not received full native installation/session/upgrade acceptance or a complete public unified release. Source changes and CI/package construction do not prove real-machine behavior. No cross-platform equivalence claim is made.
 
 ## Milestones and scope
 
@@ -17,7 +17,7 @@ This checklist records scope and evidence for the unified environment work. The 
 | M2f | Existing installation migration | Core supports Desktop migration. Linux adds explicit owner-bearing user-Runner and fixed root-Server CLI migrations; source review is complete, but native acceptance remains outstanding. Ownerless shared-key/custom units are not guessed; a fail-closed guard is not migration completion. |
 | M2g | Upgrade and rollback | Platform-specific prepare/authorize/finish constraints and incomplete outer installer recovery are recorded below; native full-installer validation remains required. |
 | M3 | Desktop, Web Runtime Console, and CLI | Shared Server-authorized fleet; optional local projects, viewer authentication, local service diagnosis, live setup progress, and user credential repair. Desktop Diagnostics has separate local Server/Runner lifecycle controls; persistent services are observed and periodically refreshed without auto-restart. |
-| M4 | Unified packaging | Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb`, each x64 and arm64. Artifacts do not prove native installation. |
+| M4 | Unified packaging | Eight optional targets: Windows EXE, macOS PKG, Linux DEB and RPM, each x64 and arm64. Artifacts do not prove native installation or expand distribution support. |
 | M5 | Integrated end-to-end acceptance | Verify create/join, projects, ChatGPT path, persistence, migration, and upgrade on real machines. No full cross-platform acceptance has been completed. |
 
 ### Confirmed automated evidence
@@ -53,14 +53,26 @@ This evidence does **not** accept `.deb` installation, Core system-service migra
 
 | Target | Installer acceptance | Reboot/service acceptance | GUI acceptance | Upgrade acceptance |
 | --- | --- | --- | --- | --- |
-| Windows x64, NSIS | Not yet accepted on a real Windows x64 machine | Not yet accepted: SCM start/stop/restart, reboot persistence, service identity/SID, credential repair | Not yet accepted: same-user logged-in unlocked session helper and Desktop shutdown behavior | Not yet accepted: published HTTPS manifest verification and installed upgrade/rollback behavior |
-| Windows arm64, NSIS | Not yet accepted on a real Windows arm64 machine | Not yet accepted: native SCM behavior and reboot persistence | Not yet accepted: native GUI helper/session behavior | Not yet accepted: native installed upgrade and recovery |
-| macOS arm64, package | Not yet accepted on a real Apple Silicon Mac | Not yet accepted: LaunchDaemon lifecycle and reboot persistence | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
-| macOS x64, package | Not yet accepted on a real Intel Mac | Not yet accepted: LaunchDaemon lifecycle and reboot persistence | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
-| Debian 12 x64, `.deb` | Not yet accepted on a native Debian 12 x64 host | Not yet accepted: systemd lifecycle and reboot persistence | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: published manifest verification and installed package upgrade/rollback |
-| Debian 12 arm64, `.deb` | Not yet accepted on a native Debian 12 arm64 host | Not yet accepted: systemd lifecycle and reboot persistence | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: native package upgrade/rollback |
-| Ubuntu 22.04+ x64, `.deb` | Not yet accepted on a native Ubuntu x64 host | Not yet accepted: systemd lifecycle and reboot persistence | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: published manifest verification and installed package upgrade/rollback |
-| Ubuntu 22.04+ arm64, `.deb` | Not yet accepted on a native Ubuntu arm64 host | Not yet accepted: systemd lifecycle and reboot persistence | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: native package upgrade/rollback |
+| Windows x64, NSIS | Not yet accepted on a real Windows x64 machine | Not yet accepted: user Task Scheduler lifecycle, sign-out/sign-in and Desktop exit; separately authorized system SCM lifecycle, reboot, account/SID and credential repair | Not yet accepted: same-user logged-in unlocked session helper and Desktop shutdown behavior | Not yet accepted: published HTTPS manifest verification and installed upgrade/rollback behavior |
+| Windows arm64, NSIS | Not yet accepted on a real Windows arm64 machine | Not yet accepted: native user Task Scheduler logout/login behavior; separately authorized system SCM identity, lifecycle and reboot | Not yet accepted: native GUI helper/session behavior | Not yet accepted: native installed upgrade and recovery |
+| macOS arm64, package | Not yet accepted on a real Apple Silicon Mac | Not yet accepted: user LaunchAgent and authorized system LaunchDaemon lifecycle, logout/login, reboot and volume-unlock boundaries | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
+| macOS x64, package | Not yet accepted on a real Intel Mac | Not yet accepted: user LaunchAgent and authorized system LaunchDaemon lifecycle, logout/login, reboot and volume-unlock boundaries | Not yet accepted: GUI helper only in same user's logged-in unlocked session | Not yet accepted: published manifest verification and installed upgrade/rollback |
+| Debian 12 x64, `.deb` | Not yet accepted on a native Debian 12 x64 host | Not yet accepted: systemd user/system lifecycle, login/logout, authorized linger and unattended reboot conditions | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: published manifest verification and installed package upgrade/rollback |
+| Debian 12 arm64, `.deb` | Not yet accepted on a native Debian 12 arm64 host | Not yet accepted: systemd user/system lifecycle, login/logout, authorized linger and unattended reboot conditions | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: native package upgrade/rollback |
+| Ubuntu 22.04+ x64, `.deb` | Not yet accepted on a native Ubuntu x64 host | Not yet accepted: systemd user/system lifecycle, login/logout, authorized linger and unattended reboot conditions | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: published manifest verification and installed package upgrade/rollback |
+| Ubuntu 22.04+ arm64, `.deb` | Not yet accepted on a native Ubuntu arm64 host | Not yet accepted: systemd user/system lifecycle, login/logout, authorized linger and unattended reboot conditions | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: native package upgrade/rollback |
+| RPM x64, `.rpm` | Not yet accepted: exact Fedora/openEuler distribution/version and dependencies must be selected within the limits below | Not yet accepted: native systemd user/system, logout/login, linger and reboot | Not yet accepted: Desktop/runtime on that exact distribution; no Linux GUI helper backend | Not yet accepted: RPM-specific prepare, package hooks, finish and recovery |
+| RPM arm64, `.rpm` | Not yet accepted: exact distribution/version and native arm64 machine required; x64 evidence does not apply | Not yet accepted: native systemd user/system and unattended startup conditions | Not yet accepted: Desktop/runtime on that exact distribution | Not yet accepted: native RPM package upgrade/rollback |
+
+### Current native execution status (2026-10-06)
+
+The [dated preflight record](acceptance/2026-10-06-native-preflight.md) and [safe JSON snapshot](acceptance/2026-10-06-preflight.json) bind this review to source `ed22e5c060ae05e5be354d600be20a05b6ffed7c`. They record only read-only host and public release observations. No installer, service, logout/reboot or recovery operation was executed, and no native row was promoted to passed.
+
+The observed public `v0.4.6` release has runtime/Desktop assets but no unified EXE/PKG/DEB/RPM, installer `manifest.json` or source-manifest assets. A dedicated authorized test target, a selected matching package with source/build identity and byte hash, service scope/account, and an old/candidate pair for upgrade are still required. The current Ubuntu 24.04.4 x64 development host is not automatically a disposable installation target. Windows/macOS OS versions and RPM distribution/version remain unselected; a family or architecture is not an OS-version acceptance claim.
+
+RPM selection recognizes Fedora, RHEL/CentOS, Rocky/AlmaLinux and openEuler, but recognition is not installation acceptance. [RPM distribution scope](RPM_INSTALLER.md#distribution-scope) expects Fedora/openEuler packaging smoke without declaring a Fedora minimum version. openEuler 24.03-lts has only the documented container observation; its full install smoke remains unproven. CentOS Stream 9 is explicitly not a supported Desktop target. Do not invent broader support or use `--nodeps`/permission changes to pass an unsupported target. DEB evidence never accepts RPM.
+
+Before executing a matrix row, use the [evidence binding and scenario checklist](acceptance/2026-10-06-native-preflight.md#execution-evidence) to record the exact test object and authorized effects. Keep native pass, native fail, expected refusal, automated-test pass and blocked/not-run outcomes separate. Local MCP and a real ChatGPT/Tunnel project read require separate evidence.
 
 Linux/macOS upgrades use a staged owner-authorized flow: the original user runs `upgrade-prepare`, an administrator authorizes its private receipt, and the package hook invokes `installer-finish` through Core’s narrow owner-context broker. Windows prepares and finishes in the current user’s context. Reinstalling the exact same validated package is a read-only idempotent verification path, including without an Environment. On Unix, a different package without an Environment is rejected and requires an owner recovery record; it is not an automatic upgrade.
 
@@ -72,7 +84,7 @@ A successful cross-compiled build or package inspection is useful packaging evid
 
 ## Workflow and security checks
 
-- Create on the central Server machine and join from repository machines B and C. Confirm a Server-only central node can see both remote projects while paths remain Runner-local.
+- Ordinary Create must keep both independent Server and local Runner services, including with no initial Project; add a Project later and read it. Join from machines B and C as additional Runners without creating a second Server or copying Tunnel/bootstrap credentials. Verify exact Runner/Project identities with duplicate names/paths. Separately exercise Advanced Server-only, viewer-only and Quick Share without converting saved roles or ownership.
 - Exercise viewer join with a personal access token through hidden input or `--token-file`; exercise Runner join with a one-time code supplied through stdin. Confirm secrets are absent from process arguments and logs.
 - Exercise `add-project` with existing Runner identity and the viewer-to-Runner conversion prompt. Interrupt setup and resume; request `--new-pairing-code` only when code redemption is uncertain.
 - Verify ordinary `resume --token-file` does not rotate a saved credential. Exercise `repair-user-credential [--token-file PATH]` through hidden input and protected file input; confirm it verifies the saved Server and username, atomically replaces the credential, and has no Runner-pairing or service-state effects. In Desktop Diagnostics, verify **Restore Server user credential** uses protected input.
@@ -85,7 +97,7 @@ A successful cross-compiled build or package inspection is useful packaging evid
 
 ## 中文
 
-本清单记录统一环境工作的范围和证据边界。Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 的 x64、arm64 安装包由本分支构建流程定义；六类安装文件尚未完成原生构建/安装验收，也未作为统一安装包发布。源码和 CI/打包结果不能证明真实机器上的行为；本文不宣称跨平台体验一致。
+本清单记录统一环境工作的范围和证据边界。可选统一打包定义八类安装文件：Windows NSIS `.exe`、macOS `.pkg`、Linux `.deb` 和 `.rpm`，各含 x64、arm64；Runtime/source 身份仍为六个平台。DEB 声明范围为 Debian 12 / Ubuntu 22.04+，RPM 发行版限制见下文。这些文件尚未完成完整的原生安装、会话和升级验收，也未作为完整统一安装集合公开发布。源码和 CI/打包结果不能证明真实机器上的行为；本文不宣称跨平台体验一致。
 
 ### 里程碑与范围
 
@@ -100,7 +112,7 @@ A successful cross-compiled build or package inspection is useful packaging evid
 | M2f | 现有安装迁移 | Core 支持 Desktop 迁移。Linux 新增显式的 owner Runner 与固定 root Server CLI 迁移；源码审查已完成，但仍需原生验收。不会猜测无 owner shared-key/custom unit；安全拒绝不等于迁移完成。 |
 | M2g | 升级与回滚 | 下文记录平台专属 prepare/authorize/finish 限制及外层安装器恢复缺口；仍需原生完整安装器验证。 |
 | M3 | Desktop、网页 Runtime Console、CLI 三端体验 | 同一 Server 的授权项目与 Runner；本机项目可空、viewer 用户认证、本机诊断、实时配置进度和用户凭据修复。Desktop Diagnostics 可独立控制本机 Server/Runner 生命周期；持久服务只观察并定期刷新状态，不会自动重启。 |
-| M4 | 统一打包 | Windows NSIS、macOS 安装包、Debian 12 / Ubuntu 22.04+ `.deb`，每个平台 x64 与 arm64。构建产物无法证明原生安装成功。 |
+| M4 | 统一打包 | 八个可选目标：Windows EXE、macOS PKG、Linux DEB/RPM，各含 x64 与 arm64。构建产物不能证明原生安装成功或扩大发行版支持。 |
 | M5 | 集成端到端验收 | 在真实机器检查创建/加入、项目、ChatGPT 链路、持久性、迁移和升级。目前尚未完成跨平台整体验收。 |
 
 ### 已确认的自动化验证证据
@@ -136,14 +148,26 @@ PR 在 `42fedb56` 的 CI 失败后，已将原生 Computer helper 导出范围�
 
 | 目标平台 | 安装验收 | 重启/服务验收 | GUI 验收 | 升级验收 |
 | --- | --- | --- | --- | --- |
-| Windows x64，NSIS | 尚未在真实 Windows x64 机器验收 | 尚未验收 SCM 生命周期、重启持久性、服务身份/SID、凭据修复 | 尚未验收同用户登录且未锁定时的 helper 与 Desktop 退出行为 | 尚未验收已发布 HTTPS manifest 验证及安装后的升级/回滚 |
-| Windows arm64，NSIS | 尚未在真实 Windows arm64 机器验收 | 尚未验收原生 SCM 与重启持久性 | 尚未验收原生 GUI helper/会话行为 | 尚未验收原生安装升级与恢复 |
-| macOS arm64，安装包 | 尚未在真实 Apple Silicon Mac 验收 | 尚未验收 LaunchDaemon 生命周期与重启持久性 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
-| macOS x64，安装包 | 尚未在真实 Intel Mac 验收 | 尚未验收 LaunchDaemon 生命周期与重启持久性 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
-| Debian 12 x64，`.deb` | 尚未在原生 Debian 12 x64 主机验收 | 尚未验收 systemd 生命周期与重启持久性 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收已发布 manifest 验证及安装包升级/回滚 |
-| Debian 12 arm64，`.deb` | 尚未在原生 Debian 12 arm64 主机验收 | 尚未验收 systemd 生命周期与重启持久性 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收原生安装包升级/回滚 |
-| Ubuntu 22.04+ x64，`.deb` | 尚未在原生 Ubuntu x64 主机验收 | 尚未验收 systemd 生命周期与重启持久性 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收已发布 manifest 验证及安装包升级/回滚 |
-| Ubuntu 22.04+ arm64，`.deb` | 尚未在原生 Ubuntu arm64 主机验收 | 尚未验收 systemd 生命周期与重启持久性 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收原生安装包升级/回滚 |
+| Windows x64，NSIS | 尚未在真实 Windows x64 机器验收 | 尚未验收用户计划任务、注销/登录及 Desktop 退出；另需授权验收系统 SCM、重启、账户/SID 和凭据修复 | 尚未验收同用户登录且未锁定时的 helper 与 Desktop 退出行为 | 尚未验收已发布 HTTPS manifest 验证及安装后的升级/回滚 |
+| Windows arm64，NSIS | 尚未在真实 Windows arm64 机器验收 | 尚未验收用户计划任务的注销/登录；另需授权验收系统 SCM 身份、生命周期与重启 | 尚未验收原生 GUI helper/会话行为 | 尚未验收原生安装升级与恢复 |
+| macOS arm64，安装包 | 尚未在真实 Apple Silicon Mac 验收 | 尚未验收用户 LaunchAgent、获授权系统 LaunchDaemon、注销/登录、重启及磁盘解锁边界 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
+| macOS x64，安装包 | 尚未在真实 Intel Mac 验收 | 尚未验收用户 LaunchAgent、获授权系统 LaunchDaemon、注销/登录、重启及磁盘解锁边界 | 尚未验收 helper 仅在同用户登录且未锁定会话运行 | 尚未验收已发布 manifest 验证及安装后的升级/回滚 |
+| Debian 12 x64，`.deb` | 尚未在原生 Debian 12 x64 主机验收 | 尚未验收 systemd user/system、注销/登录、获授权 linger 和无人登录开机条件 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收已发布 manifest 验证及安装包升级/回滚 |
+| Debian 12 arm64，`.deb` | 尚未在原生 Debian 12 arm64 主机验收 | 尚未验收 systemd user/system、注销/登录、获授权 linger 和无人登录开机条件 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收原生安装包升级/回滚 |
+| Ubuntu 22.04+ x64，`.deb` | 尚未在原生 Ubuntu x64 主机验收 | 尚未验收 systemd user/system、注销/登录、获授权 linger 和无人登录开机条件 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收已发布 manifest 验证及安装包升级/回滚 |
+| Ubuntu 22.04+ arm64，`.deb` | 尚未在原生 Ubuntu arm64 主机验收 | 尚未验收 systemd user/system、注销/登录、获授权 linger 和无人登录开机条件 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收原生安装包升级/回滚 |
+| RPM x64，`.rpm` | 尚未验收：需按下方限制选定 Fedora/openEuler 的准确版本和依赖 | 尚未验收 systemd user/system、注销/登录、linger 和重启 | 尚未验收该发行版 Desktop/runtime；不新增 Linux GUI helper | 尚未验收 RPM 专属 prepare、包 hook、finish 和恢复 |
+| RPM arm64，`.rpm` | 尚未验收：需准确发行版/版本及原生 arm64 主机；x64 证据不适用 | 尚未验收原生 systemd user/system 和无人登录开机条件 | 尚未验收该发行版 Desktop/runtime | 尚未验收原生 RPM 升级/回滚 |
+
+### 本轮原生执行状态（2026-10-06）
+
+[本轮只读盘点](acceptance/2026-10-06-native-preflight.md)与[安全 JSON 快照](acceptance/2026-10-06-preflight.json)绑定源码 `ed22e5c060ae05e5be354d600be20a05b6ffed7c`，仅记录主机和公开发布信息。没有执行安装、服务、注销/重启或恢复操作，没有将任何原生行改为通过。
+
+公开 `v0.4.6` 含 Runtime/Desktop 文件，但不含统一 EXE/PKG/DEB/RPM、安装器 `manifest.json` 或 source manifest。仍需提供明确授权的测试机、匹配的测试包与源码/构建身份和字节 hash、服务 scope/账户，以及升级所需旧包/候选包。当前 Ubuntu 24.04.4 x64 开发主机不是默认可重装测试机；Windows/macOS 版本及 RPM 发行版/版本尚未选定，不能从家族或架构推断已经验收的 OS 版本。
+
+RPM selector 识别 Fedora、RHEL/CentOS、Rocky/AlmaLinux 和 openEuler，不代表安装已经验收。[RPM 发行版范围](RPM_INSTALLER.md#distribution-scope)要求 Fedora/openEuler 打包 smoke，但没有声明 Fedora 最低版本。openEuler 24.03-lts 目前只有文档中的容器观察，完整安装未证明；CentOS Stream 9 明确不是受支持 Desktop 目标。不得扩大支持声明或通过 `--nodeps`/放宽权限通过测试，DEB 证据不能替代 RPM。
+
+执行前按[证据绑定及场景清单](acceptance/2026-10-06-native-preflight.md#execution-evidence)记录具体测试对象和获授权操作。原生通过、原生失败、预期拒绝、自动化通过、阻塞/未执行应分别记录。本地 MCP 成功与真实 ChatGPT/Tunnel 项目读取需要两份证据。
 
 Linux/macOS 升级使用分阶段的 owner 授权流程：原用户运行 `upgrade-prepare`，管理员授权私有 receipt，包钩子再通过 Core 窄范围 owner-context broker 调用 `installer-finish`。Windows 在当前用户上下文 prepare 和 finish。重新安装完全相同且已验证的包会走只读幂等验证路径，即使没有 Environment 也一样。Unix 上没有 Environment 时，不同包版本会被拒绝，需要 owner recovery record；这不属于自动升级。
 
@@ -155,7 +179,7 @@ Linux 显式旧 CLI 迁移命令会保留 owner Runner 身份及固定 root Serv
 
 ### 流程与安全检查
 
-- 在中心 Server 机器创建环境，从 B、C 仓库机器加入。确认仅运行 Server 的中心节点能看到两个远程项目，同时路径仍属于各自 Runner。
+- 普通创建需保留独立 Server 和本机 Runner，初始项目为空时角色不变，之后可添加并读取项目；B、C 作为追加 Runner 加入，不创建第二个中心 Server，不复制主节点 Tunnel/bootstrap 凭据。同名/同路径项目按准确 Runner/Project 身份验证。另测 Advanced Server-only、viewer-only 和 Quick Share，不转换既有角色或 ownership。
 - 使用隐藏输入或 `--token-file` 测试 viewer 用户访问 token；使用 stdin 测试 Runner 一次性 code。确认 secret 不出现在进程参数和日志中。
 - 验证复用既有 Runner 身份的 `add-project`，以及 viewer 转 Runner 提示。中断后恢复配置；仅当无法确定 code 是否已兑换时请求 `--new-pairing-code`。
 - 验证普通 `resume --token-file` 不会轮换已保存凭据。通过隐藏输入和受保护文件测试 `repair-user-credential [--token-file PATH]`；确认会核对已保存的 Server 与用户名、原子替换凭据，且不影响 Runner 配对或服务状态。在 Desktop Diagnostics 确认 **Restore Server user credential** 使用受保护输入。
