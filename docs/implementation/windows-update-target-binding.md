@@ -28,10 +28,21 @@ persisted transaction phase, identity, ownership or database recovery rule chang
 
 ## Actual verification boundary
 
-Focused Rust and packaging-script tests use disposable fixtures on Linux x64.
-They exercise target/nonce/operation mismatches, fail-closed unknown results,
-bounded exchange files, legacy metadata compatibility and source/provenance
-binding. Their exact final results accompany this PR.
+Recorded 2026-10-06 with source baseline `ed22e5c0` and shared prerequisite
+`40d927db`. Focused Rust and packaging-script tests use disposable fixtures on
+Linux x64. They exercise target/nonce/operation mismatches, fail-closed unknown
+results, bounded exchange files, legacy metadata compatibility and
+source/provenance binding.
+
+| Check | Actual result |
+| --- | --- |
+| Environment `unified_update`, after shared integration | 58 passed with `--locked --offline --profile dogfood`. |
+| Environment `upgrade::status` | 11 passed with `--locked --offline --profile dogfood`, including the receipt captured by the preparing invocation. |
+| CLI `guarded_` | 3 passed, including additive build-info compatibility and rejection without creating the selected Environment. |
+| Existing Environment `upgrade::tests` | 9 passed after integration: original owner/receipt, exact payload restore and data recovery boundaries. |
+| Six related packaging-script suites | 74 tests: 73 passed and one existing PowerShell-host skip. Covers Windows installer preparation, release metadata, download page, bundle collection, unified input collection and unified package validation. |
+| Desktop native installer adapter, integrated consumer | 4 passed, including literal Windows target-file arguments. |
+| Rust formatting and diff-whitespace checks | Passed. |
 
 A Windows MSVC cross-check was blocked in the dependency build by missing
 `lib.exe`/Windows SDK tools. There is no NSIS compiler or authorized Windows
