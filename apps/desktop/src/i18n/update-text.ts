@@ -3,6 +3,7 @@ import { useShellText } from "./runtime-shell";
 
 export const UPDATE_TEXT: Record<string, Record<string, string>> = {
   "en-US": {
+    "This release requires manual installation. Use the release instructions; automatic installation is unavailable.": "This release requires manual installation. Use the release instructions; automatic installation is unavailable.",
     "Local update components": "Local update components",
     "Component": "Component",
     "Installed files": "Installed files",
@@ -53,6 +54,7 @@ export const UPDATE_TEXT: Record<string, Record<string, string>> = {
     "Active task count is unconfirmed. Refresh local status before installing.": "Active task count is unconfirmed. Refresh local status before installing."
   },
   "zh-CN": {
+    "This release requires manual installation. Use the release instructions; automatic installation is unavailable.": "此版本需要手动安装。请按照发布页面的说明操作；自动安装不可用。",
     "Local update components": "本地更新组件",
     "Component": "组件",
     "Installed files": "已安装文件",
@@ -103,6 +105,7 @@ export const UPDATE_TEXT: Record<string, Record<string, string>> = {
     "Active task count is unconfirmed. Refresh local status before installing.": "尚未确认活跃任务数。请刷新本地状态后再安装。"
   },
   "zh-TW": {
+    "This release requires manual installation. Use the release instructions; automatic installation is unavailable.": "此版本需要手動安裝。請按照發布頁面的說明操作；自動安裝不可用。",
     "Local update components": "本機更新元件",
     "Component": "元件",
     "Installed files": "已安裝檔案",
@@ -153,6 +156,7 @@ export const UPDATE_TEXT: Record<string, Record<string, string>> = {
     "Active task count is unconfirmed. Refresh local status before installing.": "尚未確認作用中任務數。請重新整理本機狀態後再安裝。"
   },
   "de-DE": {
+    "This release requires manual installation. Use the release instructions; automatic installation is unavailable.": "Dieses Release erfordert eine manuelle Installation. Folgen Sie den Release-Anweisungen; automatische Installation ist nicht verfügbar.",
     "Local update components": "Lokale Update-Komponenten",
     "Component": "Komponente",
     "Installed files": "Installierte Dateien",
@@ -203,6 +207,7 @@ export const UPDATE_TEXT: Record<string, Record<string, string>> = {
     "Active task count is unconfirmed. Refresh local status before installing.": "Anzahl aktiver Aufgaben unbestätigt. Vor der Installation lokalen Status aktualisieren."
   },
   "fr-FR": {
+    "This release requires manual installation. Use the release instructions; automatic installation is unavailable.": "Cette version nécessite une installation manuelle. Suivez les instructions de la version ; l’installation automatique est indisponible.",
     "Local update components": "Composants de mise à jour locaux",
     "Component": "Composant",
     "Installed files": "Fichiers installés",
@@ -253,6 +258,7 @@ export const UPDATE_TEXT: Record<string, Record<string, string>> = {
     "Active task count is unconfirmed. Refresh local status before installing.": "Le nombre de tâches actives n’est pas confirmé. Actualisez l’état local avant l’installation."
   },
   "ja-JP": {
+    "This release requires manual installation. Use the release instructions; automatic installation is unavailable.": "このリリースは手動でのインストールが必要です。リリースの手順に従ってください。自動インストールは利用できません。",
     "Local update components": "ローカル更新コンポーネント",
     "Component": "コンポーネント",
     "Installed files": "インストール済みファイル",
@@ -303,6 +309,7 @@ export const UPDATE_TEXT: Record<string, Record<string, string>> = {
     "Active task count is unconfirmed. Refresh local status before installing.": "実行中のタスク数は未確認です。インストール前にローカル状態を更新してください。"
   },
   "ko-KR": {
+    "This release requires manual installation. Use the release instructions; automatic installation is unavailable.": "이 릴리스는 수동으로 설치해야 합니다. 릴리스 안내를 따르세요. 자동 설치는 사용할 수 없습니다.",
     "Local update components": "로컬 업데이트 구성 요소",
     "Component": "구성 요소",
     "Installed files": "설치된 파일",

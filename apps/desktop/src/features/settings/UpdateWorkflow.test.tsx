@@ -430,3 +430,23 @@ it("labels installed identities as the last explicit inspection", async () => {
   const value = updates(); value.local!.installed_observed = true; value.local!.installed_checked_at_ms = 1000;
   render(wrap(<AboutPanel state={aboutState} updates={value} />)); expect(screen.getByText("Installed file identities come from the last explicit inspection.", { exact: false })).toBeInTheDocument(); expect(document.querySelector("time")).toHaveAttribute("datetime", "1970-01-01T00:00:01.000Z"); await act(async () => {});
 });
+
+it.each(["available", "ready_to_install"] as const)("keeps a verified legacy release manual when handoff support is unavailable in %s", phase => {
+  const value = updates(download({ phase, can_install: true, error_kind: null }));
+  value.local!.view.blockers = ["guarded_handoff_unavailable"];
+  render(wrap(<UpdateWorkflow updates={value} />));
+  expect(screen.getByText("This release requires manual installation. Use the release instructions; automatic installation is unavailable.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Install update" })).not.toBeInTheDocument();
+  const release = screen.getByRole("button", { name: "View release" }); fireEvent.click(release); expect(api.openLatestRelease).toHaveBeenCalledOnce();
+  if (phase === "available") { fireEvent.click(screen.getByRole("button", { name: "Download update" })); expect(value.download).toHaveBeenCalledOnce(); }
+  else expect(screen.getByText("Downloaded and verified")).toBeInTheDocument();
+  expect(value.install).not.toHaveBeenCalled();
+});
+
+it.each(PRODUCT_LOCALES)("localizes unavailable automatic installation in %s", async locale => {
+  const { UPDATE_TEXT } = await import("../../i18n/update-text");
+  const message = "This release requires manual installation. Use the release instructions; automatic installation is unavailable.";
+  localStorage.setItem("webcodex.desktop.locale", locale);
+  const value = updates(download({ phase: "ready_to_install", can_install: false, error_kind: "guarded_handoff_unavailable" }));
+  render(wrap(<UpdateWorkflow updates={value} />)); expect(screen.getByText(UPDATE_TEXT[locale][message])).toBeInTheDocument(); expect(value.install).not.toHaveBeenCalled();
+});

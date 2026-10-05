@@ -18,6 +18,7 @@ const errors: Record<UpdateErrorKind, string> = {
   cancelled: "Download paused until you choose Retry.",
   upgrade_preflight_failed: "Installation could not be prepared safely. Finish active work and check the local Environment before retrying.",
   authorization_required: "System authorization was not completed. The update has not been installed.",
+  guarded_handoff_unavailable: "This release requires manual installation. Use the release instructions; automatic installation is unavailable.",
   installer_launch_failed: "The system installer could not be started. Review the update status before retrying.",
   upgrade_rolled_back: "The installation did not complete. The previous version was restored. Retry only after reviewing the Environment.",
   recovery_required: "The previous installation needs attention. Do not start another installer. Check Environment recovery before continuing.",
@@ -54,7 +55,8 @@ export function UpdateWorkflow({ updates, banner = false }: { updates: RuntimeUp
   const installing = phase === "preparing" || phase === "installing_or_handed_off";
   const knownTotal = sameTarget && update?.total_bytes != null && update.total_bytes > 0 && update.downloaded_bytes <= update.total_bytes;
   const percent = knownTotal ? Math.floor((update!.downloaded_bytes / update!.total_bytes!) * 100) : null;
-  const failure = update?.error_kind ? errors[update.error_kind] ?? "The update action could not be completed. Review the update status." : null;
+  const handoffUnavailable = update?.error_kind === "guarded_handoff_unavailable" || Boolean(view?.blockers.includes("guarded_handoff_unavailable"));
+  const failure = update?.error_kind ? errors[update.error_kind] ?? "The update action could not be completed. Review the update status." : handoffUnavailable ? errors.guarded_handoff_unavailable : null;
   const blocked = update?.installation === "source_build" || update?.installation === "unmanaged_installation";
   const unsupported = update?.installation === "unsupported_platform";
   const ready = sameTarget && phase === "ready_to_install";
@@ -99,7 +101,7 @@ export function UpdateWorkflow({ updates, banner = false }: { updates: RuntimeUp
     {failure && <p role="status" className="update-error">{s(failure)}</p>}
     {updates.actionError && !failure && <p role="status">{s("The update action could not be completed. Review the update status.")}</p>}
     <div className="shell-actions">
-      {ready && update?.can_install && !pending && !recovery && !durable && !waitingTasks && updates.local?.confirmation && <button type="button" className="primary-button" disabled={updates.actionBusy} onClick={event => { opener.current = event.currentTarget; setConfirmation(updates.local?.confirmation ?? null); }}>{s("Install update")}</button>}
+      {ready && update?.can_install && !handoffUnavailable && !pending && !recovery && !durable && !waitingTasks && updates.local?.confirmation && <button type="button" className="primary-button" disabled={updates.actionBusy} onClick={event => { opener.current = event.currentTarget; setConfirmation(updates.local?.confirmation ?? null); }}>{s("Install update")}</button>}
       {canDownload && <button type="button" className="secondary-button" disabled={updates.actionBusy} onClick={() => void updates.download()}>{s(phase === "failed" || update?.cancelled ? "Retry" : "Download update")}</button>}
       {active && <button type="button" className="secondary-button" disabled={updates.actionBusy} onClick={() => void updates.cancelDownload()}>{s("Cancel download")}</button>}
       {status?.latest && <button type="button" className="secondary-button" onClick={() => {
@@ -123,7 +125,7 @@ export function UpdateWorkflow({ updates, banner = false }: { updates: RuntimeUp
       <p>{u("This replaces local Desktop, CLI, Server and Runner files. Only services in this saved local Environment may restart; remote services are unaffected.")}</p>
       <p>{s("This updates Desktop, CLI, Server and Runner together. Finish active work first. Local services may stop, and Desktop will close after the system installer starts. Your operating system may request administrator authorization.")}</p>
       <div className="shell-actions">
-        <button type="button" className="primary-button" disabled={updates.actionBusy || recovery || durable || !ready || !update?.can_install || !confirmation.service_inventory_complete || version !== confirmVersion || JSON.stringify(updates.local?.confirmation) !== JSON.stringify(confirmation)} onClick={() => {
+        <button type="button" className="primary-button" disabled={updates.actionBusy || recovery || handoffUnavailable || durable || !ready || !update?.can_install || !confirmation.service_inventory_complete || version !== confirmVersion || JSON.stringify(updates.local?.confirmation) !== JSON.stringify(confirmation)} onClick={() => {
           const target = confirmation; close(); void updates.install(target);
         }}>{s("Install and close WebCodex")}</button>
         <button type="button" className="secondary-button" onClick={() => close()}>{s("Not now")}</button>

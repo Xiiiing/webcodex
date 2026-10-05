@@ -56,7 +56,7 @@ export interface ReleaseNotice { version: string; runtime_version: string; relea
 export type UpdatePlatform = "linux-x64" | "linux-arm64" | "darwin-x64" | "darwin-arm64" | "win32-x64" | "win32-arm64";
 export type UpdatePhase = "idle" | "checking" | "available" | "downloading" | "verifying" | "ready_to_install" | "preparing" | "installing_or_handed_off" | "failed";
 export type UpdateInstallation = "managed" | "source_build" | "unmanaged_installation" | "environment_not_configured" | "unsupported_platform";
-export type UpdateErrorKind = "network_unavailable" | "manifest_missing" | "manifest_invalid" | "unsupported_platform" | "download_failed" | "download_too_large" | "checksum_mismatch" | "source_manifest_invalid" | "provenance_failed" | "cache_unavailable" | "cancelled" | "upgrade_preflight_failed" | "authorization_required" | "installer_launch_failed" | "upgrade_rolled_back" | "recovery_required";
+export type UpdateErrorKind = "network_unavailable" | "manifest_missing" | "manifest_invalid" | "unsupported_platform" | "download_failed" | "download_too_large" | "checksum_mismatch" | "source_manifest_invalid" | "provenance_failed" | "cache_unavailable" | "cancelled" | "upgrade_preflight_failed" | "authorization_required" | "installer_launch_failed" | "upgrade_rolled_back" | "recovery_required" | "guarded_handoff_unavailable";
 export interface UpdateDownloadStatus {
   phase: UpdatePhase; target?: InstallerTarget | null; version: string | null; platform: UpdatePlatform | null;
   downloaded_bytes: number; total_bytes: number | null; error_kind: UpdateErrorKind | null;
@@ -71,7 +71,7 @@ export interface UpdateStatus {
 
 export interface ComponentBuild { binary: string; build: MachineBuildInfo | null }
 export interface InstallerTarget { platform: UpdatePlatform; format: "deb" | "rpm" | "pkg" | "exe" }
-export type UpdateBlocker = "environment_not_configured" | "unsupported_installation" | "unsupported_platform" | "candidate_not_verified" | "download_required" | "pending_install" | "recovery_required" | "upgrade_in_progress" | "active_tasks" | "task_observation_unavailable";
+export type UpdateBlocker = "environment_not_configured" | "unsupported_installation" | "unsupported_platform" | "candidate_not_verified" | "download_required" | "pending_install" | "recovery_required" | "upgrade_in_progress" | "active_tasks" | "task_observation_unavailable" | "guarded_handoff_unavailable";
 export interface CandidateIdentity { version: string; target: InstallerTarget; source_sha: string; manifest_sha256: string; installer_sha256: string }
 export type UpgradePhase = "prepared" | "stopping" | "stopped" | "snapshot_ready" | "verifying" | "committed" | "restoring" | "rolled_back" | "recovery_required";
 export interface UpgradeStatus { schema_version: number; environment_id: string; operation_id: string; version: string; source_sha: string; manifest_sha256: string; phase: UpgradePhase; files: string[]; services: { component: string; scope: unknown }[]; service_inventory_complete: boolean }
