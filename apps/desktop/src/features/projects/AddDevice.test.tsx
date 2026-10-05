@@ -121,6 +121,9 @@ describe("Add device invitation", () => {
   it("clears expired display information on resume and never automatically creates another code", async () => {
     let now = 0; vi.spyOn(performance, "now").mockImplementation(() => now);
     render(view()); await openDialog(); await invite();
+    // The expiry listener is installed by an effect after the created view commits.
+    // Flush that effect before simulating the later app-resume event.
+    await act(async () => {});
     now = 600_001; fireEvent(document, new Event("visibilitychange"));
     expect(screen.queryByLabelText("One-time pairing code")).toBeNull();
     expect(screen.getByText(/local display period ended/)).toBeInTheDocument();
