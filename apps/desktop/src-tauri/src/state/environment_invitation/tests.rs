@@ -417,6 +417,8 @@ async fn duplicate_operation_is_busy_and_late_response_is_discarded_after_target
     for replace_saved_record in [false, true] {
         let (url, captured, gate, thread) = server(200, json!({"pairing_code": CODE}));
         let fixture = Fixture::new(url, true);
+        // Windows cannot read setup.lock while the invitation owns its lock.
+        let mut baseline = fixture.baseline().await;
         let task = spawn_invite(&fixture);
         let _http = captured.await.unwrap();
         assert_eq!(
@@ -432,6 +434,8 @@ async fn duplicate_operation_is_busy_and_late_response_is_discarded_after_target
             let mut saved = fixture.store.load_environment().unwrap().unwrap();
             saved.environment_id = "replacement".into();
             fixture.store.save_environment(&saved).unwrap();
+            *baseline.2.get_mut("environment.json").unwrap() =
+                std::fs::read(fixture.store.root().join("environment.json")).unwrap();
         } else {
             fixture
                 .app
@@ -439,8 +443,8 @@ async fn duplicate_operation_is_busy_and_late_response_is_discarded_after_target
                 .write()
                 .unwrap()
                 .persistent_environment = Some("replacement".into());
+            baseline.0["persistent_environment"] = json!("replacement");
         }
-        let baseline = fixture.baseline().await;
         gate.send(()).unwrap();
         assert_eq!(error_code(task.await.unwrap()), "environment_changed");
         thread.join().unwrap();
