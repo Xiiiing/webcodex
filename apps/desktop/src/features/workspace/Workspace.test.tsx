@@ -1,6 +1,7 @@
+import { useLayoutEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitSummary } from "../../models/workspace";
+import type { GitSummary, WorkspaceProject, ServerRunnerSummary } from "../../models/workspace";
 import type { DesktopState } from "../../models/topology";
 import { LocaleProvider } from "../../i18n/locale";
 import { PRODUCT_LOCALES, PRODUCT_MESSAGES, productText } from "../../i18n/product";
@@ -64,6 +65,47 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("product workspace task flows", () => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])(
+    "reports partial Session history for return truncation=%s and scan truncation=%s",
+    async (truncated, scan_truncated) => {
+      const normal = native.invoke.getMockImplementation()!;
+      native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
+        ? Promise.resolve({ ...overview, recent_sessions: { sessions: [session], truncated, scan_truncated } })
+        : normal(command, value));
+      render(wrap(<ActivityPanel activity={[]} />));
+      fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+      await screen.findByText(session.title);
+      expect(Boolean(screen.queryByText("History is partial"))).toBe(truncated || scan_truncated);
+    },
+  );
+
+  it.each([[true, false], [false, true], [true, true]])(
+    "does not claim empty history is complete when truncation=%s and scan truncation=%s",
+    async (truncated, scan_truncated) => {
+      const normal = native.invoke.getMockImplementation()!;
+      native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
+        ? Promise.resolve({ ...overview, recent_sessions: { sessions: [], truncated, scan_truncated } })
+        : normal(command, value));
+      render(wrap(<ActivityPanel activity={[]} />));
+      fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+      expect(await screen.findByText("History is partial")).toBeInTheDocument();
+      expect(screen.getByText("No sessions observed in this partial history")).toBeInTheDocument();
+      expect(screen.queryByText("No Workflow Sessions yet")).not.toBeInTheDocument();
+    },
+  );
+
+  it("retains the complete empty Session history message", async () => {
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
+      ? Promise.resolve({ ...overview, recent_sessions: { sessions: [], truncated: false, scan_truncated: false } })
+      : normal(command, value));
+    render(wrap(<ActivityPanel activity={[]} />));
+    await screen.findByRole("button", { name: /Fix export workflow/ });
+    fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+    expect(screen.getByText("No Workflow Sessions yet")).toBeInTheDocument();
+    expect(screen.queryByText("History is partial")).not.toBeInTheDocument();
+  });
+
   it("ignores failures from pre-refresh observations and resumes overview and Git reads", async () => {
     const pending = new Map<string, (error: Error) => void>();
     const normal = native.invoke.getMockImplementation()!;
@@ -111,16 +153,71 @@ describe("product workspace task flows", () => {
     expect(screen.getByRole("button", { name: "Remove project alpha" })).toBeInTheDocument();
   });
 
-  it("shows no local Runner on a viewer while retaining raw stopped readiness", () => {
+  it.each([
+    ["http://127.0.0.1:18080", null],
+    ["http://192.0.2.10:18080", null],
+    ["https://central.example", null],
+    ["http://127.0.0.1:18080", "viewer-environment"],
+    ["http://192.0.2.10:18080", "viewer-environment"],
+    ["https://central.example", "viewer-environment"],
+  ])("scopes viewer status without inferring ownership from %s (%s)", (url, persistent_environment) => {
     const viewer = { ...state, readiness: { ...state.readiness, runner: "stopped" as const },
-      topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" }, runner: { kind: "none" as const } } } as DesktopState;
+      persistent_environment, connections: connectionSnapshot(),
+      topology: { ...state.topology!, server: { kind: "remote" as const, url }, runner: { kind: "none" as const } } } as DesktopState;
     render(wrap(<><WorkspaceStatus state={viewer} /><Sidebar state={viewer} navigation="home" setNavigation={vi.fn()} /></>, viewer));
     expect(screen.getByRole("status")).toHaveTextContent("Server ConnectionRunning");
-    expect(screen.getByRole("status")).toHaveTextContent("Local task serviceNot configured");
-    expect(screen.getByRole("status")).not.toHaveTextContent("Local task serviceStopped");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Local task service");
+    expect(screen.getByRole("status")).toHaveTextContent("Desktop Tunnel connectionsNo Tunnel connections saved in Desktop");
     expect(screen.getByRole("complementary")).toHaveTextContent("Server Connection · Running");
-    expect(screen.getByRole("complementary")).not.toHaveTextContent("Local task service · Stopped");
+    expect(screen.getByRole("complementary")).toHaveTextContent("No Tunnel connections saved in Desktop");
+    expect(screen.getByRole("complementary")).not.toHaveTextContent("Local task service");
+    expect(screen.queryByText("ChatGPT connected")).not.toBeInTheDocument();
+    expect(native.invoke.mock.calls.every(([command]) => command === "workspace_query")).toBe(true);
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
     expect(viewer.readiness.runner).toBe("stopped");
+  });
+
+  it.each([null, "server-environment"])("hides an absent Runner on a Server-only environment (%s)", persistent_environment => {
+    const serverOnly = { ...state, persistent_environment, topology: { ...state.topology!, runner: { kind: "none" as const } },
+      connections: connectionSnapshot(connectionFixture({ pid: null })) };
+    render(wrap(<><WorkspaceStatus state={serverOnly} /><Sidebar state={serverOnly} navigation="home" setNavigation={vi.fn()} /></>, serverOnly));
+    expect(screen.getByRole("status")).toHaveTextContent("Server ConnectionRunning");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Local task service");
+    expect(screen.getByRole("status")).toHaveTextContent("1 of 1 Desktop tunnels locally ready");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Server Connection · Running");
+  });
+
+  it("does not invent a configured Runner before topology is available", () => {
+    const unknown = { ...state, topology: null };
+    render(wrap(<><WorkspaceStatus state={unknown} /><Sidebar state={unknown} navigation="home" setNavigation={vi.fn()} /></>, unknown));
+    expect(screen.getByRole("status")).not.toHaveTextContent("Local task service");
+    expect(screen.getByRole("complementary")).not.toHaveTextContent("Local task service");
+  });
+
+  it.each([null, "full-environment"])("keeps configured local Runner readiness in a Full Runtime (%s)", persistent_environment => {
+    const full = { ...state, persistent_environment, readiness: { ...state.readiness, runner: "error" as const, runtime_ready: false } };
+    render(wrap(<><WorkspaceStatus state={full} /><Sidebar state={full} navigation="home" setNavigation={vi.fn()} /></>, full));
+    expect(screen.getByRole("status")).toHaveTextContent("Local task serviceUnavailable");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Local task service · Unavailable");
+  });
+
+  it("shows the configured Runner when joining an independently managed Server", () => {
+    const joined = { ...state, persistent_environment: "joined-environment",
+      topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" } }, connections: connectionSnapshot() };
+    render(wrap(<><WorkspaceStatus state={joined} /><Sidebar state={joined} navigation="home" setNavigation={vi.fn()} /></>, joined));
+    expect(screen.getByRole("status")).toHaveTextContent("Local task serviceRunning");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Local task service · Running");
+    expect(screen.getByRole("status")).toHaveTextContent("No Tunnel connections saved in Desktop");
+  });
+
+  it("keeps Quick Share exposure separate from saved Tunnel connections", () => {
+    const quickShare = { ...state, topology: { ...state.topology!, experience: "quick_share" as const },
+      readiness: { ...state.readiness, exposure: "remote_ready" as const }, connections: connectionSnapshot() };
+    render(wrap(<><WorkspaceStatus state={quickShare} /><Sidebar state={quickShare} navigation="home" setNavigation={vi.fn()} /></>, quickShare));
+    expect(screen.getByRole("status")).toHaveTextContent("Quick ShareRunning");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Quick Share · Running");
+    expect(screen.queryByText("Desktop Tunnel connections")).not.toBeInTheDocument();
+    expect(screen.queryByText("No Tunnel connections saved in Desktop")).not.toBeInTheDocument();
   });
 
   it("keeps a viewer read-only without offering a local project picker", () => {
@@ -133,19 +230,27 @@ describe("product workspace task flows", () => {
   it("describes locally ready tunnels without counting a live but unhealthy process as ready", () => {
     const selected = { ...state, connections: connectionSnapshot(connectionFixture({ ready: false, process_started: true, lifecycle: "running" })) };
     render(wrap(<><WorkspaceStatus state={selected} /><Sidebar state={selected} navigation="home" setNavigation={vi.fn()} /></>, selected));
-    expect(screen.getByRole("status")).toHaveTextContent("0 of 1 tunnels locally ready");
-    expect(screen.getByRole("complementary")).toHaveTextContent("0 of 1 tunnels locally ready");
+    expect(screen.getByRole("status")).toHaveTextContent("0 of 1 Desktop tunnels locally ready");
+    expect(screen.getByRole("complementary")).toHaveTextContent("0 of 1 Desktop tunnels locally ready");
     expect(screen.queryByText("ChatGPT connected")).not.toBeInTheDocument();
   });
   it.each([
-    [connectionSnapshot(), "No tunnels configured"],
-    [{ ...connectionSnapshot(), config_error: true }, "Tunnel status unconfirmed"],
-    [undefined, "Tunnel status unconfirmed"],
+    [connectionSnapshot(), "No Tunnel connections saved in Desktop"],
+    [{ ...connectionSnapshot(), config_error: true }, "Desktop Tunnel status unconfirmed"],
+    [undefined, "Desktop Tunnel status unconfirmed"],
   ])("distinguishes missing configuration from unavailable tunnel observations", (connections, label) => {
     const selected = { ...state, connections };
     render(wrap(<WorkspaceStatus state={selected} />, selected));
     expect(screen.getByRole("status")).toHaveTextContent(label);
     expect(screen.getByRole("status")).not.toHaveTextContent("0 / 0");
+  });
+
+  it("does not show cached readiness as healthy when Tunnel configuration is unreadable", () => {
+    const selected = { ...state, connections: { ...connectionSnapshot(connectionFixture()), config_error: true } };
+    render(wrap(<WorkspaceStatus state={selected} />, selected));
+    expect(screen.getByRole("status")).toHaveTextContent("Desktop Tunnel status unconfirmed");
+    const row = screen.getByText("Desktop Tunnel connections").closest("div")!;
+    expect(row.querySelector(".status-dot.ready")).toBeNull();
   });
   it.each([
     ["workspace_authentication_required", "User authentication is missing or expired. Restore your Server credential."],
@@ -196,7 +301,7 @@ describe("product workspace task flows", () => {
     expect(screen.getByRole("row", { name: "alpha" })).toHaveTextContent("Runs on · This computer");
     if (availability === true) {
       expect(devices).toHaveTextContent("still require system permissions");
-      expect(within(devices).queryByRole("button")).not.toBeInTheDocument();
+      expect(within(devices).queryByRole("button", { name: "Desktop access settings" })).not.toBeInTheDocument();
     } else {
       if (availability === false) expect(devices).toHaveTextContent("File and command tools do not depend on this session");
       else expect(devices).not.toHaveTextContent("Desktop session unavailable");
@@ -646,5 +751,159 @@ describe("project Git overview", () => {
     const row = await screen.findByRole("row", { name: "alpha" });
     expect(await within(row).findByText(productText(locale, "projectGitChangeCount").replace("{count}", "205"))).toBeInTheDocument();
     expect(within(row).getByText(productText(locale, "projectGitPartialFiles"))).toBeInTheDocument();
+  });
+});
+
+describe("project device filters", () => {
+  const sharedLocal = { ...alpha, id: "agent:mini:shared", path: "/work/shared", name: "shared", client_id: "mini" };
+  const sharedRemote = { ...sharedLocal, id: "agent:remote:shared", client_id: "remote" };
+  const explicitRemote = { ...beta, id: "agent:mini:override", client_id: "remote", name: "override" };
+  const devices = [{ client_id: "mini", connected: true }, { client_id: "remote", connected: false }, { client_id: "empty", connected: false }];
+  const viewer = { ...state, project: null, saved_projects: [], workspace_runner: null,
+    topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" }, runner: { kind: "none" as const } } } as DesktopState;
+  const fleet = (projects: WorkspaceProject[] = [sharedLocal, sharedRemote, explicitRemote], runners: ServerRunnerSummary[] = devices) => {
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => {
+      if (value.request.kind === "overview") return Promise.resolve({ ...overview, runners, projects, recent_sessions: undefined });
+      if (value.request.kind === "projects") return Promise.resolve({ projects, total: projects.length, truncated: false });
+      return normal(command, value);
+    });
+  };
+
+  it("filters exact Runner identities, combines search, and clears both filters", async () => {
+    fleet(); render(wrap(<ProjectsPanel />, viewer));
+    const filter = screen.getByRole("combobox", { name: productText("en-US", "executionDevice") });
+    await waitFor(() => expect(within(filter).getByRole("option", { name: "remote" })).toBeInTheDocument());
+    fireEvent.change(filter, { target: { value: "remote" } });
+    expect(screen.getAllByRole("row", { name: "shared" })).toHaveLength(1);
+    expect(screen.getByRole("row", { name: "shared" })).toHaveTextContent("remote");
+    expect(screen.getByRole("row", { name: "override" })).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 of 3 loaded projects")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: productText("en-US", "search") }), { target: { value: "shared" } });
+    expect(screen.queryByRole("row", { name: "override" })).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 1 of 3 loaded projects")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(filter).toHaveValue("");
+    expect(screen.getByRole("searchbox", { name: productText("en-US", "search") })).toHaveValue("");
+    expect(screen.getAllByRole("row", { name: "shared" })).toHaveLength(2);
+    expect(within(filter).queryByRole("option", { name: new RegExp(productText("en-US", "thisComputer")) })).not.toBeInTheDocument();
+  });
+
+  it("links offline device cards to the focused filter and supports devices without projects", async () => {
+    fleet(); render(wrap(<ProjectsPanel onState={vi.fn()} />, viewer));
+    const remote = await screen.findByRole("button", { name: "View projects · remote" });
+    expect(remote).toHaveAttribute("type", "button");
+    fireEvent.click(remote);
+    const filter = screen.getByRole("combobox", { name: productText("en-US", "executionDevice") });
+    expect(filter).toHaveFocus(); expect(filter).toHaveValue("remote");
+    expect(remote).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: /Remove project/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View projects · empty" }));
+    expect(filter).toHaveValue("empty");
+    expect(screen.getByText("Showing 0 of 3 loaded projects")).toBeInTheDocument();
+    expect(screen.getByText(productText("en-US", "noMatches"))).toBeInTheDocument();
+  });
+
+  it("uses canonical agent IDs when client_id is absent and labels only a configured local Runner", async () => {
+    fleet([{ ...alpha, client_id: undefined }, { ...beta, client_id: undefined }], devices);
+    render(wrap(<ProjectsPanel onState={vi.fn()} />));
+    const filter = screen.getByRole("combobox", { name: productText("en-US", "executionDevice") });
+    await waitFor(() => expect(within(filter).getByRole("option", { name: `${productText("en-US", "thisComputer")} · mini` })).toBeInTheDocument());
+    fireEvent.change(filter, { target: { value: "mini" } });
+    expect(screen.getByRole("row", { name: "alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove project alpha" })).toBeInTheDocument();
+  });
+
+  it("resets device selection when changing Server context", async () => {
+    fleet(); const view = render(wrap(<ProjectsPanel />, viewer));
+    fireEvent.click(await screen.findByRole("button", { name: "View projects · remote" }));
+    const next = { ...viewer, topology: { ...viewer.topology!, server: { kind: "remote" as const, url: "https://other.example" } } };
+    view.rerender(wrap(<ProjectsPanel />, next));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: productText("en-US", "executionDevice") })).toHaveValue(""));
+    view.rerender(wrap(<ProjectsPanel />, viewer));
+    await waitFor(() => expect(screen.getAllByRole("row", { name: "shared" })).toHaveLength(2));
+    expect(screen.getByRole("combobox", { name: productText("en-US", "executionDevice") })).toHaveValue("");
+  });
+
+  it("preserves a selected offline device during stale refresh but clears it on authorization loss", async () => {
+    fleet(); render(wrap(<ProjectsPanel />, viewer));
+    fireEvent.click(await screen.findByRole("button", { name: "View projects · remote" }));
+    native.invoke.mockRejectedValue({ code: "workspace_server_unreachable" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("combobox", { name: productText("en-US", "executionDevice") })).toHaveValue("remote");
+    native.invoke.mockRejectedValue({ code: "workspace_permission_denied" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: productText("en-US", "executionDevice") })).toHaveValue(""));
+    expect(screen.queryByRole("option", { name: "remote" })).not.toBeInTheDocument();
+  });
+
+  it("retains the selected option when a partial refresh omits that device", async () => {
+    fleet(); render(wrap(<ProjectsPanel />, viewer));
+    fireEvent.click(await screen.findByRole("button", { name: "View projects · remote" }));
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => {
+      if (value.request.kind === "overview") return Promise.resolve({ ...overview, runners: [devices[0]], projects: [sharedLocal], recent_sessions: undefined });
+      if (value.request.kind === "projects") return Promise.resolve({ projects: [sharedLocal], total: 3, truncated: true });
+      return normal(command, value);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText(productText("en-US", "partial"));
+    const filter = screen.getByRole("combobox", { name: productText("en-US", "executionDevice") });
+    expect(filter).toHaveValue("remote");
+    expect(within(filter).getByRole("option", { name: "remote" })).toBeInTheDocument();
+    expect(screen.getByText("Showing 0 of 1 loaded projects")).toBeInTheDocument();
+  });
+
+  it("shows device-filtered project cards on narrow screens", async () => {
+    const original = window.matchMedia;
+    const media = vi.spyOn(window, "matchMedia").mockImplementation(query => ({ ...original(query), matches: query === "(max-width: 600px)" }));
+    try {
+      fleet(); render(wrap(<ProjectsPanel />, viewer));
+      fireEvent.click(await screen.findByRole("button", { name: "View projects · remote" }));
+      expect(await screen.findByRole("article", { name: "shared" })).toHaveTextContent("remote");
+      expect(screen.getAllByRole("article", { name: "shared" })).toHaveLength(1);
+      expect(screen.getByRole("combobox", { name: productText("en-US", "executionDevice") })).toHaveFocus();
+    } finally { media.mockRestore(); }
+  });
+
+  it("keeps the select and results consistent in the first complete refresh frame", async () => {
+    const frames: Array<{ device: string; count: string | null }> = [];
+    function ObserveFrame() {
+      const workspace = useWorkspace();
+      useLayoutEffect(() => {
+        if (!workspace.loading && workspace.projects.length === 1) frames.push({
+          device: (screen.getByRole("combobox", { name: productText("en-US", "executionDevice") }) as HTMLSelectElement).value,
+          count: screen.getByRole("status").textContent,
+        });
+      });
+      return null;
+    }
+    fleet(); render(wrap(<><ProjectsPanel /><ObserveFrame /></>, viewer));
+    fireEvent.click(await screen.findByRole("button", { name: "View projects · remote" }));
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => {
+      if (value.request.kind === "overview") return Promise.resolve({ ...overview, runners: [devices[0]], projects: [sharedLocal], recent_sessions: undefined });
+      if (value.request.kind === "projects") return Promise.resolve({ projects: [sharedLocal], total: 1, truncated: false });
+      return normal(command, value);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Showing 1 of 1 loaded projects");
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every(frame => frame.device === "" && frame.count === "Showing 1 of 1 loaded projects")).toBe(true);
+  });
+
+  it("clears a device absent from a complete refreshed inventory", async () => {
+    fleet(); render(wrap(<ProjectsPanel />, viewer));
+    fireEvent.click(await screen.findByRole("button", { name: "View projects · remote" }));
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => {
+      if (value.request.kind === "overview") return Promise.resolve({ ...overview, runners: [devices[0]], projects: [sharedLocal], recent_sessions: undefined });
+      if (value.request.kind === "projects") return Promise.resolve({ projects: [sharedLocal], total: 1, truncated: false });
+      return normal(command, value);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: productText("en-US", "executionDevice") })).toHaveValue(""));
+    expect(screen.getByText("Showing 1 of 1 loaded projects")).toBeInTheDocument();
   });
 });

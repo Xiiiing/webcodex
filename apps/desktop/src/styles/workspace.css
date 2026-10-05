@@ -19,3 +19,8 @@
 .project-git-changes li { display: flex; align-items: flex-start; gap: 6px; padding: 3px 0; }
 .project-git-changes li > span { min-width: 0; overflow-wrap: anywhere; }
 .project-git-file-status { flex: 0 0 auto; white-space: pre; }
+
+.workspace-project-filters { display: flex; flex-wrap: wrap; gap: var(--ui-space-3); }
+.workspace-project-filters .workspace-search { flex: 1 1 240px; min-width: 0; width: auto; margin-bottom: 0; }
+.project-filter-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ui-space-2); margin: var(--ui-space-3) 0 var(--ui-space-4); color: var(--ui-text-secondary); font-size: 14px; }
+.runner-device > button[aria-pressed="true"] { background: var(--ui-accent-soft); color: var(--ui-accent); }
