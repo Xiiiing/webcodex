@@ -238,6 +238,7 @@ mod tests {
         let receipt = std::path::Path::new("/home/test/env with spaces/upgrade-prepared.json");
         let candidate = std::path::Path::new("/home/test/cache/$(touch injected)");
         let request = LaunchRequest {
+            windows_handoff: None,
             cli,
             receipt,
             candidate,

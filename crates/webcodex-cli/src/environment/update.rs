@@ -517,7 +517,9 @@ async fn apply(
     {
         unified::LaunchOutcome::Started => Ok(()),
         unified::LaunchOutcome::NotStarted(error) => Err(update_error(error)),
-        unified::LaunchOutcome::Unknown => Err("manual_recovery_required".into()),
+        unified::LaunchOutcome::Unknown | unified::LaunchOutcome::StartedWithOperation(_) => {
+            Err("manual_recovery_required".into())
+        }
     }
 }
 
