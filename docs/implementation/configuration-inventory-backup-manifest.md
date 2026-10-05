@@ -181,3 +181,14 @@ configuration or service behavior. The macOS invitation effect synchronization
 fix already merged upstream is retained. Linux-to-MSVC checking was attempted
 but stopped in the `ring` dependency because the host lacks `lib.exe`; this is
 not evidence of native Windows compilation or execution.
+
+The first corrected Windows run passed all 10 platform-applicable inventory
+adapter tests and all 476 frontend tests. It then exposed a previously masked
+invitation test failure: reading `setup.lock` while the HTTP-gated invitation
+holds the Core lock fails with Windows error 33. The follow-up in #919 captures
+its complete file baseline before starting that operation and updates only the
+expected, intentionally changed record or published identity. The final
+comparison still includes the lock file, credentials, database and configuration
+bytes after the operation has completed. No production lock or assertion is
+removed. Both corrections are carried into this branch; final native CI evidence
+is recorded in the PR description.
