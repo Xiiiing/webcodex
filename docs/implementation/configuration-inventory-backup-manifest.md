@@ -147,8 +147,7 @@ found one unchanged service-scope fixture failing under inherited `umask 0002`:
 its temporary ancestor was shared-writable. The same isolated test passed with
 only child-shell `umask 0022`; no service-scope code, assertion or ownership check
 was weakened. The focused checks above passed before upstream integration;
-inventory, CLI,
-native inventory and both dogfood builds were repeated after merging `6d249979`.
+inventory, CLI, native inventory and both dogfood builds were repeated after merging `6d249979`.
 
 The initial native export test exposed a missing-root destination being classified
 as unconfirmed before protected-root rejection. The implementation now rejects
@@ -160,3 +159,25 @@ No native installation, logout/reboot, upgrade/rollback or production service
 action was performed. Windows/macOS path and log branches have source/test
 coverage where platform-independent; their OS-specific ACL, reparse-point,
 opener and native installation behavior still require real platform validation.
+
+## Native CI fixture correction — 2026-10-05
+
+The first Windows Desktop run for PR #918 failed
+[the legacy relative Server path test](https://github.com/yyjeqhc/webcodex/actions/runs/37324556898/job/111812094604):
+its env file was created with ordinary inherited Windows temporary-directory
+permissions. The private reader correctly refused that file, leaving the
+configured path unconfirmed; the fixture then unwrapped an absent path.
+The test now provisions its file through the existing EnvironmentStore private
+writer, closes the lock handle, and renames the fixture before writing the env
+payload. Windows ACL validation remains enforced. The same 11 inventory adapter
+tests passed locally after this correction; native Windows CI is the remaining
+platform check.
+
+Latest main includes First Run/Add device from #917. Its Windows invitation
+fixture also needs the separately reviewed private-file provisioning correction;
+that follow-up is carried into this branch so the Desktop lane can test both
+features together. Neither correction changes runtime permissions, identity,
+configuration or service behavior. The macOS invitation effect synchronization
+fix already merged upstream is retained. Linux-to-MSVC checking was attempted
+but stopped in the `ring` dependency because the host lacks `lib.exe`; this is
+not evidence of native Windows compilation or execution.

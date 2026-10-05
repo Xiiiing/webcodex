@@ -437,13 +437,16 @@ fn legacy_server_relative_locations_have_no_invented_working_directory() {
         exposure: Exposure::None,
         enrollment: Enrollment::ManagedPairing,
     });
-    let env_file = fixture.temp.path().join("server.env");
+    // Provision with the existing private-file writer on every platform. A new
+    // std::fs file inherits Windows temp ACLs, which the production reader must
+    // reject. Rename an unlocked private fixture before writing its env payload.
+    let private_store = EnvironmentStore::open(fixture.temp.path().join("legacy-private")).unwrap();
+    drop(private_store.lock().unwrap());
+    let env_file = private_store.root().join("server.env");
+    std::fs::rename(private_store.root().join("setup.lock"), &env_file).unwrap();
     std::fs::write(&env_file,"WEBCODEX_DATA=relative-data\nWEBCODEX_TOOL_REQUEST_TRACE_DIR=relative-traces\nWEBCODEX_TOKEN=private-canary\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    #[cfg(windows)]
+    webcodex_environment::runtime_entry::validate_windows_env_acl(&env_file).unwrap();
     fixture.config.runtime = Some(crate::models::StoredRuntime {
         server_url: "http://127.0.0.1:1".into(),
         server_env_file: Some(env_file),
