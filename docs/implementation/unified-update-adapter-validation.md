@@ -4,11 +4,12 @@ Recorded 2026-10-06 on Linux x64, against `upstream/main` `ed22e5c0`, with a dir
 
 | Check | Actual result |
 | --- | --- |
-| `cargo test --locked --offline -p webcodex-environment unified_update --profile dogfood` | 49 passed: discovery, bounded download, source/candidate verification, cache exclusion/privacy, reconciliation, installed-versus-running identity, noncreating status and safe component projection. |
+| `cargo test --locked --offline -p webcodex-environment unified_update --profile dogfood` | 53 passed: discovery, bounded download, source/candidate verification, cache exclusion/privacy, reconciliation, installed-versus-running identity, noncreating status and safe component projection. |
 | `cargo test --locked --offline -p webcodex-environment upgrade::status --profile dogfood` | 11 passed: all journal phases, terminal history, bounded whitelist/canary output, stale targets, original operation binding and conservative headless recovery. |
 | Existing `upgrade::tests` | 9 passed with `--locked --offline --profile dogfood`: original transaction and restoration regression coverage. |
 | Desktop `cargo check --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --profile dogfood` | Passed against the extracted adapters. Two existing dead-code warnings remained. |
 | Desktop native `cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml updates` | 11 passed: existing update/cache and literal native handoff adapter tests. |
+| Guarded terminal reconciliation, cache and status focused tests | 24 passed with `--locked --offline`: exact pending operation, stale/missing targets, exclusive existing fences, rollback reconciliation and unchanged files on rejected cleanup. |
 | Workspace and Desktop Rust formatting, `git diff --check` | Passed. |
 
 Query tests use temporary private stores and prove missing roots/fences stay missing, existing permissions/mtime stay unchanged, and unknown probe fields do not cross the public status. The earlier creation-capable query constructor was identified by source inspection; no prior Linux permission mutation was reproduced.
