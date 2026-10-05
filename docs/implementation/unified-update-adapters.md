@@ -15,6 +15,8 @@ The read-only projection preserves Prepared, Stopping, Stopped, SnapshotReady, V
 
 Explicit application binds the Environment ID, verified candidate manifest/package identity and selected operation. Core verifies these identities under its existing mutation lock. Existing advanced upgrade commands retain their contracts. New headless recovery admits only cases with a proof from the existing receipt/phase rules: a committed lease-release retry, an already restored retry, or initial preparation without a current-operation installer receipt or changed installed payload. Later or ambiguous handoffs require the existing manual recovery path; they do not authorize redispatch or competing restoration.
 
+Explicit terminal owner actions can reconcile their exact cached pending operation through the existing installed-file verifier. This adapter takes existing cache and Core fences, does not provision missing directories or locks, and rejects superseding operations before cleanup. Status remains read-only.
+
 Installed program identity and the running caller identity remain separate. Reconciliation checks the installed files against validated published component hashes. An older Desktop process is not evidence that committed installed files need rollback.
 
 ## Safety and acceptance boundary
