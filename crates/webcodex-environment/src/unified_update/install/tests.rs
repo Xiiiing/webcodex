@@ -169,6 +169,27 @@ fn verified_installed_disk_identity_owns_committed_reconciliation() {
     );
 }
 
+#[test]
+fn unacknowledged_windows_spawn_cannot_attach_a_later_same_candidate_operation() {
+    let mut record = record();
+    record.pending.as_mut().unwrap().operation_id = None;
+    for outcome in [
+        UpgradeOutcome::Pending,
+        UpgradeOutcome::Committed,
+        UpgradeOutcome::RolledBack,
+    ] {
+        assert_eq!(
+            reconcile(
+                &record,
+                Some(&observation(outcome)),
+                Some(&build("1.2.3")),
+                101
+            ),
+            Reconciliation::RecoveryRequired
+        );
+    }
+}
+
 fn guarded_fixture() -> (
     tempfile::TempDir,
     std::sync::Arc<UpdateManager>,
