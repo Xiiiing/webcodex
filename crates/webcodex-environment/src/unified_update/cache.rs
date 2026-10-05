@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub struct PrivateUpdateCache {
     root: PathBuf,
     readonly: bool,
+    existing_only: bool,
 }
 
 fn failed<T>(_: T) -> UpdateError {
@@ -48,6 +49,7 @@ impl PrivateUpdateCache {
         Ok(Self {
             root,
             readonly: false,
+            existing_only: false,
         })
     }
     /// Read-only admission: missing cache stays missing and no lock is created.
@@ -56,7 +58,21 @@ impl PrivateUpdateCache {
         Ok(store.map(|_| Self {
             root,
             readonly: true,
+            existing_only: true,
         }))
+    }
+    /// Explicit reconciliation may update admitted existing state, but cannot
+    /// provision a missing cache root or candidate directory.
+    pub(super) fn open_existing_for_update(root: PathBuf) -> UpdateResult<Option<Self>> {
+        Ok(Self::open_existing(root)?.map(|mut cache| {
+            cache.readonly = false;
+            cache
+        }))
+    }
+    pub(super) fn lock_existing_exclusive(&self) -> UpdateResult<File> {
+        let file = open_existing_private(&self.file("update.lock")?, true).map_err(failed)?;
+        file.try_lock_exclusive().map_err(failed)?;
+        Ok(file)
     }
     pub fn existing_child(&self, name: &str) -> UpdateResult<Option<Self>> {
         if !leaf(name) {
@@ -76,7 +92,7 @@ impl PrivateUpdateCache {
         if !leaf(name) {
             return Err(UpdateError::CacheUnavailable);
         }
-        if self.readonly {
+        if self.existing_only {
             if crate::EnvironmentStore::open_existing(self.root.clone())
                 .map_err(failed)?
                 .is_none()
@@ -89,16 +105,21 @@ impl PrivateUpdateCache {
         Ok(self.root.join(name))
     }
     pub fn child(&self, name: &str) -> UpdateResult<Self> {
-        if self.readonly {
-            return self
+        if self.existing_only {
+            let mut child = self
                 .existing_child(name)?
-                .ok_or(UpdateError::CacheUnavailable);
+                .ok_or(UpdateError::CacheUnavailable)?;
+            child.readonly = self.readonly;
+            return Ok(child);
         }
         Self::open(self.file(name)?)
     }
     pub fn lock(&self) -> UpdateResult<File> {
         if self.readonly {
             return Err(UpdateError::CacheUnavailable);
+        }
+        if self.existing_only {
+            return self.lock_existing_exclusive();
         }
         let path = self.file("update.lock")?;
         let file = if path.exists() {
@@ -195,7 +216,11 @@ impl PrivateUpdateCache {
         if self.readonly {
             return Err(UpdateError::CacheUnavailable);
         }
-        ensure_private_directory(&self.root).map_err(failed)?;
+        if self.existing_only {
+            self.file("update-state.json")?;
+        } else {
+            ensure_private_directory(&self.root).map_err(failed)?;
+        }
         if keep.is_some_and(|value| !stable_version(value)) {
             return Err(UpdateError::CacheUnavailable);
         }
@@ -263,6 +288,27 @@ fn remove_tree(path: &Path, depth: usize, remaining: &mut usize) -> UpdateResult
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn existing_update_cache_never_provisions_roots_children_or_fences() {
+        let temp = crate::test_tempdir().unwrap();
+        let root = temp.path().join("existing-update");
+        assert!(PrivateUpdateCache::open_existing_for_update(root.clone())
+            .unwrap()
+            .is_none());
+        assert!(!root.exists());
+        PrivateUpdateCache::open(root.clone()).unwrap();
+        let update = PrivateUpdateCache::open_existing_for_update(root.clone())
+            .unwrap()
+            .unwrap();
+        assert!(update.lock().is_err());
+        assert!(!root.join("update.lock").exists());
+        assert!(update.child("1.2.3").is_err());
+        assert!(!root.join("1.2.3").exists());
+        std::fs::remove_dir(&root).unwrap();
+        assert!(update.write("update-state.json", b"state").is_err());
+        assert!(update.retain_version(None).is_err());
+        assert!(!root.exists());
+    }
     #[test]
     fn readonly_cache_never_creates_missing_paths_or_recreates_removed_root() {
         let temp = crate::test_tempdir().unwrap();
