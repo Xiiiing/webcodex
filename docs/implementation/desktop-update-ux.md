@@ -40,7 +40,7 @@ For the focused presentation gate, run from `apps/desktop`:
 npx vitest run src/features/settings/UpdateWorkflow.test.tsx
 ```
 
-Recorded source validation on 2026-10-06 with shared prerequisite `c74ceb21`: the Desktop suite passed 483 tests across 19 files and its form-control CSS contract; the focused workflow suite passed 65 tests; the native adapter suite passed 11 tests. Typechecking, the Vite production build, Rust formatting and diff-whitespace checks passed.
+Recorded source validation on 2026-10-06 with shared prerequisite `fbe7100c`: the final Desktop suite passed 492 tests across 19 files and its form-control CSS contract; the focused workflow suite passed 74 tests; the native adapter suite passed 12 tests. Typechecking, the Vite production build, Rust formatting and diff-whitespace checks passed. The native adapter rejects saved Environment record changes as well as Desktop selection changes before returning a confirmation.
 
 The focused frontend suite covers all nine retained Core phases, cache clearing, unknown handoff/restoration executors, exact-target invalidation, active-task refresh without effects, review before repeating a restored candidate, late observations after Environment changes, separate component identities, service scopes, inspection timestamps, keyboard behavior and all seven confirmation languages. Native adapter tests cover identity canaries, Environment/revision/manifest fences, terminal-operation handling, byte-change rejection, owned-service scope projection, manual-installation eligibility and the full-response bound.
 
