@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { desktopApi } from "../lib/desktop-api";
-import type { UpdateDownloadStatus, UpdateStatus } from "../models/runtime-shell";
+import type { LocalUpdateStatus, UpdateConfirmation, UpdateDownloadStatus, UpdateStatus } from "../models/runtime-shell";
 
 const ACTIVE_PHASES = new Set(["checking", "downloading", "verifying", "preparing", "installing_or_handed_off"]);
 
 export function useRuntimeUpdates(ready: boolean) {
+  const [local, setLocal] = useState<LocalUpdateStatus | null>(null);
+  const [localError, setLocalError] = useState(false);
+  const localLatest = useRef(local); localLatest.current = local;
+  const localRequest = useRef(0);
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [manualError, setManualError] = useState(false);
@@ -25,10 +29,25 @@ export function useRuntimeUpdates(ready: boolean) {
     });
   }, []);
 
-  const refreshDownload = useCallback(async () => {
-    try { acceptDownload(await desktopApi.updateDownloadState()); }
-    catch { /* Local update observations never become Runtime health errors. */ }
+  const refreshLocal = useCallback(async (inspectFiles = false) => {
+    const request = ++localRequest.current;
+    try {
+      const next = await desktopApi.localUpdateStatus(inspectFiles);
+      if (alive.current && next && request !== localRequest.current && inspectFiles) {
+        setLocal(current => current && current.environment_id === next.environment_id && current.selection_revision === next.selection_revision && current.view.upgrade?.operation_id === next.view.upgrade?.operation_id && current.view.upgrade?.phase === next.view.upgrade?.phase
+          ? { ...current, installed_observed: true, installed_checked_at_ms: next.installed_checked_at_ms, view: { ...current.view, installed: next.view.installed, restart_required: next.view.restart_required } } : current);
+      }
+      if (alive.current && request === localRequest.current && next) {
+        setLocal(current => {
+          const preserveFiles = !next.installed_observed && current?.environment_id === next.environment_id && current?.selection_revision === next.selection_revision && current?.view.upgrade?.phase === next.view.upgrade?.phase && current?.view.upgrade?.operation_id === next.view.upgrade?.operation_id;
+          return preserveFiles ? { ...next, installed_observed: current!.installed_observed, installed_checked_at_ms: current!.installed_checked_at_ms, view: { ...next.view, installed: current!.view.installed, restart_required: current!.view.restart_required || next.view.restart_required } } : next;
+        }); setLocalError(false);
+        acceptDownload(next.view.download);
+        return next;
+      }
+    } catch { if (alive.current && request === localRequest.current) { setLocalError(true); setLocal(null); } }
   }, [acceptDownload]);
+
 
   const check = useCallback(async (manual: boolean) => {
     if (busy.current || acting.current) return;
@@ -50,17 +69,17 @@ export function useRuntimeUpdates(ready: boolean) {
   }, [ready, check]);
 
   const active = Boolean(status?.download && ACTIVE_PHASES.has(status.download.phase));
-  const observed = Boolean(status);
+  const observed = ready;
   useEffect(() => {
     if (!ready || !observed) return;
     let cancelled = false; let timer: number | undefined;
     const poll = async () => {
-      await refreshDownload();
+      await refreshLocal();
       if (!cancelled) timer = window.setTimeout(() => { void poll(); }, active ? 1000 : 5000);
     };
     void poll();
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [ready, observed, active, refreshDownload]);
+  }, [ready, observed, active, refreshLocal]);
 
   const action = useCallback(async (execute: () => Promise<void>) => {
     if (acting.current) return;
@@ -68,10 +87,10 @@ export function useRuntimeUpdates(ready: boolean) {
     try { await execute(); }
     catch { if (alive.current) setActionError(true); }
     finally {
-      await refreshDownload();
+      await refreshLocal();
       acting.current = false; if (alive.current) setActionBusy(false);
     }
-  }, [refreshDownload]);
+  }, [refreshLocal]);
 
   const download = () => action(async () => {
     const version = latest.current?.latest?.version;
@@ -87,15 +106,16 @@ export function useRuntimeUpdates(ready: boolean) {
   });
   // Called only after the confirmation UI records the exact target displayed
   // to the user. No effect, timer, preference or download callback installs.
-  const install = (version: string) => action(async () => {
-    const current = latest.current?.download;
-    if (!current?.can_install || current.phase !== "ready_to_install" || current.version !== version || current.pending_install) {
+  const install = (confirmation: UpdateConfirmation) => action(async () => {
+    const current = localLatest.current?.view.download;
+    const version = confirmation.candidate.version;
+    if (!current?.can_install || current.phase !== "ready_to_install" || current.version !== version || current.pending_install || JSON.stringify(localLatest.current?.confirmation) !== JSON.stringify(confirmation)) {
       throw new Error("update_changed");
     }
-    await desktopApi.installVerifiedUpdate(version, true);
+    await desktopApi.installVerifiedUpdate(version, true, confirmation);
   });
 
-  return { status, checking, manualError, actionBusy, actionError, check: () => check(true),
+  return { status, local, localError, refreshLocal, checking, manualError, actionBusy, actionError, check: () => check(true),
     download, cancelDownload, setAutomaticDownload, install, remindLater };
 }
 export type RuntimeUpdates = ReturnType<typeof useRuntimeUpdates>;
