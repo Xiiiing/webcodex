@@ -2,8 +2,10 @@
 
 ## Baseline and sources
 
-Round two starts independently from upstream `390b7bbe`. First Run and device
-invitation changes are separate contributions. This work projects existing
+Round two began independently from upstream `390b7bbe`. Before publication,
+latest upstream `6d249979` was merged without conflicts (including the separate
+Core invitation fence). First Run/device UI changes remain a separate
+contribution. This work projects existing
 configuration; it does not relocate authority or change enrollment, project
 registration, credential storage, service ownership, or upgrade transactions.
 
@@ -101,7 +103,8 @@ registry/project directories. Mixed Server/Runner/Tunnel/Desktop configurations,
 credentials, databases and sidecars, recovery records, trace/log output, caches,
 programs and project source contents are never copied. Only existing verified
 build observations are used for other components; no executable is invoked to
-fill unknown build information.
+fill unknown build information. Components absent from `builds` have unknown
+build identity; a cached verified observation is not proof of a running version.
 
 Complete recovery still requires original authoritative/private configuration,
 compatible programs and data formats, and ownership/permissions. A local Runner
@@ -127,7 +130,7 @@ Node 24.20.0), using locked dependencies and the `dogfood` Cargo profile:
 | Check | Actual result |
 | --- | --- |
 | Shared inventory tests | 18 passed: roles, setup journal, defaults/overrides, binding, missing/unreadable/invalid paths, no writes, link rejection, log mechanisms, canaries, JSON bounds and revisions |
-| CLI Environment tests | 10 passed, including both read-only commands before Store creation |
+| CLI Environment tests | 10 passed; actual CLI binary JSON smoke also passed for both commands against an absent explicit root, which remained absent |
 | Shared pure Server parser | 1 passed; preserves literal-value grammar and guards a single-quote value against slicing panic |
 | Server configuration regression module | 22 selected tests passed, including startup-file precedence and atomic invalid-file handling |
 | Existing private Store link guard | 1 passed |
@@ -135,7 +138,7 @@ Node 24.20.0), using locked dependencies and the `dogfood` Cargo profile:
 | Existing native diagnostics | 7 passed: allowlisted support data, console navigation, trace editor and create-new support export |
 | Desktop behavior/language/error rendering | 79 passed across ConfigurationDataPanel, RuntimeShell, WorkspaceSettings and presentation tests; seven languages included |
 | TypeScript / frontend production build / CSS contract | Passed; existing Vite >500 kB bundle advisory remains |
-| Native Desktop and CLI dogfood builds | Passed; existing Desktop dead-code warnings remain |
+| Native Desktop and CLI dogfood builds | Passed again after merging upstream `6d249979`; existing Desktop dead-code warnings remain |
 | Rust formatting / diff whitespace | Passed |
 | Browser component fixture | Chromium 153, 360 px fixed scroll container, long paths and all seven languages: no horizontal overflow; keyboard Tab reaches buttons. Isolated frontend fixture, not native WebView or installed application verification |
 
@@ -143,7 +146,9 @@ A broader Environment library run during the private-directory helper refactor
 found one unchanged service-scope fixture failing under inherited `umask 0002`:
 its temporary ancestor was shared-writable. The same isolated test passed with
 only child-shell `umask 0022`; no service-scope code, assertion or ownership check
-was weakened. The focused checks above pass on the final source.
+was weakened. The focused checks above passed before upstream integration;
+inventory, CLI,
+native inventory and both dogfood builds were repeated after merging `6d249979`.
 
 The initial native export test exposed a missing-root destination being classified
 as unconfirmed before protected-root rejection. The implementation now rejects
