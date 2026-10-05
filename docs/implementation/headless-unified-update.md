@@ -39,10 +39,11 @@ Recorded 2026-10-06 on Linux x64 using a dirty source development build from
 | Check | Result |
 | --- | --- |
 | `cargo test --locked --offline -p webcodex-cli environment::update --profile dogfood` | 7 passed: parser targets, TTY/platform admission, absent readonly status, secret-safe errors, exact acknowledgement, literal argv and writable-alias rejection. |
-| CLI `environment::tests` focused regression | 9 passed before the separate guarded installer additions: existing setup/identity/scope/secret and installer authorization boundaries. |
+| CLI `environment::` focused regression after guarded-handoff integration | 18 passed: the seven terminal-update tests plus eleven existing/guarded setup, identity, scope, secret and installer authorization tests. |
 | `cargo build --locked --offline -p webcodex-cli --profile dogfood` | Passed on Linux x64. |
 | Built CLI, isolated absent roots, `status --json` | Passed with no Environment/cache creation, no release discovery and bounded single-document stdout. |
 | Built CLI, non-TTY apply/resume/rollback with explicit version/operation and `--yes` | Expected `interactive_terminal_required`, exit 1, bounded JSON stdout, no stderr or storage creation. No service-changing call was executed. |
+| CLI `guarded_` compatibility regression | 3 passed, including additive Windows build-info and original non-Windows bytes (overlaps two environment tests above). |
 | Rust formatting and diff checks | Passed. |
 
 Shared Core tests independently cover exact terminal reconciliation, stale target
