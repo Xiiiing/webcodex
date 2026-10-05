@@ -148,6 +148,25 @@ fn verified_file_build(probe: runtime_selection::BinaryProbe) -> Option<MachineB
         .flatten()
 }
 
+fn saved_environment_unchanged(
+    before: Option<&webcodex_environment::EnvironmentRecord>,
+    after: Option<&webcodex_environment::EnvironmentRecord>,
+) -> bool {
+    match (before, after) {
+        (None, None) => true,
+        (Some(before), Some(after)) => {
+            before.schema_version == after.schema_version
+                && before.environment_id == after.environment_id
+                && before.request == after.request
+                && before.username == after.username
+                && before.runner_client_id == after.runner_client_id
+                && before.projects == after.projects
+                && before.configured == after.configured
+        }
+        _ => false,
+    }
+}
+
 fn restart_required(
     upgrade: Option<&webcodex_environment::UpgradeStatus>,
     environment_id: Option<&str>,
@@ -499,6 +518,11 @@ impl AppState {
                 || core.config.runtime_selection_revision != config.runtime_selection_revision
                 || runner_identity_from_config(&core.config) != runner_identity_from_config(&config)
         }) {
+            return Err(action_error());
+        }
+        // Core task observation fences its own record. This response must also
+        // retain the original role/account/service inventory we observed above.
+        if !saved_environment_unchanged(record.as_ref(), local_record(&config).as_ref()) {
             return Err(action_error());
         }
         bounded_local_status(LocalUpdateStatus {

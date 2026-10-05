@@ -286,3 +286,69 @@ fn source_and_custom_installations_cannot_gain_eligibility_from_read_view() {
     download.can_install = false;
     assert!(!install_eligible(&download, true, true, &[]));
 }
+
+#[test]
+fn external_environment_changes_invalidate_the_whole_local_observation() {
+    use webcodex_environment::{
+        service::ServiceScope, EnvironmentMode, EnvironmentRecord, LocalAccount, ProjectRecord,
+        RuntimeBinaries, SetupRequest,
+    };
+    let before = EnvironmentRecord {
+        schema_version: 1,
+        environment_id: "saved-env".into(),
+        request: SetupRequest {
+            service_scope: ServiceScope::System,
+            mode: EnvironmentMode::Create {
+                listen: "127.0.0.1:8080".into(),
+            },
+            server_url: "http://127.0.0.1:8080".into(),
+            project: None,
+            runner: Some(true),
+            account: LocalAccount {
+                name: "fixture-owner".into(),
+                identity: "fixture-owner-id".into(),
+                home: "/fixture/home".into(),
+            },
+            binaries: RuntimeBinaries {
+                cli: "/fixture/bin/webcodex".into(),
+                server: "/fixture/bin/webcodex-server".into(),
+                runner: "/fixture/bin/webcodex-runner".into(),
+            },
+        },
+        username: Some("saved-user".into()),
+        runner_client_id: Some("saved-runner".into()),
+        projects: vec![],
+        configured: true,
+    };
+    assert!(saved_environment_unchanged(
+        Some(&before),
+        Some(&before.clone())
+    ));
+    assert!(saved_environment_unchanged(None, None));
+    assert!(!saved_environment_unchanged(Some(&before), None));
+    assert!(!saved_environment_unchanged(None, Some(&before)));
+    let changes: [fn(&mut EnvironmentRecord); 12] = [
+        |record| record.environment_id = "replacement-env".into(),
+        |record| record.request.mode = EnvironmentMode::Join,
+        |record| record.request.runner = Some(false),
+        |record| record.request.service_scope = ServiceScope::User,
+        |record| record.request.server_url = "https://changed.example".into(),
+        |record| record.request.binaries.cli = "/other/webcodex".into(),
+        |record| record.request.account.identity = "other-owner-id".into(),
+        |record| record.runner_client_id = Some("replacement-runner".into()),
+        |record| record.configured = false,
+        |record| record.username = Some("different-user".into()),
+        |record| {
+            record.projects.push(ProjectRecord {
+                id: "new-project".into(),
+                path: "/fixture/project".into(),
+            })
+        },
+        |record| record.schema_version = 2,
+    ];
+    for change in changes {
+        let mut after = before.clone();
+        change(&mut after);
+        assert!(!saved_environment_unchanged(Some(&before), Some(&after)));
+    }
+}
