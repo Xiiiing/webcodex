@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct PrivateUpdateCache {
     root: PathBuf,
+    readonly: bool,
 }
 
 fn failed<T>(_: T) -> UpdateError {
@@ -44,7 +45,29 @@ impl PrivateUpdateCache {
             return Err(UpdateError::CacheUnavailable);
         }
         ensure_private_directory(&root).map_err(failed)?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            readonly: false,
+        })
+    }
+    /// Read-only admission: missing cache stays missing and no lock is created.
+    pub fn open_existing(root: PathBuf) -> UpdateResult<Option<Self>> {
+        let store = crate::EnvironmentStore::open_existing(root.clone()).map_err(failed)?;
+        Ok(store.map(|_| Self {
+            root,
+            readonly: true,
+        }))
+    }
+    pub fn existing_child(&self, name: &str) -> UpdateResult<Option<Self>> {
+        if !leaf(name) {
+            return Err(UpdateError::CacheUnavailable);
+        }
+        Self::open_existing(self.root.join(name))
+    }
+    pub fn lock_existing(&self) -> UpdateResult<File> {
+        let file = open_existing_private(&self.root.join("update.lock"), false).map_err(failed)?;
+        file.try_lock_shared().map_err(failed)?;
+        Ok(file)
     }
     pub fn root(&self) -> &Path {
         &self.root
@@ -53,13 +76,30 @@ impl PrivateUpdateCache {
         if !leaf(name) {
             return Err(UpdateError::CacheUnavailable);
         }
-        ensure_private_directory(&self.root).map_err(failed)?;
+        if self.readonly {
+            if crate::EnvironmentStore::open_existing(self.root.clone())
+                .map_err(failed)?
+                .is_none()
+            {
+                return Err(UpdateError::CacheUnavailable);
+            }
+        } else {
+            ensure_private_directory(&self.root).map_err(failed)?;
+        }
         Ok(self.root.join(name))
     }
     pub fn child(&self, name: &str) -> UpdateResult<Self> {
+        if self.readonly {
+            return self
+                .existing_child(name)?
+                .ok_or(UpdateError::CacheUnavailable);
+        }
         Self::open(self.file(name)?)
     }
     pub fn lock(&self) -> UpdateResult<File> {
+        if self.readonly {
+            return Err(UpdateError::CacheUnavailable);
+        }
         let path = self.file("update.lock")?;
         let file = if path.exists() {
             open_existing_private(&path, true)
@@ -90,6 +130,9 @@ impl PrivateUpdateCache {
         Ok(Some(bytes))
     }
     pub fn write(&self, name: &str, bytes: &[u8]) -> UpdateResult<()> {
+        if self.readonly {
+            return Err(UpdateError::CacheUnavailable);
+        }
         if bytes.len() > 1024 * 1024 {
             return Err(UpdateError::CacheUnavailable);
         }
@@ -99,9 +142,15 @@ impl PrivateUpdateCache {
         open_existing_private(&self.file(name)?, false).map_err(failed)
     }
     pub fn create_file(&self, name: &str) -> UpdateResult<File> {
+        if self.readonly {
+            return Err(UpdateError::CacheUnavailable);
+        }
         open_private(&self.file(name)?, true).map_err(failed)
     }
     pub fn remove_file(&self, name: &str) -> UpdateResult<()> {
+        if self.readonly {
+            return Err(UpdateError::CacheUnavailable);
+        }
         let path = self.file(name)?;
         match std::fs::symlink_metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -118,6 +167,9 @@ impl PrivateUpdateCache {
     /// Caller streamed and hashed the private part. No final name is visible
     /// until the bytes and containing directory are durably committed.
     pub fn commit(&self, partial: &str, final_name: &str) -> UpdateResult<()> {
+        if self.readonly {
+            return Err(UpdateError::CacheUnavailable);
+        }
         let part = self.file(partial)?;
         let target = self.file(final_name)?;
         if target.try_exists().map_err(failed)? {
@@ -140,6 +192,9 @@ impl PrivateUpdateCache {
     /// Root entries outside our canonical version/temporary namespace are not
     /// touched. Recursion never follows links, and work is bounded.
     pub fn retain_version(&self, keep: Option<&str>) -> UpdateResult<()> {
+        if self.readonly {
+            return Err(UpdateError::CacheUnavailable);
+        }
         ensure_private_directory(&self.root).map_err(failed)?;
         if keep.is_some_and(|value| !stable_version(value)) {
             return Err(UpdateError::CacheUnavailable);
@@ -166,6 +221,9 @@ impl PrivateUpdateCache {
         Ok(())
     }
     pub fn remove_child_tree(&self, name: &str) -> UpdateResult<()> {
+        if self.readonly {
+            return Err(UpdateError::CacheUnavailable);
+        }
         let path = self.file(name)?;
         if std::fs::symlink_metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
         {
@@ -205,6 +263,39 @@ fn remove_tree(path: &Path, depth: usize, remaining: &mut usize) -> UpdateResult
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn readonly_cache_never_creates_missing_paths_or_recreates_removed_root() {
+        let temp = crate::test_tempdir().unwrap();
+        let root = temp.path().join("readonly");
+        assert!(PrivateUpdateCache::open_existing(root.clone())
+            .unwrap()
+            .is_none());
+        assert!(!root.exists());
+        let cache = PrivateUpdateCache::open(root.clone()).unwrap();
+        cache.write("fixture", b"value").unwrap();
+        let readonly = PrivateUpdateCache::open_existing(root.clone())
+            .unwrap()
+            .unwrap();
+        assert!(readonly.existing_child("missing").unwrap().is_none());
+        assert!(readonly.write("new", b"no").is_err());
+        assert!(!root.join("new").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let before = std::fs::metadata(&root).unwrap();
+            assert_eq!(readonly.read("fixture", 16).unwrap().unwrap(), b"value");
+            let after = std::fs::metadata(&root).unwrap();
+            assert_eq!(before.mode(), after.mode());
+            assert_eq!(
+                (before.ctime(), before.ctime_nsec()),
+                (after.ctime(), after.ctime_nsec())
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(readonly.read("fixture", 16).is_err());
+        assert!(!root.exists());
+    }
+
     #[test]
     fn parts_are_private_atomic_and_cleanup_is_scoped() {
         let temp = crate::test_tempdir().unwrap();

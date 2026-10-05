@@ -1,5 +1,5 @@
 use super::*;
-use crate::updates::{UpdateCache, UpdateCompatibility};
+use crate::unified_update::UpdateCompatibility;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpListener;
 
@@ -198,23 +198,6 @@ fn target_record() -> UpdateRecord {
         verified_at_ms: Some(100),
         ..UpdateRecord::default()
     }
-}
-
-#[test]
-fn old_preferences_default_enabled_and_runtime_version_cannot_hide_desktop_release() {
-    let cache: UpdateCache = serde_json::from_str(r#"{"last_check_at_ms":null,"last_success_at_ms":null,"latest":null,"remind_after_ms":null}"#).unwrap();
-    assert!(cache.automatic_download);
-    let cache = UpdateCache {
-        latest: Some(ReleaseNotice {
-            version: "0.5.0".into(),
-            runtime_version: "0.4.9".into(),
-            release_url: "https://github.com/yyjeqhc/webcodex/releases/tag/v0.5.0".into(),
-            compatibility: UpdateCompatibility::RuntimeCompatible,
-        }),
-        ..UpdateCache::default()
-    };
-    assert!(cache.status("0.4.9", 100, true, None).update_available);
-    assert!(!cache.status("0.5.0", 100, true, None).update_available);
 }
 
 #[test]

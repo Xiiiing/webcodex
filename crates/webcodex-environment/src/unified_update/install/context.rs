@@ -1,20 +1,27 @@
 use super::super::download::InstallationKind;
-use crate::runtime_selection::RuntimeSource;
-use crate::webcodex::cli::{ResolvedBinaries, ResolvedBinarySource};
-use std::path::{Path, PathBuf};
-use webcodex_core::desktop_runtime_contract::MachineBuildInfo;
-use webcodex_environment::unified_update::{
+use crate::unified_update::{
     self as unified, InstallerTarget, PackageFormat, RuntimePlatform, UpdateError, UpdateResult,
 };
-use webcodex_environment::{EnvironmentStore, RuntimeBinaries};
+use crate::{EnvironmentStore, RuntimeBinaries};
+use std::path::{Path, PathBuf};
+use webcodex_core::desktop_runtime_contract::MachineBuildInfo;
 
 #[derive(Clone)]
 pub struct InstallContext {
-    pub(super) environment_id: String,
-    pub(super) binaries: RuntimeBinaries,
-    pub(super) desktop: PathBuf,
-    pub(super) build: MachineBuildInfo,
-    pub(crate) target: InstallerTarget,
+    pub environment_root: PathBuf,
+    pub environment_id: String,
+    pub binaries: RuntimeBinaries,
+    pub desktop: PathBuf,
+    pub build: MachineBuildInfo,
+    pub target: InstallerTarget,
+}
+
+#[derive(Clone)]
+pub struct InstalledBinaries {
+    pub directory: PathBuf,
+    pub binaries: RuntimeBinaries,
+    pub builds: Vec<MachineBuildInfo>,
+    pub bundled: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -82,19 +89,20 @@ fn current_installer_target(platform: RuntimePlatform) -> Option<InstallerTarget
     }
 }
 
-pub(crate) fn detected_installer_target() -> Option<InstallerTarget> {
+pub fn detected_installer_target() -> Option<InstallerTarget> {
     RuntimePlatform::current().and_then(current_installer_target)
 }
 
-fn aligned_release_build(build: &MachineBuildInfo, binaries: &ResolvedBinaries) -> bool {
-    build.git_dirty == Some(false)
+fn aligned_release_build(build: &MachineBuildInfo, binaries: &InstalledBinaries) -> bool {
+    build.validate("webcodex-desktop").is_ok()
+        && build.git_dirty == Some(false)
         && unified::stable_version(&build.version)
         && build.git_commit.as_deref().is_some_and(|v| {
             v.len() == 40
                 && v.bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         })
-        && matches!(binaries.source, ResolvedBinarySource::Bundled)
+        && binaries.bundled
         && binaries.builds.len() == 3
         && unified::RUNTIME_BINARIES.iter().all(|name| {
             binaries.builds.iter().any(|info| {
@@ -153,14 +161,16 @@ fn package_layout(target: InstallerTarget, executable: &Path, runtime: &Path) ->
 /// explicit Install rechecks the *published bytes* of this installed generation.
 pub fn assess_installation(
     build: MachineBuildInfo,
-    binaries: Option<ResolvedBinaries>,
-    source: RuntimeSource,
+    binaries: Option<InstalledBinaries>,
+    bundled_source: bool,
     environment_id: Option<String>,
+    environment_root: PathBuf,
+    desktop: PathBuf,
 ) -> (InstallationKind, Option<InstallContext>) {
     let Some(target) = detected_installer_target() else {
         return (InstallationKind::UnsupportedPlatform, None);
     };
-    if build.git_dirty != Some(false) || !matches!(source, RuntimeSource::Bundled) {
+    if build.git_dirty != Some(false) || !bundled_source {
         return (InstallationKind::SourceBuild, None);
     }
     let Some(binaries) = binaries else {
@@ -169,10 +179,7 @@ pub fn assess_installation(
     if !aligned_release_build(&build, &binaries) {
         return (InstallationKind::SourceBuild, None);
     }
-    let Some(desktop) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.canonicalize().ok())
-    else {
+    let Some(desktop) = desktop.canonicalize().ok() else {
         return (InstallationKind::UnmanagedInstallation, None);
     };
     let Some(runtime) = binaries.directory.canonicalize().ok() else {
@@ -185,29 +192,32 @@ pub fn assess_installation(
         return (InstallationKind::EnvironmentNotConfigured, None);
     };
     let context = (|| {
-        let root = webcodex_environment::default_environment_dir().ok()?;
+        let root = environment_root.clone();
         if !root.join("environment.json").is_file() {
             return None;
         }
-        let store = EnvironmentStore::open(root).ok()?;
+        let store = EnvironmentStore::open(root.clone()).ok()?;
         let record = store.load_environment().ok()??;
         if !record.configured
             || record.environment_id != environment_id
-            || record.request.account.identity
-                != webcodex_environment::current_account().ok()?.identity
+            || record.request.account.identity != crate::current_account().ok()?.identity
         {
             return None;
         }
         for (stored, resolved, name) in [
-            (&record.request.binaries.cli, &binaries.webcodex, "webcodex"),
+            (
+                &record.request.binaries.cli,
+                &binaries.binaries.cli,
+                "webcodex",
+            ),
             (
                 &record.request.binaries.server,
-                &binaries.server,
+                &binaries.binaries.server,
                 "webcodex-server",
             ),
             (
                 &record.request.binaries.runner,
-                &binaries.runner,
+                &binaries.binaries.runner,
                 "webcodex-runner",
             ),
         ] {
@@ -219,6 +229,7 @@ pub fn assess_installation(
             }
         }
         Some(InstallContext {
+            environment_root: root,
             environment_id,
             binaries: record.request.binaries,
             desktop,
@@ -233,8 +244,7 @@ pub fn assess_installation(
 }
 
 pub(super) fn environment(context: &InstallContext) -> UpdateResult<EnvironmentStore> {
-    let root = webcodex_environment::default_environment_dir()
-        .map_err(|_| UpdateError::UpgradePreflightFailed)?;
+    let root = context.environment_root.clone();
     if !root.join("environment.json").is_file() {
         return Err(UpdateError::UpgradePreflightFailed);
     }
@@ -247,7 +257,7 @@ pub(super) fn environment(context: &InstallContext) -> UpdateResult<EnvironmentS
         || current.environment_id != context.environment_id
         || current.request.binaries != context.binaries
         || current.request.account.identity
-            != webcodex_environment::current_account()
+            != crate::current_account()
                 .map_err(|_| UpdateError::UpgradePreflightFailed)?
                 .identity
     {
@@ -260,6 +270,14 @@ pub(super) async fn verify_installed_generation(
     context: &InstallContext,
     target: InstallerTarget,
 ) -> UpdateResult<()> {
+    let runtime = context
+        .binaries
+        .cli
+        .parent()
+        .ok_or(UpdateError::ProvenanceFailed)?;
+    if !package_layout(target, &context.desktop, runtime) {
+        return Err(UpdateError::ProvenanceFailed);
+    }
     #[cfg(unix)]
     unified::verify_installed_update_cli(&context.binaries.cli)?;
     let published = unified::fetch_release(&context.build.version, target)
@@ -333,20 +351,22 @@ mod tests {
     use super::*;
     #[test]
     fn source_or_dirty_desktop_never_reaches_installation_layout_or_environment() {
-        let mut build = crate::commands::get_desktop_build_info();
-        build.git_dirty = Some(true);
+        let mut build: MachineBuildInfo = serde_json::from_value(serde_json::json!({"schema_version":1,"binary":"webcodex-desktop","version":"1.2.3","git_commit":null,"git_dirty":true,"built_at":null,"target":"x86_64-unknown-linux-gnu","architecture":"x86_64","desktop_runtime_contract":{"min_generation":1,"max_generation":1}})).unwrap();
+        let root = PathBuf::from("/not-an-environment");
+        let desktop = PathBuf::from("/not-the-desktop");
         let (kind, context) = assess_installation(
-            build,
+            build.clone(),
             None,
-            RuntimeSource::Bundled,
+            true,
             Some("environment".into()),
+            root.clone(),
+            desktop.clone(),
         );
         assert_eq!(kind, InstallationKind::SourceBuild);
         assert!(context.is_none());
-        let mut build = crate::commands::get_desktop_build_info();
         build.git_dirty = None;
         assert_eq!(
-            assess_installation(build, None, RuntimeSource::Bundled, None).0,
+            assess_installation(build, None, true, None, root, desktop).0,
             InstallationKind::SourceBuild
         );
     }
@@ -373,4 +393,224 @@ mod tests {
         );
         assert_eq!(os_release_family("ID=unknown\n"), None);
     }
+}
+
+pub fn installed_desktop_path(target: InstallerTarget) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = target;
+        Some(PathBuf::from("/usr/lib/webcodex/webcodex-desktop"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = target;
+        Some(PathBuf::from(
+            "/Applications/WebCodex Desktop.app/Contents/MacOS/WebCodex",
+        ))
+    }
+    #[cfg(windows)]
+    {
+        use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+        let _ = target;
+        RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(
+                "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\WebCodex Desktop",
+            )
+            .and_then(|key| key.get_value::<String, _>("InstallLocation"))
+            .ok()
+            .and_then(|root| PathBuf::from(root.trim_matches('"')).canonicalize().ok())
+            .map(|root| root.join("WebCodex.exe"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = target;
+        None
+    }
+}
+
+/// Runs only the metadata exit path (Desktop exits before Tauri initialization).
+/// Caller must select an installed program from the authoritative layout.
+pub async fn probe_installed_build(path: &Path, binary: &str) -> UpdateResult<MachineBuildInfo> {
+    use tokio::io::AsyncReadExt;
+    if !path.is_absolute()
+        || !std::fs::metadata(path)
+            .is_ok_and(|m| m.is_file() && m.len() > 0 && m.len() <= unified::MAX_INSTALLER_BYTES)
+    {
+        return Err(UpdateError::ProvenanceFailed);
+    }
+    let mut command = tokio::process::Command::new(path);
+    command
+        .arg("--build-info-json")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|_| UpdateError::ProvenanceFailed)?;
+    #[cfg(unix)]
+    let process_group = child.id();
+    let stdout = child.stdout.take().ok_or(UpdateError::ProvenanceFailed)?;
+    let probe = async {
+        let mut bytes = Vec::new();
+        stdout
+            .take(16385)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| UpdateError::ProvenanceFailed)?;
+        if bytes.len() > 16384 {
+            return Err(UpdateError::ProvenanceFailed);
+        }
+        if !child
+            .wait()
+            .await
+            .map_err(|_| UpdateError::ProvenanceFailed)?
+            .success()
+        {
+            return Err(UpdateError::ProvenanceFailed);
+        }
+        let info: MachineBuildInfo =
+            serde_json::from_slice(&bytes).map_err(|_| UpdateError::ProvenanceFailed)?;
+        info.validate(binary)
+            .map_err(|_| UpdateError::ProvenanceFailed)?;
+        Ok(info)
+    };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), probe).await;
+    match result {
+        Ok(Ok(info)) => Ok(info),
+        _ => {
+            #[cfg(unix)]
+            if let Some(pid) = process_group {
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), child.wait()).await;
+            Err(UpdateError::ProvenanceFailed)
+        }
+    }
+}
+
+pub async fn assess_headless_installation(
+    root: PathBuf,
+) -> UpdateResult<(
+    InstallationKind,
+    Option<InstallContext>,
+    Vec<MachineBuildInfo>,
+)> {
+    let Some(target) = detected_installer_target() else {
+        return Ok((InstallationKind::UnsupportedPlatform, None, vec![]));
+    };
+    // This is a read-only open; missing environment remains missing.
+    let store = EnvironmentStore::open_existing(root.clone())
+        .map_err(|_| UpdateError::UpgradePreflightFailed)?;
+    let Some(store) = store else {
+        return Ok((InstallationKind::EnvironmentNotConfigured, None, vec![]));
+    };
+    let Some(record) = store
+        .load_environment()
+        .map_err(|_| UpdateError::UpgradePreflightFailed)?
+    else {
+        return Ok((InstallationKind::EnvironmentNotConfigured, None, vec![]));
+    };
+    if !record.configured
+        || record.request.account.identity
+            != crate::current_account()
+                .map_err(|_| UpdateError::UpgradePreflightFailed)?
+                .identity
+    {
+        return Ok((InstallationKind::EnvironmentNotConfigured, None, vec![]));
+    }
+    let desktop = installed_desktop_path(target).ok_or(UpdateError::UnsupportedPlatform)?;
+    let runtime = record
+        .request
+        .binaries
+        .cli
+        .parent()
+        .ok_or(UpdateError::UpgradePreflightFailed)?
+        .to_path_buf();
+    if !package_layout(target, &desktop, &runtime) {
+        return Ok((InstallationKind::UnmanagedInstallation, None, vec![]));
+    }
+    let mut builds = Vec::new();
+    for (name, path) in [
+        ("webcodex", &record.request.binaries.cli),
+        ("webcodex-server", &record.request.binaries.server),
+        ("webcodex-runner", &record.request.binaries.runner),
+        ("webcodex-desktop", &desktop),
+    ] {
+        let expected = if name == "webcodex-desktop" {
+            desktop.clone()
+        } else {
+            runtime.join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+        };
+        if path.canonicalize().ok().as_ref() != Some(&expected) {
+            return Ok((InstallationKind::UnmanagedInstallation, None, builds));
+        }
+        match probe_installed_build(path, name).await {
+            Ok(build) => builds.push(build),
+            Err(_) => return Ok((InstallationKind::UnmanagedInstallation, None, builds)),
+        }
+    }
+    let binaries = InstalledBinaries {
+        directory: runtime,
+        binaries: record.request.binaries,
+        builds: builds[..3].to_vec(),
+        bundled: true,
+    };
+    let (kind, context) = assess_installation(
+        builds[3].clone(),
+        Some(binaries),
+        true,
+        Some(record.environment_id),
+        root,
+        desktop,
+    );
+    Ok((kind, context, builds))
+}
+
+pub(super) async fn verify_observed_generation(
+    store: &EnvironmentStore,
+    observed: &crate::UpgradeObservation,
+    target: InstallerTarget,
+    cached_source: Option<&unified::UpdateSource>,
+) -> UpdateResult<MachineBuildInfo> {
+    let (kind, context, _) = assess_headless_installation(store.root().to_path_buf()).await?;
+    let context = context
+        .filter(|context| {
+            kind == InstallationKind::Managed
+                && context.environment_id == observed.environment_id
+                && context.build.version == observed.version
+                && context.build.git_commit.as_deref() == Some(observed.source_sha.as_str())
+        })
+        .ok_or(UpdateError::ProvenanceFailed)?;
+    let published;
+    let source = match cached_source {
+        Some(source) => source,
+        None => {
+            published = unified::fetch_release(&observed.version, target)
+                .await?
+                .ok_or(UpdateError::ProvenanceFailed)?;
+            &published.source
+        }
+    };
+    if source.manifest_sha256 != observed.manifest_sha256
+        || source.source_sha != observed.source_sha
+    {
+        return Err(UpdateError::ProvenanceFailed);
+    }
+    #[cfg(unix)]
+    unified::verify_installed_update_cli(&context.binaries.cli)?;
+    for (name, path) in [
+        ("webcodex-desktop", &context.desktop),
+        ("webcodex", &context.binaries.cli),
+        ("webcodex-server", &context.binaries.server),
+        ("webcodex-runner", &context.binaries.runner),
+    ] {
+        if source.component_sha256(name) != Some(hash_program(path).await?.as_str()) {
+            return Err(UpdateError::ProvenanceFailed);
+        }
+    }
+    Ok(context.build)
 }

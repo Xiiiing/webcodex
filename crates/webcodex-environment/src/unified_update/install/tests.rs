@@ -4,15 +4,14 @@ use super::*;
 fn record() -> UpdateRecord {
     let mut record = UpdateRecord::default();
     record.version = Some("1.2.3".into());
-    let platform = webcodex_environment::unified_update::RuntimePlatform::current().unwrap();
-    record.target =
-        webcodex_environment::unified_update::InstallerTarget::default_for_non_linux(platform)
-            .or_else(|| {
-                webcodex_environment::unified_update::InstallerTarget::for_platform(
-                    platform,
-                    webcodex_environment::unified_update::PackageFormat::Deb,
-                )
-            });
+    let platform = crate::unified_update::RuntimePlatform::current().unwrap();
+    record.target = crate::unified_update::InstallerTarget::default_for_non_linux(platform)
+        .or_else(|| {
+            crate::unified_update::InstallerTarget::for_platform(
+                platform,
+                crate::unified_update::PackageFormat::Deb,
+            )
+        });
     record.source_sha = Some("a".repeat(40));
     record.source_manifest_sha256 = Some("b".repeat(64));
     record.pending = Some(PendingInstall {
@@ -34,7 +33,7 @@ fn observation(outcome: UpgradeOutcome) -> UpgradeObservation {
     }
 }
 fn build(version: &str) -> webcodex_core::desktop_runtime_contract::MachineBuildInfo {
-    let mut build = crate::commands::get_desktop_build_info();
+    let mut build: webcodex_core::desktop_runtime_contract::MachineBuildInfo = serde_json::from_value(serde_json::json!({"schema_version":1,"binary":"webcodex-desktop","version":"1.2.3","git_commit":null,"git_dirty":false,"built_at":null,"target":"x86_64-unknown-linux-gnu","architecture":"x86_64","desktop_runtime_contract":{"min_generation":1,"max_generation":1}})).unwrap();
     build.version = version.into();
     build.git_commit = Some("a".repeat(40));
     build.git_dirty = Some(false);
@@ -46,14 +45,14 @@ fn handoff_never_means_installed_without_version_and_core_commit() {
     let record = record();
     let current = build("1.2.2");
     assert_eq!(
-        reconcile(&record, None, &current, 101),
+        reconcile(&record, None, Some(&current), 101),
         Reconciliation::RecoveryRequired
     );
     assert_eq!(
         reconcile(
             &record,
             Some(&observation(UpgradeOutcome::Pending)),
-            &current,
+            Some(&current),
             101
         ),
         Reconciliation::InProgress
@@ -62,7 +61,7 @@ fn handoff_never_means_installed_without_version_and_core_commit() {
         reconcile(
             &record,
             Some(&observation(UpgradeOutcome::Pending)),
-            &current,
+            Some(&current),
             2_000_000
         ),
         Reconciliation::RecoveryRequired
@@ -71,7 +70,7 @@ fn handoff_never_means_installed_without_version_and_core_commit() {
         reconcile(
             &record,
             Some(&observation(UpgradeOutcome::Committed)),
-            &current,
+            Some(&current),
             101
         ),
         Reconciliation::RecoveryRequired
@@ -80,7 +79,7 @@ fn handoff_never_means_installed_without_version_and_core_commit() {
         reconcile(
             &record,
             Some(&observation(UpgradeOutcome::Committed)),
-            &build("1.2.3"),
+            Some(&build("1.2.3")),
             101
         ),
         Reconciliation::Installed
@@ -89,7 +88,7 @@ fn handoff_never_means_installed_without_version_and_core_commit() {
         reconcile(
             &record,
             Some(&observation(UpgradeOutcome::RolledBack)),
-            &current,
+            Some(&current),
             101
         ),
         Reconciliation::Restored
@@ -107,7 +106,7 @@ fn changed_owner_operation_source_or_dirty_build_cannot_clear_pending() {
             _ => observed.manifest_sha256 = "c".repeat(64),
         }
         assert_eq!(
-            reconcile(&record(), Some(&observed), &build("1.2.2"), 101),
+            reconcile(&record(), Some(&observed), Some(&build("1.2.2")), 101),
             Reconciliation::RecoveryRequired
         );
     }
@@ -117,7 +116,7 @@ fn changed_owner_operation_source_or_dirty_build_cannot_clear_pending() {
         reconcile(
             &record(),
             Some(&observation(UpgradeOutcome::Committed)),
-            &dirty,
+            Some(&dirty),
             101
         ),
         Reconciliation::RecoveryRequired
@@ -125,12 +124,47 @@ fn changed_owner_operation_source_or_dirty_build_cannot_clear_pending() {
 }
 
 #[test]
-fn newer_committed_generation_can_reconcile_a_stale_download() {
+fn superseding_committed_generation_requires_manual_reconciliation() {
     let mut observed = observation(UpgradeOutcome::Committed);
     observed.version = "1.2.4".into();
     observed.operation_id = "newer-operation".into();
     assert_eq!(
-        reconcile(&record(), Some(&observed), &build("1.2.4"), 101),
+        reconcile(&record(), Some(&observed), Some(&build("1.2.4")), 101),
+        Reconciliation::RecoveryRequired
+    );
+}
+
+#[test]
+fn repeated_target_with_different_operation_never_clears_pending() {
+    let mut observed = observation(UpgradeOutcome::Committed);
+    observed.operation_id = "replacement-operation".into();
+    assert_eq!(
+        reconcile(&record(), Some(&observed), Some(&build("1.2.3")), 101),
+        Reconciliation::RecoveryRequired
+    );
+}
+
+#[test]
+fn verified_installed_disk_identity_owns_committed_reconciliation() {
+    let old_running_desktop = build("1.2.2");
+    let verified_disk_desktop = build("1.2.3");
+    assert_ne!(old_running_desktop.version, verified_disk_desktop.version);
+    assert_eq!(
+        reconcile(
+            &record(),
+            Some(&observation(UpgradeOutcome::Committed)),
+            Some(&verified_disk_desktop),
+            101
+        ),
         Reconciliation::Installed
+    );
+    assert_eq!(
+        reconcile(
+            &record(),
+            Some(&observation(UpgradeOutcome::Committed)),
+            None,
+            101
+        ),
+        Reconciliation::RecoveryRequired
     );
 }

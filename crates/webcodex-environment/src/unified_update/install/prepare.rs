@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use webcodex_environment::unified_update::{
+use crate::unified_update::{
     InstallerTarget, PackageFormat, PrivateUpdateCache, UpdateError, UpdateResult,
 };
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_RPM_INVENTORY_BYTES: u64 = 4 * 1024 * 1024;
@@ -360,7 +360,7 @@ mod native_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use webcodex_environment::unified_update::RuntimePlatform;
+    use crate::unified_update::RuntimePlatform;
     #[cfg(unix)]
     #[test]
     fn extraction_uses_only_package_metadata_not_installation_commands() {
