@@ -1,4 +1,5 @@
 pub(crate) mod context;
+#[cfg(any(unix, test))]
 mod prepare;
 pub use context::detected_installer_target;
 pub use context::{assess_installation, InstallContext, InstalledBinaries};
@@ -8,9 +9,10 @@ use super::download::{
 };
 use super::CancellationSignal;
 use crate::unified_update::{self as unified, PrivateUpdateCache, UpdateError, UpdateResult};
+#[cfg(unix)]
+use crate::NativeEnvironment;
 use crate::{
-    upgrade_observation, EnvironmentStore, NativeEnvironment, UpgradeObservation, UpgradeOutcome,
-    UpgradeTarget,
+    upgrade_observation, EnvironmentStore, UpgradeObservation, UpgradeOutcome, UpgradeTarget,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +107,8 @@ impl UpdateManager {
         target_identity: &UpgradeTarget,
         adapter: &impl LaunchAdapter,
     ) -> UpdateResult<LaunchOutcome> {
+        #[cfg(not(unix))]
+        let _ = target_identity;
         let store = context::environment(context)?;
         if upgrade_observation(&store)
             .map_err(|_| UpdateError::RecoveryRequired)?
