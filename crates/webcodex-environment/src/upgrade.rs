@@ -1425,7 +1425,7 @@ impl NativeEnvironment {
         store: &EnvironmentStore,
         candidate_dir: &Path,
     ) -> SetupResultValue<UpgradePreflight> {
-        self.upgrade_prepare_with_options(store, candidate_dir, false, None)
+        self.upgrade_prepare_with_options(store, candidate_dir, false, None, None)
             .await
     }
     pub async fn upgrade_prepare_development(
@@ -1433,7 +1433,7 @@ impl NativeEnvironment {
         store: &EnvironmentStore,
         candidate_dir: &Path,
     ) -> SetupResultValue<UpgradePreflight> {
-        self.upgrade_prepare_with_options(store, candidate_dir, true, None)
+        self.upgrade_prepare_with_options(store, candidate_dir, true, None, None)
             .await
     }
     /// Prepare only the environment/candidate/operation selected by the caller.
@@ -1444,8 +1444,36 @@ impl NativeEnvironment {
         candidate_dir: &Path,
         target: &UpgradeTarget,
     ) -> SetupResultValue<UpgradePreflight> {
-        self.upgrade_prepare_with_options(store, candidate_dir, false, Some(target))
+        self.upgrade_prepare_with_options(store, candidate_dir, false, Some(target), None)
             .await
+    }
+    /// Capture the operation created/resumed by this prepare while its Core
+    /// lock is held; an installer must not infer it from a later observation.
+    pub async fn upgrade_prepare_guarded_with_receipt(
+        &self,
+        store: &EnvironmentStore,
+        candidate_dir: &Path,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<(UpgradePreflight, PreparedInstallationReceipt)> {
+        let mut receipt = None;
+        let ready = self
+            .upgrade_prepare_with_options(
+                store,
+                candidate_dir,
+                false,
+                Some(target),
+                Some(&mut receipt),
+            )
+            .await?;
+        Ok((
+            ready,
+            receipt.ok_or_else(|| {
+                error(
+                    "upgrade_receipt",
+                    "The selected environment did not produce a prepared operation",
+                )
+            })?,
+        ))
     }
     async fn upgrade_prepare_with_options(
         &self,
@@ -1453,6 +1481,7 @@ impl NativeEnvironment {
         candidate_dir: &Path,
         development_build: bool,
         target: Option<&UpgradeTarget>,
+        mut capture: Option<&mut Option<PreparedInstallationReceipt>>,
     ) -> SetupResultValue<UpgradePreflight> {
         let lock = store.lock()?;
         let previous: Option<UpgradeJournal> = if target.is_some() {
@@ -1508,6 +1537,9 @@ impl NativeEnvironment {
             if previous.phase == Phase::SnapshotReady {
                 verify_stopped(store, &previous)?;
                 write_prepared_receipt(store, &previous)?;
+                if let Some(capture) = capture.as_deref_mut() {
+                    *capture = Some(prepared_receipt(store.root(), &previous));
+                }
                 return Ok(UpgradePreflight {
                     ready: true,
                     candidate,
@@ -1611,6 +1643,11 @@ impl NativeEnvironment {
             journal
         };
         let prepared = self.complete_upgrade_preparation(store, &mut journal).await;
+        if prepared.is_ok() {
+            if let Some(capture) = capture.as_deref_mut() {
+                *capture = Some(prepared_receipt(store.root(), &journal));
+            }
+        }
         drop(lock);
         if let Err(original) = prepared {
             let recovery_target = UpgradeTarget {

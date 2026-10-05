@@ -29,6 +29,9 @@ struct Input {
     installer_file: Option<PathBuf>,
     installer_target: Option<String>,
     expected_runtime_dir: Option<PathBuf>,
+    upgrade_target_file: Option<PathBuf>,
+    operation_id: Option<String>,
+    operation_id_output: bool,
     username: Option<String>,
     listen: Option<String>,
     server_url: Option<String>,
@@ -67,6 +70,11 @@ fn parse(args: &[String]) -> Result<Input, String> {
             "--token-file" => input.token_file = Some(PathBuf::from(value(&mut iter)?)),
             "--credentials-file" => input.credentials_file = Some(PathBuf::from(value(&mut iter)?)),
             "--profile" => input.profile = Some(value(&mut iter)?),
+            "--upgrade-target-file" => {
+                input.upgrade_target_file = Some(PathBuf::from(value(&mut iter)?))
+            }
+            "--operation-id" => input.operation_id = Some(value(&mut iter)?),
+            "--operation-id-output" => input.operation_id_output = true,
             "--upgrade-receipt" => input.upgrade_receipt = Some(PathBuf::from(value(&mut iter)?)),
             "--installer-file" => input.installer_file = Some(PathBuf::from(value(&mut iter)?)),
             "--installer-target" => input.installer_target = Some(value(&mut iter)?),
@@ -123,6 +131,43 @@ fn parse(args: &[String]) -> Result<Input, String> {
                 .into(),
         );
     }
+    if input.upgrade_target_file.is_some() {
+        if !matches!(
+            input.command.as_str(),
+            "upgrade-prepare"
+                | "upgrade-finish"
+                | "upgrade-rollback"
+                | "installer-verify"
+                | "installer-classify"
+        ) || input.directory.is_none()
+            || input.development_build
+            || input.upgrade_receipt.is_some()
+        {
+            return Err("Guarded installer handoff requires an explicit Environment and a supported command".into());
+        }
+        if input.operation_id_output != (input.command == "upgrade-prepare")
+            || input.operation_id.is_some()
+                != matches!(
+                    input.command.as_str(),
+                    "upgrade-finish" | "upgrade-rollback" | "installer-verify"
+                )
+            || input.operation_id_output && input.json
+        {
+            return Err(
+                "Guarded installer handoff requires an exact operation for follow-up commands"
+                    .into(),
+            );
+        }
+        if input
+            .operation_id
+            .as_ref()
+            .is_some_and(|id| !uuid::Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == *id))
+        {
+            return Err("Invalid guarded installer operation".into());
+        }
+    } else if input.operation_id.is_some() || input.operation_id_output {
+        return Err("Guarded installer operation options require --upgrade-target-file".into());
+    }
     Ok(input)
 }
 
@@ -168,6 +213,38 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
         return Ok(USAGE.into());
     }
     let mut input = parse(args)?;
+    let guarded_handoff = input
+        .upgrade_target_file
+        .as_deref()
+        .map(|path| {
+            webcodex_environment::unified_update::WindowsHandoff::from_request_file(path)
+                .map_err(|_| "Invalid guarded installer handoff".to_owned())
+        })
+        .transpose()?;
+    if let (Some(handoff), Some(operation)) = (&guarded_handoff, &input.operation_id) {
+        if handoff
+            .prepared_operation()
+            .map_err(|_| "Invalid guarded installer acknowledgement")?
+            .as_deref()
+            != Some(operation)
+            || handoff
+                .accepted_operation()
+                .map_err(|_| "Invalid guarded installer acknowledgement")?
+                .as_deref()
+                != Some(operation)
+        {
+            return Err(
+                "Guarded installer follow-up does not match the acknowledged operation".into(),
+            );
+        }
+    }
+    let guarded_target = guarded_handoff.as_ref().map(|handoff| {
+        let mut target = handoff.selected_target().clone();
+        if let Some(operation) = &input.operation_id {
+            target.operation_id = Some(operation.clone());
+        }
+        target
+    });
     if input.command == "installer-apply" {
         #[cfg(unix)]
         {
@@ -314,6 +391,16 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             verify_prepared_installation(&root.join("upgrade-prepared.json"), &candidate).await
         }
         .map_err(|error| error.to_string())?;
+        if let Some(target) = &guarded_target {
+            if receipt.environment_id != target.environment_id
+                || receipt.manifest_sha256 != target.manifest_sha256
+                || Some(receipt.operation_id.as_str()) != target.operation_id.as_deref()
+            {
+                return Err(
+                    "Guarded installer receipt does not match the selected operation".into(),
+                );
+            }
+        }
         if let Some(directory) = input.expected_runtime_dir.as_deref() {
             verify_installer_targets(&receipt, &absolute(directory)?)
                 .map_err(|error| error.to_string())?;
@@ -327,7 +414,13 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
         .map(Ok)
         .unwrap_or_else(default_environment_dir)
         .map_err(|e| e.to_string())?;
-    let store = EnvironmentStore::open(absolute(&root)?).map_err(|e| e.to_string())?;
+    let store = if guarded_target.is_some() {
+        EnvironmentStore::open_existing(absolute(&root)?)
+            .map_err(|e| e.to_string())?
+            .ok_or("Selected Environment is no longer available")?
+    } else {
+        EnvironmentStore::open(absolute(&root)?).map_err(|e| e.to_string())?
+    };
     if input.command == "installer-classify" || input.command.starts_with("package-upgrade-") {
         let runtime = absolute(
             input
@@ -384,6 +477,33 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
     match input.command.as_str() {
         "upgrade-preflight" | "upgrade-prepare" => {
             let candidate = input.candidate_dir.ok_or("Specify --candidate-dir PATH")?;
+            if let (Some(handoff), Some(target)) = (&guarded_handoff, &guarded_target) {
+                let (result, receipt) = core
+                    .backend
+                    .upgrade_prepare_guarded_with_receipt(&store, &candidate, target)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut exact = target.clone();
+                exact.operation_id = Some(receipt.operation_id.clone());
+                if handoff.report_prepared(&receipt).is_err()
+                    || handoff
+                        .wait_for_acceptance(&receipt.operation_id)
+                        .await
+                        .is_err()
+                {
+                    // This preparing process owns the operation. The launching
+                    // adapter never races an unknown outer installer with rollback.
+                    core.backend
+                        .upgrade_rollback_guarded(&store, &exact)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    return Err("Guarded installer handoff was not acknowledged".into());
+                }
+                if !result.ready {
+                    return Err("Guarded installer preparation was rejected".into());
+                }
+                return Ok(receipt.operation_id);
+            }
             let result = match (input.command.as_str(), input.development_build) {
                 ("upgrade-preflight", false) => {
                     core.backend.upgrade_preflight(&store, &candidate).await
@@ -410,7 +530,13 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             }
         }
         "upgrade-finish" | "upgrade-rollback" => {
-            if input.command == "upgrade-finish" {
+            if let Some(target) = &guarded_target {
+                if input.command == "upgrade-finish" {
+                    core.backend.upgrade_finish_guarded(&store, target).await
+                } else {
+                    core.backend.upgrade_rollback_guarded(&store, target).await
+                }
+            } else if input.command == "upgrade-finish" {
                 core.backend.upgrade_finish(&store).await
             } else {
                 core.backend.upgrade_rollback(&store).await
