@@ -242,6 +242,11 @@ fn loopback(url: &str) -> bool {
     })
 }
 
+fn standalone_tunnel_service(profile: &webcodex_environment::TunnelRecord) -> bool {
+    profile.installed
+        && profile.host_mode == webcodex_environment::TunnelHostMode::Standalone
+}
+
 impl AppState {
     pub async fn local_update_status(
         &self,
@@ -418,7 +423,11 @@ impl AppState {
                     match webcodex_environment::tunnel_profiles(&store) {
                         Ok(profiles) => {
                             service_inventory_complete &= profiles.len() <= 16;
-                            for profile in profiles.into_iter().take(16) {
+                            for profile in profiles
+                                .into_iter()
+                                .take(16)
+                                .filter(standalone_tunnel_service)
+                            {
                                 match webcodex_environment::tunnel_service_spec(
                                     &store,
                                     record,

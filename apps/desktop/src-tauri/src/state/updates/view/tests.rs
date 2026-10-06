@@ -19,6 +19,30 @@ fn remote_hosts_cannot_be_observed_as_local_server() {
     assert!(loopback("http://127.0.0.1:8080"));
     assert!(!loopback("https://server.example"));
 }
+
+#[test]
+fn update_service_inventory_matches_core_tunnel_ownership() {
+    let profile = |host_mode, installed| webcodex_environment::TunnelRecord {
+        profile_id: "profile".into(),
+        host_mode,
+        installed,
+        started: installed,
+    };
+    assert!(standalone_tunnel_service(&profile(
+        webcodex_environment::TunnelHostMode::Standalone,
+        true,
+    )));
+    assert!(!standalone_tunnel_service(&profile(
+        webcodex_environment::TunnelHostMode::Standalone,
+        false,
+    )));
+    // Embedded Tunnel lifecycle belongs to the Server, which is already in the
+    // upgrade service inventory. It must not require a nonexistent Tunnel service.
+    assert!(!standalone_tunnel_service(&profile(
+        webcodex_environment::TunnelHostMode::Embedded,
+        false,
+    )));
+}
 fn fence() -> UpdateConfirmation {
     serde_json::from_value(serde_json::json!({"candidate":{"version":"0.5.0","target":{"platform":"linux-x64","format":"deb"},"source_sha":"a".repeat(40),"manifest_sha256":"b".repeat(64),"installer_sha256":"c".repeat(64)},"target":{"environment_id":"local-env","manifest_sha256":"b".repeat(64),"operation_id":null},"selection_revision":7,"services":[],"service_inventory_complete":true})).unwrap()
 }
