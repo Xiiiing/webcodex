@@ -157,3 +157,24 @@ main, with CI repairs committed on those feature branches. Duplicate repair PRs
 #939/#940 are closed. CI success/failure/queued states stay bound to their own
 heads; they do not promote any installation, logout/reboot or recovery row.
 The safe JSON observation snapshot above remains byte-identical.
+
+## CI fixture correction; not native acceptance
+
+At PR #925 source `001c8e1dcc5c3fee25a1e7eb1295a7a57aa9e967`,
+[Windows core job 112157326756](https://github.com/yyjeqhc/webcodex/actions/runs/37429521364/job/112157326756)
+reported 25 passing and three failing unified-upgrade tests. All failures were
+in the disposable candidate-relocation fixture: it recursively created an
+intermediate directory without explicitly securing its Windows ACL before
+private-directory validation. This fixture was inherited unchanged from main.
+
+The correction explicitly secures that intermediate directory and synthetic
+payloads, and writes synthetic manifest/checksum files through the existing
+private writer. Production ownership checks and candidate validation remain
+unchanged. The three candidate-relocation tests pass locally on Linux with
+`cargo test --profile dogfood -p webcodex-environment upgrade::candidate_relocation_tests`;
+root Rust formatting and `git diff --check` also pass. Windows confirmation on
+this PR's corrected source remains a separate CI gate until it completes.
+
+These are automated fixture results. No installer was executed, no existing
+service was changed, and no native acceptance row is promoted. The original
+safe JSON snapshot remains unchanged.
