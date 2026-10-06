@@ -82,3 +82,6 @@ Desktop frontend (81), TypeScript/build/CSS and formatting passed again.
 The native export adapter suite (13) passed after `545d5caf`; a fixture's
 private updater import was corrected to the public shared compatibility type.
 The added Windows binding changes do not alter inventory/export behavior.
+
+Main `94c6e24a` was then merged without conflicts. Desktop behavior/presentation
+81, native inventory/export 13, TypeScript/build/CSS and formatting passed again.
