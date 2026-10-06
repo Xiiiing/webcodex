@@ -340,3 +340,82 @@ async fn path_commands_are_read_only_and_manifest_is_explicitly_metadata_only() 
     assert!(run(&args).await.is_err());
     assert!(!directory.exists());
 }
+
+#[test]
+fn runtime_runner_join_uses_existing_setup_without_any_server_steps() {
+    let options = input(&[
+        "configure",
+        "--join",
+        "https://main.example/",
+        "--runner",
+        "--no-project",
+        "--code-stdin",
+    ])
+    .unwrap();
+    let request = configure_request(
+        &options,
+        service::ServiceScope::User,
+        None,
+        LocalAccount {
+            name: "owner".into(),
+            identity: "1000".into(),
+            home: "/home/owner".into(),
+        },
+        RuntimeBinaries {
+            cli: "/usr/lib/webcodex/webcodex-runtime/webcodex".into(),
+            server: "/usr/lib/webcodex/webcodex-runtime/webcodex-server".into(),
+            runner: "/usr/lib/webcodex/webcodex-runtime/webcodex-runner".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(request.mode, EnvironmentMode::Join);
+    assert_eq!(request.server_url, "https://main.example");
+    assert!(request.local_runner());
+    assert!(!request.local_server());
+    assert!(request.project.is_none());
+    assert!(request.steps().contains(&SetupStep::RunnerEnrollment));
+    assert!(request.steps().contains(&SetupStep::RunnerServiceStart));
+    for excluded in [
+        SetupStep::ServerConfiguration,
+        SetupStep::ServerServiceInstall,
+        SetupStep::ServerServiceStart,
+        SetupStep::ProjectRegistration,
+    ] {
+        assert!(!request.steps().contains(&excluded));
+    }
+    let encoded = serde_json::to_string(&request).unwrap();
+    assert!(!encoded.contains("pairing_code"));
+    assert!(!encoded.contains("api_key"));
+}
+
+#[test]
+fn runner_join_does_not_accept_literal_pairing_or_tunnel_credentials() {
+    for args in [
+        vec![
+            "configure",
+            "--join",
+            "https://main.example",
+            "--runner",
+            "--pairing-code",
+            "private-canary",
+        ],
+        vec![
+            "configure",
+            "--join",
+            "https://main.example",
+            "--runner",
+            "--api-key",
+            "private-canary",
+        ],
+        vec![
+            "configure",
+            "--join",
+            "https://main.example",
+            "--runner",
+            "--tunnel-id",
+            "private-canary",
+        ],
+    ] {
+        assert!(input(&args).is_err());
+    }
+}
