@@ -42,6 +42,7 @@ impl Fixture {
                 data_dir: &self.data,
                 config_path: &self.path,
                 configuration_issue: false,
+                language: SettingsLanguage::EnUs,
                 cached_builds: builds,
             },
             &self.root,
@@ -292,6 +293,111 @@ fn context_and_environment_changes_fence_old_actions() {
             .unwrap_err()
             .code,
         "inventory_changed"
+    );
+}
+
+#[test]
+fn settings_export_uses_only_owned_preferences_and_existing_native_export_guards() {
+    let mut fixture = Fixture::new();
+    fixture.save_environment(false, true);
+    fixture.config.extra.insert(
+        "secret_extension".into(),
+        serde_json::json!({"token":"secret-canary"}),
+    );
+    fixture.config.update_cache.automatic_download = false;
+    fixture.config.update_cache.latest = Some(crate::updates::ReleaseNotice {
+        version: "secret-canary".into(),
+        runtime_version: "secret-canary".into(),
+        release_url: "https://user:secret-canary@private.invalid".into(),
+        compatibility: crate::updates::UpdateCompatibility::Unknown,
+    });
+    std::fs::write(&fixture.path, b"secret-canary-raw-file").unwrap();
+    let before = fixture.observe();
+    let settings = build_settings_export(&before);
+    assert_eq!(
+        settings.desktop_preferences,
+        Setting::Known {
+            value: DesktopPreferences {
+                language: SettingsLanguage::EnUs,
+                automatic_update_download: false,
+            }
+        }
+    );
+    let bytes = export::bounded_json(&settings).unwrap();
+    assert!(!String::from_utf8(bytes.clone())
+        .unwrap()
+        .contains("secret-canary"));
+    let path = fixture.exported("settings.json");
+    export::write_document(&path, &bytes, &before).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert!(export::write_document(&path, b"overwrite", &before).is_err());
+    assert!(export::write_document(&fixture.path, &bytes, &before).is_err());
+    assert_eq!(
+        std::fs::read(&fixture.path).unwrap(),
+        b"secret-canary-raw-file"
+    );
+    fixture.config.update_cache.automatic_download = true;
+    let changed = fixture.observe();
+    let stale = ExportInventoryRequest {
+        kind: InventoryDocument::SettingsExport,
+        expected_revision: before.revision.clone(),
+        path: fixture.exported("stale-settings.json"),
+    };
+    assert_eq!(
+        export_document(&changed, &stale).unwrap_err().code,
+        "inventory_changed"
+    );
+    assert!(!fixture.exported("stale-settings.json").exists());
+    assert!(!fixture.root.join("setup.lock").exists());
+}
+
+#[test]
+fn all_native_locales_project_constrained_values_and_fence_preference_changes() {
+    use crate::desktop_locale::DesktopLocale;
+    let fixture = Fixture::new();
+    let baseline = fixture.observe();
+    for (locale, language) in [
+        (DesktopLocale::EnUs, "en-US"),
+        (DesktopLocale::ZhCn, "zh-CN"),
+        (DesktopLocale::ZhTw, "zh-TW"),
+        (DesktopLocale::DeDe, "de-DE"),
+        (DesktopLocale::FrFr, "fr-FR"),
+        (DesktopLocale::JaJp, "ja-JP"),
+        (DesktopLocale::KoKr, "ko-KR"),
+    ] {
+        let inventory = collect_inventory(
+            &InventoryContext {
+                config: &fixture.config,
+                data_dir: &fixture.data,
+                config_path: &fixture.path,
+                configuration_issue: false,
+                cached_builds: &[],
+                language: settings_language(locale),
+            },
+            &fixture.root,
+            "tauri",
+        );
+        let json = serde_json::to_value(build_settings_export(&inventory)).unwrap();
+        assert_eq!(json["desktop_preferences"]["value"]["language"], language);
+        if locale != DesktopLocale::EnUs {
+            assert!(check_revision(&inventory, &baseline.revision).is_err());
+        }
+    }
+    let unconfirmed = collect_inventory(
+        &InventoryContext {
+            config: &fixture.config,
+            data_dir: &fixture.data,
+            config_path: &fixture.path,
+            configuration_issue: true,
+            cached_builds: &[],
+            language: SettingsLanguage::EnUs,
+        },
+        &fixture.root,
+        "tauri",
+    );
+    assert_eq!(
+        build_settings_export(&unconfirmed).desktop_preferences,
+        Setting::Unknown
     );
 }
 

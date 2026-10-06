@@ -645,24 +645,27 @@ pub async fn export_support_bundle(path: String, state: State<'_, AppState>) -> 
 #[tauri::command]
 pub async fn get_path_inventory(
     state: State<'_, AppState>,
+    locale: State<'_, crate::desktop_locale::DesktopLocaleState>,
 ) -> DesktopResult<webcodex_environment::inventory::PathInventory> {
-    state.path_inventory().await
+    state.path_inventory(&locale).await
 }
 
 #[tauri::command]
 pub async fn open_inventory_location(
     request: crate::state::OpenInventoryRequest,
     state: State<'_, AppState>,
+    locale: State<'_, crate::desktop_locale::DesktopLocaleState>,
 ) -> DesktopResult<()> {
-    state.open_inventory_location(request).await
+    state.open_inventory_location(request, &locale).await
 }
 
 #[tauri::command]
 pub async fn export_inventory_document(
     request: crate::state::ExportInventoryRequest,
     state: State<'_, AppState>,
+    locale: State<'_, crate::desktop_locale::DesktopLocaleState>,
 ) -> DesktopResult<()> {
-    state.export_inventory_document(request).await
+    state.export_inventory_document(request, &locale).await
 }
 
 #[tauri::command]

@@ -5,9 +5,10 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use webcodex_environment::inventory::{
     append_runner_configuration_paths, append_server_configuration_paths, build_backup_manifest,
-    empty_environment_inventory, inspect_environment_paths, local_path_entry, recompute_revision,
-    safe_build, BuildObservation, BuildSource, InventoryIssue, LogSource, LogSourceKind, PathEntry,
-    PathInventory, PathKind, PathStatus, SafetyCategory,
+    build_settings_export, empty_environment_inventory, inspect_environment_paths,
+    local_path_entry, recompute_revision, safe_build, BuildObservation, BuildSource,
+    DesktopPreferences, InventoryIssue, LogSource, LogSourceKind, PathEntry, PathInventory,
+    PathKind, PathStatus, SafetyCategory, Setting, SettingsLanguage,
 };
 
 mod export;
@@ -24,6 +25,7 @@ pub struct OpenInventoryRequest {
 pub enum InventoryDocument {
     Inventory,
     BackupManifest,
+    SettingsExport,
 }
 
 #[derive(Deserialize)]
@@ -43,14 +45,22 @@ fn inventory_error(code: &str) -> DesktopError {
 }
 
 impl AppState {
-    pub async fn path_inventory(&self) -> DesktopResult<PathInventory> {
+    pub async fn path_inventory(
+        &self,
+        locale: &crate::desktop_locale::DesktopLocaleState,
+    ) -> DesktopResult<PathInventory> {
         let slot = self.core.lock().await;
         let core = slot
             .as_ref()
             .ok_or_else(|| inventory_error("desktop_operation_busy"))?;
         let root =
             webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
-        let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
+        let inventory = desktop_inventory(
+            core,
+            &root,
+            self.desktop_data_dir.source.label(),
+            locale.get(),
+        );
         export::bounded_json(&inventory)?;
         Ok(inventory)
     }
@@ -58,6 +68,7 @@ impl AppState {
     pub async fn open_inventory_location(
         &self,
         request: OpenInventoryRequest,
+        locale: &crate::desktop_locale::DesktopLocaleState,
     ) -> DesktopResult<()> {
         // Keep the selected Desktop context stable through native navigation.
         // External changes are reflected by rebuilding the read-only projection.
@@ -67,7 +78,12 @@ impl AppState {
             .ok_or_else(|| inventory_error("desktop_operation_busy"))?;
         let root =
             webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
-        let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
+        let inventory = desktop_inventory(
+            core,
+            &root,
+            self.desktop_data_dir.source.label(),
+            locale.get(),
+        );
         let directory = confirmed_location(&inventory, &request)?;
         crate::platform::opener::directory(&directory)
     }
@@ -75,6 +91,7 @@ impl AppState {
     pub async fn export_inventory_document(
         &self,
         request: ExportInventoryRequest,
+        locale: &crate::desktop_locale::DesktopLocaleState,
     ) -> DesktopResult<()> {
         let slot = self.core.lock().await;
         let core = slot
@@ -82,16 +99,31 @@ impl AppState {
             .ok_or_else(|| inventory_error("desktop_operation_busy"))?;
         let root =
             webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
-        let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
-        check_revision(&inventory, &request.expected_revision)?;
-        let bytes = match request.kind {
-            InventoryDocument::Inventory => export::bounded_json(&inventory)?,
-            InventoryDocument::BackupManifest => {
-                export::bounded_json(&build_backup_manifest(&inventory))?
-            }
-        };
-        export::write_document(&request.path, &bytes, &inventory)
+        let inventory = desktop_inventory(
+            core,
+            &root,
+            self.desktop_data_dir.source.label(),
+            locale.get(),
+        );
+        export_document(&inventory, &request)
     }
+}
+
+fn export_document(
+    inventory: &PathInventory,
+    request: &ExportInventoryRequest,
+) -> DesktopResult<()> {
+    check_revision(inventory, &request.expected_revision)?;
+    let bytes = match request.kind {
+        InventoryDocument::Inventory => export::bounded_json(inventory)?,
+        InventoryDocument::BackupManifest => {
+            export::bounded_json(&build_backup_manifest(inventory))?
+        }
+        InventoryDocument::SettingsExport => {
+            export::bounded_json(&build_settings_export(inventory))?
+        }
+    };
+    export::write_document(&request.path, &bytes, inventory)
 }
 
 fn check_revision(inventory: &PathInventory, expected: &str) -> DesktopResult<()> {
@@ -164,12 +196,18 @@ fn reference(
     }
 }
 
-fn desktop_inventory(core: &DesktopCore, root: &Path, source: &str) -> PathInventory {
+fn desktop_inventory(
+    core: &DesktopCore,
+    root: &Path,
+    source: &str,
+    locale: crate::desktop_locale::DesktopLocale,
+) -> PathInventory {
     let context = InventoryContext {
         config: &core.config,
         data_dir: &core.data_dir,
         config_path: &core.config_path,
         configuration_issue: core.configuration_issue.is_some(),
+        language: settings_language(locale),
         cached_builds: core
             .adapter
             .binaries()
@@ -184,6 +222,7 @@ struct InventoryContext<'a> {
     data_dir: &'a Path,
     config_path: &'a Path,
     configuration_issue: bool,
+    language: SettingsLanguage,
     cached_builds: &'a [webcodex_core::desktop_runtime_contract::MachineBuildInfo],
 }
 
@@ -285,12 +324,21 @@ fn collect_inventory(core: &InventoryContext<'_>, root: &Path, source: &str) -> 
         SafetyCategory::Log,
     ));
     if core.configuration_issue {
+        inventory.settings.desktop_preferences = Setting::Unknown;
         inventory.issues.push(InventoryIssue {
             code: "desktop_configuration_unconfirmed".into(),
             entry_id: Some("desktop.settings".into()),
         });
     } else if legacy {
         append_legacy_locations(&mut inventory, core);
+    }
+    if !core.configuration_issue {
+        inventory.settings.desktop_preferences = Setting::Known {
+            value: DesktopPreferences {
+                language: core.language,
+                automatic_update_download: core.config.update_cache.automatic_download,
+            },
+        };
     }
     let mut build = crate::commands::get_desktop_build_info();
     build.version = env!("CARGO_PKG_VERSION").into();
@@ -402,6 +450,7 @@ fn append_legacy_locations(inventory: &mut PathInventory, core: &InventoryContex
             }
         }
     } else {
+        inventory.settings.device_display_name = Setting::NotApplicable;
         inventory.entries.push(reference(
             "runner.configuration",
             "runner",
@@ -424,6 +473,19 @@ fn append_legacy_locations(inventory: &mut PathInventory, core: &InventoryContex
     }
     // Legacy Desktop children retain output in memory. Do not manufacture
     // persistent lifecycle logs for processes not managed as OS services.
+}
+
+fn settings_language(locale: crate::desktop_locale::DesktopLocale) -> SettingsLanguage {
+    use crate::desktop_locale::DesktopLocale;
+    match locale {
+        DesktopLocale::EnUs => SettingsLanguage::EnUs,
+        DesktopLocale::ZhCn => SettingsLanguage::ZhCn,
+        DesktopLocale::ZhTw => SettingsLanguage::ZhTw,
+        DesktopLocale::DeDe => SettingsLanguage::DeDe,
+        DesktopLocale::FrFr => SettingsLanguage::FrFr,
+        DesktopLocale::JaJp => SettingsLanguage::JaJp,
+        DesktopLocale::KoKr => SettingsLanguage::KoKr,
+    }
 }
 
 #[cfg(test)]
