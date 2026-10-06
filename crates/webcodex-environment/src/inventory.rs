@@ -5,6 +5,7 @@ mod entries;
 mod manifest;
 mod model;
 mod paths;
+mod settings;
 use crate::storage::{read_private, validate_existing_private_directory};
 use crate::{EnvironmentRecord, SetupJournal};
 pub use configuration::{
@@ -16,6 +17,7 @@ pub use model::*;
 pub use paths::local_path_entry;
 use paths::{admissible_display_path, admissible_path, reference_entry};
 use serde::de::DeserializeOwned;
+pub use settings::*;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -43,6 +45,7 @@ pub fn empty_environment_inventory() -> PathInventory {
         issues: vec![],
         builds: vec![],
         identities: vec![],
+        settings: SettingsObservation::default(),
     }
 }
 
@@ -90,7 +93,9 @@ pub fn recompute_revision(inventory: &mut PathInventory) {
     projection.revision.clear();
     inventory.revision = format!(
         "{:x}",
-        Sha256::digest(serde_json::to_vec(&projection).unwrap_or_default())
+        Sha256::digest(
+            serde_json::to_vec(&(&projection, &projection.settings)).unwrap_or_default()
+        )
     );
 }
 

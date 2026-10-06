@@ -99,6 +99,10 @@ pub struct IdentityObservation {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PathInventory {
+    /// Internal allowlisted observations share this inventory's revision. They
+    /// are emitted only by the separate settings-export contract.
+    #[serde(skip)]
+    pub settings: super::SettingsObservation,
     pub schema_version: u16,
     pub observed_at_ms: u64,
     pub environment_id: Option<String>,
