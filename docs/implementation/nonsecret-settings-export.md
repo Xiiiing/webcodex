@@ -85,3 +85,13 @@ The added Windows binding changes do not alter inventory/export behavior.
 
 Main `94c6e24a` was then merged without conflicts. Desktop behavior/presentation
 81, native inventory/export 13, TypeScript/build/CSS and formatting passed again.
+
+After merging upstream `8719afd7`, inventory 24, CLI Environment 22 and
+Desktop export-panel 24 focused tests passed, with Desktop typecheck and Rust
+formatting. Windows CI on `7a13acb6` failed three candidate-relocation fixtures
+while checking inherited directory permissions (`state_io`), before export code
+ran. The fixture now initializes the intermediate private directory and private
+files through existing storage helpers; production permission checks remain
+strict. Three relocation regressions passed on Linux. Windows confirmation for
+this follow-up remains the CI gate, not a native installation claim. The repair
+is appended to this feature PR and does not introduce Runtime dependencies.
