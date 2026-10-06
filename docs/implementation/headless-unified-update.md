@@ -55,3 +55,36 @@ real system/user services, task-window interruption, logout/reboot, native upgra
 rollback, and secret/configuration preservation on a real package upgrade. macOS and
 Windows headless application remains unsupported by this command. Existing native
 Desktop/manual paths and explicit low-level commands remain available.
+
+## Integrated repair and isolated restart validation
+
+The integration from main `6713748b` includes the original Windows invitation
+fixture repair and the shared updater's cross-process durable-state correction.
+Revised locked dogfood suites passed on Linux x64: unified updater 63, Core
+upgrade status 11, original upgrade tests 9, CLI Environment 18 and guarded CLI
+compatibility 3 (the guarded group overlaps two Environment tests). The CLI
+dogfood build passed. Repeated independent CLI status processes preserved absent
+roots; non-TTY apply/resume/rollback returned the expected refusal without writes.
+
+The existing `scripts/e2e_job_reconciliation_ws.sh` ran against development source
+`33532357073dde64fdb2761acb1526d7cebf042f` with `CARGO_NET_OFFLINE=true` and the
+dogfood profile. All **102 assertions passed**. Five Server restarts cover active
+Jobs, completion while offline, `run_process`, `run_script`, and `cargo_check`
+handoffs. The original Runner instance and Job identities survived, observation
+epochs refreshed without duplicate logs, and commands were never redispatched.
+Only disposable loopback processes and generated projects were used. The cleanup
+removed the temporary state and listener; no existing host service was controlled.
+
+The built programs report version `0.5.0`, source `33532357073d`, dirty `false`:
+
+| Development binary | SHA-256 |
+| --- | --- |
+| CLI | `403af6812833210f32644d7ee89ddb2a318667619fced19fb32a454d70942f55` |
+| Server | `77bb9a88412da4385f93c16172d2060a2768fef79e38355d372126923c40d4f2` |
+| Runner | `0f8f678fa9a31f71cb25017d2f59a3c5f7fbd7ce8601178d13c4d6a669493e2a` |
+
+These are source-build process regression results, not release packages or native
+installation, OS reboot, system authorization, installer handoff or rollback
+acceptance. Those outstanding checks and their existing recovery boundaries remain
+unchanged. No raw process output, project source, credentials or private configuration
+is included in this report.
