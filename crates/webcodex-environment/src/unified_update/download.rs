@@ -53,14 +53,14 @@ pub struct DownloadStatus {
     pub legacy_release: bool,
     pub cancelled: bool,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PendingInstall {
     pub environment_id: String,
     pub operation_id: Option<String>,
     pub started_at_ms: u64,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct UpdateRecord {
     pub(super) schema_version: u16,
@@ -392,9 +392,8 @@ impl UpdateManager {
     }
     pub(super) fn load(&self, cache: &PrivateUpdateCache) -> UpdateResult<()> {
         use std::sync::atomic::Ordering;
-        if self.loaded.load(Ordering::Acquire) {
-            return Ok(());
-        }
+        // Each newly acquired cache fence must observe other updater processes.
+        // The in-memory record owns progress only within the current attempt.
         let mut record = match cache.read(STATE_FILE, STATE_BYTES)? {
             Some(bytes) => serde_json::from_slice::<UpdateRecord>(&bytes)
                 .map_err(|_| UpdateError::RecoveryRequired)?,
@@ -407,6 +406,11 @@ impl UpdateManager {
         {
             return Err(UpdateError::RecoveryRequired);
         }
+        if self.loaded.load(Ordering::Acquire) && record == self.current() {
+            // Keep this process's already verified ready state and retry/cancel
+            // cadence when the durable record has not changed between attempts.
+            return Ok(());
+        }
         if record.pending.is_none()
             && matches!(
                 record.phase,
@@ -418,7 +422,8 @@ impl UpdateManager {
             )
         {
             // A persisted ready bit is never execution authority. Re-establish
-            // publisher identity and hash the complete private file on restart.
+            // publisher identity and hash the complete private file on restart
+            // or after another updater changed the durable record.
             record.phase = DownloadPhase::Available;
             record.next_retry_at_ms = None;
             record.downloaded_bytes = 0;
