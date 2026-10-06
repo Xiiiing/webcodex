@@ -419,3 +419,22 @@ fn runner_join_does_not_accept_literal_pairing_or_tunnel_credentials() {
         assert!(input(&args).is_err());
     }
 }
+
+#[tokio::test]
+async fn invalid_package_target_is_rejected_before_authorization_and_does_not_echo_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("absent");
+    let args = vec![
+        "installer-authorize".into(),
+        "--candidate-dir".into(),
+        root.to_string_lossy().into_owned(),
+        "--upgrade-receipt".into(),
+        root.join("receipt.json").to_string_lossy().into_owned(),
+        "--installer-target".into(),
+        "secret-canary".into(),
+        "--json".into(),
+    ];
+    let output = run(&args).await.unwrap_err();
+    assert!(!output.contains("secret-canary"));
+    assert!(!root.exists());
+}
