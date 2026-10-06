@@ -264,6 +264,7 @@ async fn projectless_runner_keeps_bounded_default_policy_and_an_empty_registry()
 fn runner_name_validation_uses_registration_bounds_before_native_setup() {
     let mut saved = record("https://server.example".into(), None, EnvironmentMode::Join);
     saved.request.runner = Some(true);
+    saved.request.account.identity = "1000".into();
     saved.request.runner_display_name = Some("😀".repeat(200));
     validate_request(&saved.request).unwrap();
     for value in ["😀".repeat(201), "bad\0name".into()] {
@@ -1152,6 +1153,27 @@ async fn uncertain_project_addition_is_not_dispatched_again() {
         .unwrap()
         .projects
         .is_empty());
+}
+
+#[test]
+fn runner_name_requires_the_runner_role() {
+    let mut request = record(
+        "http://127.0.0.1:8080".into(),
+        None,
+        EnvironmentMode::Create {
+            listen: "127.0.0.1:8080".into(),
+        },
+    )
+    .request;
+    request.runner = Some(false);
+    request.account.identity = "1000".into();
+    request.runner_display_name = Some("orphan label".into());
+    assert_eq!(
+        validate_request(&request).unwrap_err().code,
+        "runner_display_name"
+    );
+    request.runner = Some(true);
+    assert!(validate_request(&request).is_ok());
 }
 
 #[test]

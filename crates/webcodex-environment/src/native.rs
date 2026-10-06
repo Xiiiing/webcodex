@@ -1947,6 +1947,12 @@ pub(crate) fn validate_request_with_preserved_listen(
             "Runner name must be at most 200 characters and contain no NUL",
         )
     })?;
+    if request.runner_display_name.is_some() && !request.local_runner() {
+        return Err(diagnostic(
+            "runner_display_name",
+            "A Runner name requires a local Runner",
+        ));
+    }
     if canonical_server_url(&request.server_url)? != request.server_url {
         return Err(diagnostic("server_url", "Use the canonical Server address"));
     }
