@@ -54,3 +54,12 @@ The same default-profile public status test passes with the normal thread stack;
 no stack-size override, timeout increase or weaker test was used. This correction
 is a follow-up commit in this feature PR, alongside the existing dispatch and
 Windows private-fixture corrections, rather than another contribution.
+
+After integrating upstream `8719afd7`, 73 shared update tests, 38 upgrade
+contract tests and 25 CLI Environment tests passed. The default unoptimized
+public status regression also passed with the normal thread stack. All 13
+Desktop native update-adapter tests and both Rust formatting checks passed.
+The merge preserves the new Runner-name option, real help newlines and explicit
+Runtime installer target. These are automated/source checks, not native
+installation or service acceptance. CI repairs remain follow-up commits in
+this feature PR; the duplicate repair PRs #939/#940 are closed.
