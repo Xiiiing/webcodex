@@ -12,7 +12,9 @@ fn test_tempdir() -> std::io::Result<tempfile::TempDir> {
     tempfile::tempdir()
 }
 
+mod embedded_tunnel;
 mod engine;
+pub use embedded_tunnel::{embedded_tunnel_profiles, EmbeddedTunnelProfile};
 mod installer_authorization;
 #[cfg(unix)]
 mod installer_unix;
@@ -76,6 +78,6 @@ pub use upgrade::{
 };
 
 pub use tunnel::{
-    tunnel_profiles, tunnel_service_spec, write_tunnel_health, TunnelCredentials, TunnelRecord,
-    TunnelRuntimeObservation,
+    tunnel_profiles, tunnel_service_spec, write_tunnel_health, TunnelCredentials, TunnelHostMode,
+    TunnelRecord, TunnelRuntimeObservation,
 };
