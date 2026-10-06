@@ -276,6 +276,7 @@ fn secret_like_path_values_are_suppressed_and_profile_inventory_is_bounded() {
     let profiles: Vec<_> = (0..100)
         .map(|i| crate::TunnelRecord {
             profile_id: format!("profile{i}"),
+            host_mode: crate::TunnelHostMode::Standalone,
             installed: true,
             started: false,
         })
