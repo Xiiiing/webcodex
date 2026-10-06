@@ -9,6 +9,7 @@ export function useRuntimeUpdates(ready: boolean) {
   const [localError, setLocalError] = useState(false);
   const localLatest = useRef(local); localLatest.current = local;
   const localRequest = useRef(0);
+  const inspectionRequest = useRef(0);
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [manualError, setManualError] = useState(false);
@@ -16,7 +17,7 @@ export function useRuntimeUpdates(ready: boolean) {
   const [actionError, setActionError] = useState(false);
   const alive = useRef(true); const busy = useRef(false); const acting = useRef(false);
   const latest = useRef(status); latest.current = status;
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; ++inspectionRequest.current; }; }, []);
 
   const acceptDownload = useCallback((download: UpdateDownloadStatus) => {
     if (!alive.current || !download) return;
@@ -31,10 +32,14 @@ export function useRuntimeUpdates(ready: boolean) {
 
   const refreshLocal = useCallback(async (inspectFiles = false) => {
     const request = ++localRequest.current;
+    // Polls may finish before an inspection, but a newer explicit inspection
+    // invalidates the older file observation even for the same local target.
+    const inspection = inspectFiles ? ++inspectionRequest.current : null;
     try {
       const next = await desktopApi.localUpdateStatus(inspectFiles);
+      if (inspectFiles && inspection !== inspectionRequest.current) return;
       if (alive.current && next && request !== localRequest.current && inspectFiles) {
-        setLocal(current => current && current.environment_id === next.environment_id && current.selection_revision === next.selection_revision && current.view.upgrade?.operation_id === next.view.upgrade?.operation_id && current.view.upgrade?.phase === next.view.upgrade?.phase
+        setLocal(current => inspection === inspectionRequest.current && current && current.environment_id === next.environment_id && current.selection_revision === next.selection_revision && current.view.upgrade?.operation_id === next.view.upgrade?.operation_id && current.view.upgrade?.phase === next.view.upgrade?.phase
           ? { ...current, installed_observed: true, installed_checked_at_ms: next.installed_checked_at_ms, view: { ...current.view, installed: next.view.installed, restart_required: next.view.restart_required } } : current);
       }
       if (alive.current && request === localRequest.current && next) {

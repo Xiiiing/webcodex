@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeUpdates } from "../../hooks/useRuntimeUpdates";
 import { useRuntimeUpdates } from "../../hooks/useRuntimeUpdates";
@@ -359,6 +359,70 @@ describe("local updater fences and durable outcomes", () => {
   it("keeps all four installed, running and candidate identities separate", async () => {
     const value = updates(); const sha = "e".repeat(64); value.local!.view.installed = [{ binary: "webcodex-desktop", build: { ...desktopBuild, version: "0.5.0", git_commit: sha } }]; value.local!.running = [{ binary: "webcodex-desktop", version: "0.4.0", git_commit: "old-process", git_dirty: false, state: "observed" }, { binary: "webcodex-server", version: null, git_commit: null, git_dirty: null, state: "not_local" }]; value.local!.view.candidate_components = [{ binary: "webcodex-desktop", build: { ...desktopBuild, version: "0.6.0", git_dirty: false } }]; render(wrap(<AboutPanel state={aboutState} updates={value} />)); const table = screen.getByRole("table"); expect(within(table).getAllByRole("row")).toHaveLength(5); const row = within(table).getByRole("row", { name: /desktop 0.5.0/ }); expect(row).toHaveTextContent(sha); expect(row).toHaveTextContent("0.4.0"); expect(row).toHaveTextContent("0.6.0"); expect(within(table).getByText("Not local")).toBeInTheDocument(); fireEvent.click(screen.getByRole("button", { name: "Inspect installed files" })); expect(value.refreshLocal).toHaveBeenCalledWith(true); await act(async () => {});
   });
+});
+
+function deferredLocalStatus() {
+  let resolve!: (value: LocalUpdateStatus) => void;
+  const promise = new Promise<LocalUpdateStatus>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+function inspectedLocalStatus(version: string, checkedAt: number, restartRequired: boolean): LocalUpdateStatus {
+  const value = local();
+  return { ...value, installed_observed: true, installed_checked_at_ms: checkedAt, view: {
+    ...value.view, installed: [{ binary: "webcodex-desktop", build: { ...desktopBuild, version } }], restart_required: restartRequired,
+    upgrade: { schema_version: 1, environment_id: "local-env", operation_id: "same-operation", version: "0.6.0", source_sha: "a".repeat(40), manifest_sha256: "b".repeat(64), phase: "committed", files: ["desktop"], services: [], service_inventory_complete: true },
+  } };
+}
+
+it("retains newer installed identities, inspection time and restart state after an older inspection returns", async () => {
+  const older = deferredLocalStatus(); const newer = deferredLocalStatus();
+  const latest = inspectedLocalStatus("0.6.0", 2000, true);
+  api.localUpdateStatus.mockResolvedValueOnce(local()).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  const { result } = renderHook(() => useRuntimeUpdates(true));
+  await waitFor(() => expect(result.current.local?.environment_id).toBe("local-env"));
+  act(() => { void result.current.refreshLocal(true); void result.current.refreshLocal(true); });
+  await act(async () => newer.resolve(latest));
+  expect(result.current.local?.installed_checked_at_ms).toBe(2000);
+  expect(result.current.local?.view.installed).toEqual(latest.view.installed);
+  expect(result.current.local?.view.restart_required).toBe(true);
+  await act(async () => older.resolve(inspectedLocalStatus("0.5.0", 1000, false)));
+  expect(result.current.local?.installed_checked_at_ms).toBe(2000);
+  expect(result.current.local?.view.installed).toEqual(latest.view.installed);
+  expect(result.current.local?.view.restart_required).toBe(true);
+});
+
+it("merges a current explicit inspection after a faster ordinary status poll", async () => {
+  const inspection = deferredLocalStatus(); const installed = inspectedLocalStatus("0.6.0", 2000, true);
+  const poll = { ...installed, installed_observed: false, installed_checked_at_ms: null, view: { ...installed.view, installed: [], restart_required: false } };
+  api.localUpdateStatus.mockResolvedValueOnce(local()).mockReturnValueOnce(inspection.promise).mockResolvedValue(poll);
+  const { result } = renderHook(() => useRuntimeUpdates(true));
+  await waitFor(() => expect(result.current.local?.environment_id).toBe("local-env"));
+  act(() => { void result.current.refreshLocal(true); });
+  await act(async () => { await result.current.refreshLocal(); });
+  expect(result.current.local?.installed_observed).toBe(false);
+  await act(async () => inspection.resolve(installed));
+  expect(result.current.local?.installed_checked_at_ms).toBe(2000);
+  expect(result.current.local?.view.installed).toEqual(installed.view.installed);
+  expect(result.current.local?.view.restart_required).toBe(true);
+  await act(async () => { await result.current.refreshLocal(); });
+  expect(result.current.local?.installed_checked_at_ms).toBe(2000);
+  expect(result.current.local?.view.installed).toEqual(installed.view.installed);
+  expect(result.current.local?.view.restart_required).toBe(true);
+});
+
+it("does not accept an inspection returned after unmount", async () => {
+  const inspection = deferredLocalStatus();
+  api.localUpdateStatus.mockResolvedValueOnce(local()).mockReturnValueOnce(inspection.promise);
+  const { result, unmount } = renderHook(() => useRuntimeUpdates(true));
+  await waitFor(() => expect(result.current.local?.environment_id).toBe("local-env"));
+  let response!: Promise<LocalUpdateStatus | undefined>;
+  act(() => { response = result.current.refreshLocal(true); });
+  const previous = result.current.local;
+  unmount();
+  await act(async () => inspection.resolve(inspectedLocalStatus("0.6.0", 2000, true)));
+  expect(await response).toBeUndefined();
+  expect(result.current.local).toBe(previous);
 });
 
 it("drops installed-file observations returned after the selected environment changes", async () => {
