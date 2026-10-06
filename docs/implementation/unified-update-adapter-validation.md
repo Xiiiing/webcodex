@@ -35,3 +35,24 @@ The three new regressions and the full focused `unified_update` group passed
 (58 tests total) with the locked dogfood profile on Linux x64. The installation
 regression also asserts zero launcher calls and unchanged pending bytes. These
 are disposable fixture results, not package installation or service acceptance.
+
+## Cache fence lifetime regression
+
+The revised Linux CI package runs exposed `CacheUnavailable` in the exact
+rolled-back reconciliation regression. A deterministic retained-duplicate test
+then proved a separate lifecycle defect: closing the original descriptor alone
+does not release a Unix flock while another descriptor shares its open-file
+description. Cache operation guards now explicitly unlock on drop, matching the
+existing Environment setup fence. Private opens, CLOEXEC, acquisition rules and
+all six production callers' hold scopes are unchanged.
+
+The retained-duplicate test failed before the fix and passed after it, covering
+new/existing exclusive and existing shared fences. Debug `unified_update` passed
+59 tests, including the CI-failing reconciliation test. The specific CI fork/exec
+window remains a mechanism inference, not a captured process trace; revised CI
+results must be checked independently.
+
+An initial complete Environment package run passed 180 tests and failed an
+unchanged service-directory fixture under this host's inherited umask `0002`.
+That fixture passed in an isolated child with umask `0022`. The parent process,
+fixture and production ownership checks were not modified.
