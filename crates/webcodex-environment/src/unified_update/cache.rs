@@ -16,6 +16,20 @@ pub struct PrivateUpdateCache {
     existing_only: bool,
 }
 
+/// The operation scope owns the advisory fence even if a concurrent process
+/// spawn temporarily inherits its close-on-exec descriptor.
+pub struct PrivateUpdateLock {
+    file: File,
+}
+
+impl Drop for PrivateUpdateLock {
+    fn drop(&mut self) {
+        // Closing only our descriptor can leave flock held by an inherited
+        // open-file description. Release the fence before closing the handle.
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
 fn failed<T>(_: T) -> UpdateError {
     UpdateError::CacheUnavailable
 }
@@ -69,10 +83,10 @@ impl PrivateUpdateCache {
             cache
         }))
     }
-    pub(super) fn lock_existing_exclusive(&self) -> UpdateResult<File> {
+    pub(super) fn lock_existing_exclusive(&self) -> UpdateResult<PrivateUpdateLock> {
         let file = open_existing_private(&self.file("update.lock")?, true).map_err(failed)?;
         file.try_lock_exclusive().map_err(failed)?;
-        Ok(file)
+        Ok(PrivateUpdateLock { file })
     }
     pub fn existing_child(&self, name: &str) -> UpdateResult<Option<Self>> {
         if !leaf(name) {
@@ -80,10 +94,10 @@ impl PrivateUpdateCache {
         }
         Self::open_existing(self.root.join(name))
     }
-    pub fn lock_existing(&self) -> UpdateResult<File> {
+    pub fn lock_existing(&self) -> UpdateResult<PrivateUpdateLock> {
         let file = open_existing_private(&self.root.join("update.lock"), false).map_err(failed)?;
         file.try_lock_shared().map_err(failed)?;
-        Ok(file)
+        Ok(PrivateUpdateLock { file })
     }
     pub fn root(&self) -> &Path {
         &self.root
@@ -114,7 +128,7 @@ impl PrivateUpdateCache {
         }
         Self::open(self.file(name)?)
     }
-    pub fn lock(&self) -> UpdateResult<File> {
+    pub fn lock(&self) -> UpdateResult<PrivateUpdateLock> {
         if self.readonly {
             return Err(UpdateError::CacheUnavailable);
         }
@@ -129,7 +143,7 @@ impl PrivateUpdateCache {
         }
         .map_err(failed)?;
         file.try_lock_exclusive().map_err(failed)?;
-        Ok(file)
+        Ok(PrivateUpdateLock { file })
     }
     pub fn read(&self, name: &str, limit: u64) -> UpdateResult<Option<Vec<u8>>> {
         let path = self.file(name)?;
@@ -372,6 +386,30 @@ mod tests {
         assert!(cache.lock().is_err());
         drop(lock);
         assert!(cache.lock().is_ok());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cache_attempt_lock_release_does_not_wait_for_an_inherited_handle() {
+        for mode in ["new_exclusive", "existing_exclusive", "existing_shared"] {
+            let temp = crate::test_tempdir().unwrap();
+            let cache = PrivateUpdateCache::open(temp.path().join("updates")).unwrap();
+            drop(cache.lock().unwrap());
+            let existing = PrivateUpdateCache::open_existing_for_update(cache.root.clone())
+                .unwrap()
+                .unwrap();
+            let lock = match mode {
+                "new_exclusive" => cache.lock().unwrap(),
+                "existing_exclusive" => existing.lock_existing_exclusive().unwrap(),
+                _ => existing.lock_existing().unwrap(),
+            };
+            assert!(existing.lock_existing_exclusive().is_err(), "{mode}");
+            // dup and fork share the same open-file description. A concurrent
+            // process spawn can retain this descriptor until its close-on-exec.
+            let inherited = lock.file.try_clone().unwrap();
+            drop(lock);
+            assert!(existing.lock_existing_exclusive().is_ok(), "{mode}");
+            drop(inherited);
+        }
     }
     #[cfg(unix)]
     #[test]
