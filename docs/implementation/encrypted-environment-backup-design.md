@@ -7,6 +7,33 @@ release or deployment. Backup/restore code must wait for explicit user security
 review of this document. The prerequisites below require independent reviews;
 a specification is not evidence that those adapters or proofs already exist.
 
+## Review revision, 2026-10-06
+
+The user requested a design adjustment and deferred P7/P8. This draft is not
+accepted implementation scope. P9's backup/restore adaptation also waits for
+its dependent Core contracts. Independent installation and nonsecret export
+work may continue.
+
+The prerequisite table below is an admission gate, not an implementation
+checklist that automatically grants new permissions. Review must separately
+record the accepted capture file slots, their owning domain validators and the
+platforms on which each can be admitted. Missing evidence leaves that slot or
+platform unsupported; it must not trigger a fallback selector or elevated copy.
+
+Before P7 starts, review must settle capture-only behavior, machine/account
+binding, exact service pause ownership and permission adapters. Before P8 starts,
+review must additionally settle the independent write/authority witness and
+read-only historical validators. Approval of the age container alone does not
+approve a restore capable of replacing current databases or credentials.
+
+The first restore implementation must advertise historical/unprovable captures
+as authenticated quarantine only. The conditional current-capture replacement
+path in section 7 is a future capability until its complete witness and write
+barriers are independently reviewed and tested. No idle-task observation,
+matching digest, timestamp, password possession or archive authenticity supplies
+that missing proof. This distinction must remain visible in CLI/GUI plans and
+terminal outcomes, including interrupted operations.
+
 ## 1. Deliverable and trust boundary
 
 Provide an explicit, local-owner operation that captures known private
