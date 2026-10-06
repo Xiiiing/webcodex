@@ -169,6 +169,90 @@ fn verified_installed_disk_identity_owns_committed_reconciliation() {
     );
 }
 
+#[tokio::test]
+async fn loaded_manager_install_rejects_externally_pending_handoff_before_writes() {
+    struct CountingLauncher(std::sync::atomic::AtomicUsize);
+    impl LaunchAdapter for CountingLauncher {
+        fn supported(&self, _: unified::InstallerTarget) -> bool {
+            true
+        }
+        fn launch<'a>(
+            &'a self,
+            _: LaunchRequest<'a>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = LaunchOutcome> + Send + 'a>>
+        {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Box::pin(async { LaunchOutcome::Unknown })
+        }
+    }
+    let temp = crate::test_tempdir().unwrap();
+    let manager = UpdateManager::with_environment_root(
+        temp.path().join("desktop"),
+        temp.path().join("absent-environment"),
+    );
+    manager
+        .download_now(
+            None,
+            false,
+            true,
+            InstallationKind::Managed,
+            None,
+            &CancellationSignal::new(),
+        )
+        .await
+        .unwrap();
+    let mut pending = record();
+    pending.version = Some("99.0.0".into());
+    pending.sha256 = Some("c".repeat(64));
+    pending.verified_at_ms = Some(100);
+    pending.pending.as_mut().unwrap().operation_id = Some(uuid::Uuid::new_v4().to_string());
+    manager.change(|state| {
+        *state = pending.clone();
+        state.pending = None;
+        state.phase = DownloadPhase::Available;
+    });
+    let other = PrivateUpdateCache::open(manager.root.clone()).unwrap();
+    let bytes = serde_json::to_vec(&pending).unwrap();
+    {
+        let _lock = other.lock().unwrap();
+        other.write("update-state.json", &bytes).unwrap();
+    }
+    let identity = unified::CandidateIdentity {
+        version: pending.version.clone().unwrap(),
+        target: pending.target.unwrap(),
+        source_sha: pending.source_sha.clone().unwrap(),
+        manifest_sha256: pending.source_manifest_sha256.clone().unwrap(),
+        installer_sha256: pending.sha256.clone().unwrap(),
+    };
+    let context = InstallContext {
+        environment_root: manager.environment_root.clone(),
+        environment_id: "environment".into(),
+        binaries: crate::RuntimeBinaries {
+            cli: temp.path().join("webcodex"),
+            server: temp.path().join("webcodex-server"),
+            runner: temp.path().join("webcodex-runner"),
+        },
+        desktop: temp.path().join("webcodex-desktop"),
+        build: build("98.0.0"),
+        target: identity.target,
+    };
+    let target = UpgradeTarget {
+        environment_id: context.environment_id.clone(),
+        manifest_sha256: identity.manifest_sha256.clone(),
+        operation_id: None,
+    };
+    let launcher = CountingLauncher(std::sync::atomic::AtomicUsize::new(0));
+    let result = manager
+        .install_checked(&context, &identity, &target, true, &launcher)
+        .await;
+    assert_eq!(
+        other.read("update-state.json", 24 * 1024).unwrap().unwrap(),
+        bytes
+    );
+    assert_eq!(result.unwrap_err(), UpdateError::RecoveryRequired);
+    assert_eq!(launcher.0.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
 fn guarded_fixture() -> (
     tempfile::TempDir,
     std::sync::Arc<UpdateManager>,

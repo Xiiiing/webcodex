@@ -20,3 +20,18 @@ Query tests use temporary private stores and prove missing roots/fences stay mis
 Upgrade tests use disposable state and controlled backends. Their success does not establish actual DEB/RPM/PKG/EXE installation, system authorization, logout/reboot, real service ownership, database migration or native rollback. Those matrix rows remain pending in `unified-deployment-validation.md`.
 
 This contribution is the shared prerequisite for separate Desktop UX, Linux terminal CLI, and Windows guarded-handoff PRs. Old Windows packages do not advertise a guarded handoff. No new remote update operation is supplied.
+
+## Follow-up completeness repair
+
+After merging `upstream/main` `6713748b` and the Windows invitation fixture repair,
+two deterministic tests reproduced a cross-process cache defect: a long-lived
+manager could overwrite a different updater's pending handoff and delete its
+version cache. Both tests failed before the fix. Newly fenced mutations now
+reload durable state; an unchanged record preserves this process's verified
+ready/cancellation state, while externally changed records receive the original
+conservative verification.
+
+The three new regressions and the full focused `unified_update` group passed
+(58 tests total) with the locked dogfood profile on Linux x64. The installation
+regression also asserts zero launcher calls and unchanged pending bytes. These
+are disposable fixture results, not package installation or service acceptance.
