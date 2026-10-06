@@ -47,3 +47,21 @@ After integration with the guarded native handoff repair and shared platform fix
 The focused frontend suite covers all nine retained Core phases, cache clearing, unknown handoff/restoration executors, exact-target invalidation, active-task refresh without effects, review before repeating a restored candidate, late observations after Environment changes, separate component identities, service scopes, inspection timestamps, keyboard behavior and all seven confirmation languages. Native adapter tests cover identity canaries, Environment/revision/manifest fences, terminal-operation handling, byte-change rejection, owned-service scope projection, manual-installation eligibility and the full-response bound.
 
 These checks establish source and adapter behavior. The Vite production build is a frontend artifact build, not a signed Desktop package. It retains the existing large-chunk advisory. Tests do not establish real OS authorization, package installation, service restart, logout/reboot, native handoff, upgrade or rollback acceptance. This work does not deploy packages or control existing host services.
+
+## Follow-up response ordering and integration
+
+Revalidation against `upstream/main` `6713748b` reproduced a stale response:
+a newer explicit installed-file inspection completed before an older inspection,
+which then replaced its version, timestamp and Desktop restart requirement. A
+deferred-response regression failed on the original implementation. An independent
+inspection sequence now rejects older inspections while preserving the current
+inspection when ordinary status polling finishes first; unmount invalidates it.
+
+The updated workflow suite passed 77 tests; five related workflow, First Run,
+Add device and workspace suites passed 276 tests total. Type checking, frontend
+production build and the CSS contract passed. Integrated native update adapters
+passed 24 focused tests and Desktop path-error projection passed two. The existing
+Vite large-chunk advisory remains. The shared cross-process pending-state repair
+and Windows invitation fixture correction are included through their prerequisite
+branches. These are Linux source/fixture checks, not native installed-system or
+OS reboot acceptance.
