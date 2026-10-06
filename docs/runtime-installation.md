@@ -16,6 +16,8 @@ webcodex environment configure --join https://server.example --runner --no-proje
 
 Enter the one-time code at the hidden prompt. Do not put it in command-line arguments, shell history, logs or a command substitution. For a protected non-interactive input stream, add `--code-stdin`; the CLI consumes the code once through stdin. A protected secret source can supply that stream without including the value in argv. `--no-project` does not disable the Runner when `--runner` is present. Without `--runner`, `--no-project` selects the existing viewer role instead.
 
+Optionally add `--runner-name "SSH worker"` during this explicit setup. It uses the existing Runner display label (at most 200 characters, no NUL); it does not change the Runner or project identity. A saved setup/resume retains its original name.
+
 User services follow the existing platform manager contract. Linux logout survival depends on the user's systemd manager and linger configuration; setup does not silently fall back to system services. Choose `--scope system` explicitly when a boot service is intended and obtain its OS authorization. Run subsequent commands as the same original user; saved environments retain their service scope and identity.
 
 To register a folder during Join, replace `--no-project` with `--project /home/alice/src/repo`. To add one later:

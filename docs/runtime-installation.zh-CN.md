@@ -14,6 +14,8 @@ Linux **Runtime** 软件包包含 CLI、Server 和 Runner；**Full** 还包含 D
 webcodex environment configure --join https://server.example --runner --no-project --scope user
 ```
 
+显式配置时可加上 `--runner-name "SSH worker"`，沿用现有 Runner 显示名称（最多 200 字符，不含 NUL），不改变 Runner 或项目身份。已保存的配置和恢复流程保留原名称。
+
 在隐藏输入提示中输入一次性邀请码。不要把它写进命令行参数、shell 历史、日志或命令替换。需要受保护的非交互输入流时，添加 `--code-stdin`；CLI 只通过 stdin 消费一次邀请码。使用不会把秘密放进 argv 的受保护秘密来源提供输入。存在 `--runner` 时，`--no-project` 不会关闭 Runner；没有 `--runner` 的 `--no-project` 则保留原有查看者角色。
 
 用户服务遵循现有系统管理器契约。Linux 退出登录后能否继续运行，取决于用户的 systemd 管理器与 linger 配置；设置不会自动改用系统服务。若要启动时运行的系统服务，请明确选择 `--scope system` 并完成系统授权。后续命令仍以同一原用户执行；已保存环境保留其服务范围和身份。
