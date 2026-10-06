@@ -63,7 +63,7 @@ headless component checks do not establish installed-application behavior.
 | Focused check | Result |
 | --- | --- |
 | Shared inventory, including six settings-export regressions | 24 passed |
-| CLI Environment tests | 11 passed |
+| CLI Environment tests after main `03c2c313` integration | 13 passed |
 | Native Desktop inventory/open/export adapter tests | 13 passed |
 | Desktop ConfigurationDataPanel, RuntimeShell, WorkspaceSettings and presentation | 81 passed |
 | Desktop TypeScript, production frontend build, form-control CSS contract | Passed; existing large-bundle advisory remains |
@@ -76,3 +76,9 @@ The temporary browser fixture used the actual component and styles with an
 in-memory inventory stub. It did not invoke the native application or any
 production service. No full workspace suite, installation, deployment, secret
 backup or restore was performed.
+
+After merging main `03c2c313`, shared inventory (24), CLI Environment (13),
+Desktop frontend (81), TypeScript/build/CSS and formatting passed again.
+The native export adapter suite (13) passed after `545d5caf`; a fixture's
+private updater import was corrected to the public shared compatibility type.
+The added Windows binding changes do not alter inventory/export behavior.
