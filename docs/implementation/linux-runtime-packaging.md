@@ -89,3 +89,10 @@ RPM rendering, provenance fixtures and Python tests do not establish native
 installation or owner-context upgrade acceptance. Real x64/arm64 installation,
 upgrade/rollback and service behavior require reviewed native CI/acceptance
 runs. This contribution is not a release, deployment or installation change.
+
+After merging the contract branch with upstream `8719afd7`, the five Runtime,
+metadata, release-plan, collection and publication suites ran 81 tests, all
+passing. Repository-local Markdown links (772) and diff formatting passed.
+The earlier 464-test tooling run remains tied to its earlier source; native
+package installation and release publication remain unexecuted. CI fixes are
+commits in the existing dependent feature PRs, not separate prerequisite PRs.
