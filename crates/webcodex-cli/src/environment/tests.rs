@@ -30,6 +30,13 @@ fn input(args: &[&str]) -> Result<Input, String> {
     )
 }
 
+#[tokio::test]
+async fn update_command_dispatches_to_the_terminal_adapter() {
+    let args = ["update", "--help"].map(str::to_owned);
+    let output = run(&args).await.unwrap();
+    assert!(output.starts_with("webcodex environment update <COMMAND>"));
+}
+
 #[test]
 fn business_choices_and_resume_are_unambiguous() {
     let create = input(&["configure", "--create", "--no-project"]).unwrap();
@@ -80,6 +87,28 @@ fn projectless_runner_is_explicit_and_does_not_change_legacy_viewer_defaults() {
     ])
     .unwrap();
     assert!(remote.runner && remote.project.is_none() && remote.code_stdin);
+    let named = input(&[
+        "configure",
+        "--create",
+        "--runner",
+        "--runner-name",
+        "My laptop",
+    ])
+    .unwrap();
+    assert_eq!(named.runner_name.as_deref(), Some("My laptop"));
+    let named_project = input(&[
+        "configure",
+        "--join",
+        "https://server.example",
+        "--project",
+        "project",
+        "--runner-name",
+        "Build runner",
+    ])
+    .unwrap();
+    assert_eq!(named_project.runner_name.as_deref(), Some("Build runner"));
+    assert!(input(&["configure", "--create", "--runner-name", "orphan"]).is_err());
+    assert!(input(&["status", "--runner-name", "orphan"]).is_err());
     assert!(
         !input(&["configure", "--create", "--no-project"])
             .unwrap()
@@ -565,4 +594,111 @@ async fn public_environment_entry_update_effects_reject_non_tty_before_store_acc
         );
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
     }
+}
+
+#[test]
+fn runner_name_uses_shared_limits_and_requires_an_explicit_runner_setup() {
+    let name = "机".repeat(200);
+    assert_eq!(
+        input(&["configure", "--create", "--runner", "--runner-name", &name])
+            .unwrap()
+            .runner_name,
+        Some(name.clone())
+    );
+    assert!(input(&[
+        "configure",
+        "--join",
+        "https://main.example",
+        "--project",
+        "project",
+        "--runner-name",
+        "Work machine"
+    ])
+    .is_ok());
+    for args in [
+        vec![
+            "configure",
+            "--create",
+            "--no-project",
+            "--runner-name",
+            "Work machine",
+        ],
+        vec!["resume", "--runner-name", "Work machine"],
+        vec!["status", "--runner-name", "Work machine"],
+        vec!["configure", "--runner", "--runner-name"],
+        vec![
+            "configure",
+            "--runner",
+            "--runner-name",
+            "a",
+            "--runner-name",
+            "b",
+        ],
+        vec![
+            "configure",
+            "--runner",
+            "--runner-name",
+            "private-name\0value",
+        ],
+    ] {
+        let error = input(&args).err().expect("must reject invalid name input");
+        assert!(!error.contains("private-name"));
+    }
+    assert!(input(&[
+        "configure",
+        "--runner",
+        "--runner-name",
+        &format!("{name}机")
+    ])
+    .is_err());
+}
+
+#[test]
+fn named_projectless_join_forwards_label_without_creating_a_server_or_changing_identity() {
+    let options = input(&[
+        "configure",
+        "--join",
+        "https://main.example/",
+        "--runner",
+        "--no-project",
+        "--runner-name",
+        "SSH worker",
+        "--code-stdin",
+    ])
+    .unwrap();
+    let request = configure_request(
+        &options,
+        service::ServiceScope::User,
+        None,
+        LocalAccount {
+            name: "owner".into(),
+            identity: "1000".into(),
+            home: "/home/owner".into(),
+        },
+        RuntimeBinaries {
+            cli: "/runtime/webcodex".into(),
+            server: "/runtime/webcodex-server".into(),
+            runner: "/runtime/webcodex-runner".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(request.runner_display_name.as_deref(), Some("SSH worker"));
+    assert!(request.local_runner());
+    assert!(!request.local_server());
+    assert!(request.project.is_none());
+    assert!(!request.steps().contains(&SetupStep::ServerConfiguration));
+    assert!(!request.steps().contains(&SetupStep::ProjectRegistration));
+    let unnamed = configure_request(
+        &Input {
+            runner_name: None,
+            ..options
+        },
+        request.service_scope,
+        None,
+        request.account,
+        request.binaries,
+    )
+    .unwrap();
+    assert!(unnamed.runner_display_name.is_none());
+    assert_eq!(unnamed.mode, EnvironmentMode::Join);
 }

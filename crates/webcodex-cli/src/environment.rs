@@ -5,7 +5,7 @@ use webcodex_environment::*;
 
 mod update;
 
-const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--credentials-file PATH]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\nmigrate-legacy-runner --join URL --project PATH --token-file PATH [--profile PROFILE] (Linux)\nmigrate-legacy-server --user NAME --token-file PATH --listen ORIGINAL_ADDR [--server-url URL] (Linux)\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure and explicit migration).\n--runner enables local work without requiring an initial project.\nRuntime Join: configure --join URL --runner --no-project (hidden terminal pairing input, or --code-stdin).\nJoining starts only this machine’s Runner; it never creates or starts the central Server.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nTunnel credentials use hidden input or a protected JSON file with tunnel_id and api_key.\n";
+const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--credentials-file PATH]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\nmigrate-legacy-runner --join URL --project PATH --token-file PATH [--profile PROFILE] (Linux)\nmigrate-legacy-server --user NAME --token-file PATH --listen ORIGINAL_ADDR [--server-url URL] (Linux)\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure and explicit migration).\n--runner enables local work without requiring an initial project.\nRuntime Join: configure --join URL --runner --no-project (hidden terminal pairing input, or --code-stdin).\nJoining starts only this machine’s Runner; it never creates or starts the central Server.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nTunnel credentials use hidden input or a protected JSON file with tunnel_id and api_key.\n";
 
 #[derive(Default)]
 struct Input {
@@ -15,6 +15,7 @@ struct Input {
     project: Option<PathBuf>,
     no_project: bool,
     runner: bool,
+    runner_name: Option<String>,
     scope: Option<service::ServiceScope>,
     directory: Option<PathBuf>,
     bin_dir: Option<PathBuf>,
@@ -66,6 +67,7 @@ fn parse(args: &[String]) -> Result<Input, String> {
             "--project" => input.project = Some(PathBuf::from(value(&mut iter)?)),
             "--no-project" => input.no_project = true,
             "--runner" => input.runner = true,
+            "--runner-name" => input.runner_name = Some(value(&mut iter)?),
             "--scope" => input.scope = Some(value(&mut iter)?.parse()?),
             "--environment-dir" => input.directory = Some(PathBuf::from(value(&mut iter)?)),
             "--bin-dir" => input.bin_dir = Some(PathBuf::from(value(&mut iter)?)),
@@ -119,6 +121,16 @@ fn parse(args: &[String]) -> Result<Input, String> {
     if input.runner && input.command != "configure" {
         return Err("--runner applies only to environment configure".into());
     }
+    if input.runner_name.is_some() && input.command != "configure" {
+        return Err("--runner-name applies only to environment configure".into());
+    }
+    if input.runner_name.is_some() && !input.runner && input.project.is_none() {
+        return Err("--runner-name requires --runner or --project PATH".into());
+    }
+    webcodex_core::runner_protocol::validate_optional_runner_field(
+        &input.runner_name,
+        "display_name",
+    )?;
     if input.development_build
         && !matches!(
             input.command.as_str(),
@@ -660,6 +672,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             };
             let default_url = format!("http://{reachable}");
             let request = SetupRequest {
+                runner_display_name: None,
                 service_scope: service::ServiceScope::System,
                 mode: EnvironmentMode::Create {
                     listen: listen.into(),
@@ -699,6 +712,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 return Err("Legacy migration preserves the original Runner and requires --join URL --project PATH --token-file PATH".into());
             }
             let request = SetupRequest {
+                runner_display_name: None,
                 service_scope: service::ServiceScope::System,
                 mode: EnvironmentMode::Join,
                 server_url: canonical_server_url(
@@ -1084,6 +1098,7 @@ fn configure_request(
         server_url: canonical_server_url(url).map_err(|e| e.to_string())?,
         project,
         runner: input.runner.then_some(true),
+        runner_display_name: input.runner_name.clone(),
         account,
         binaries,
     })
