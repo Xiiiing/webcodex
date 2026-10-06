@@ -131,3 +131,29 @@ No target/package/account/scope authorization has been added. Runtime and all
 original native rows remain blocked/not run. The unmodified safe JSON snapshot
 contains only the original observations; this supplement supplies no new package
 hash, machine binding or passed scenario.
+
+## Functional integration checks; not native acceptance
+
+An isolated local integration branch combined the latest First Run on upstream
+`8719afd7`, Runtime contracts/packaging/CLI and nonsecret settings export. The
+combined source was `b9fa15b4a4d174510e0f385af65a57c61c50f5b7` (local validation
+branch; not a published package or Release). No acceptance target was added.
+
+| Focused check | Actual result | Evidence class |
+| --- | --- | --- |
+| CLI Environment, dogfood | 33 passed, including projectless named Join, read-only export and nonTTY effect refusal | Automated Rust/source fixture |
+| Shared path inventory/settings projection | 24 passed | Automated Rust/source fixture |
+| Desktop First Run, completion, settings/export, App and language suites | 160 passed across seven suites | Frontend behavior fixture |
+| Desktop native path/export, invitation/setup and update adapters | 13 + 7 + 13 passed | Native adapter unit fixtures on Linux; no installed services |
+| Desktop typecheck, frontend build, CSS and root/native Rust formatting | Passed; existing bundle-size advisory retained | Source/build check |
+
+The first frontend invocation preceded completion of the local dependency links;
+shared UI module resolution failed. After configuring the disposable worktree's
+Desktop and shared frontend dependencies, the exact checks above passed. No
+production code or test expectation was relaxed for that setup error.
+
+Runtime PRs #941/#942/#943 and settings-export #935 were synchronized with current
+main, with CI repairs committed on those feature branches. Duplicate repair PRs
+#939/#940 are closed. CI success/failure/queued states stay bound to their own
+heads; they do not promote any installation, logout/reboot or recovery row.
+The safe JSON observation snapshot above remains byte-identical.
