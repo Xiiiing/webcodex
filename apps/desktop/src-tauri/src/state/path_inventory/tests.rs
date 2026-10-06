@@ -309,7 +309,7 @@ fn settings_export_uses_only_owned_preferences_and_existing_native_export_guards
         version: "secret-canary".into(),
         runtime_version: "secret-canary".into(),
         release_url: "https://user:secret-canary@private.invalid".into(),
-        compatibility: crate::updates::UpdateCompatibility::Unknown,
+        compatibility: webcodex_environment::unified_update::UpdateCompatibility::Unknown,
     });
     std::fs::write(&fixture.path, b"secret-canary-raw-file").unwrap();
     let before = fixture.observe();
