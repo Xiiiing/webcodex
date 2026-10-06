@@ -17,3 +17,8 @@ Project-read guidance binds the saved Runner `client_id` and Project `runtime_pr
 - CLI/registry dogfood checks, Desktop TypeScript/frontend build, CSS contract, Rust formatting and diff checks passed during implementation. Existing large-bundle/dead-code advisories remain.
 
 An upstream fixture compilation failure was corrected by giving the new optional label its legacy `None` value in two added updater tests. No production behavior changed in that correction. Windows/macOS native installation, Tunnel/ChatGPT reads, package replacement, OS logout/reboot and service ownership acceptance were not executed. No existing service was restarted and no installation, deployment or Release was performed.
+
+After main `94c6e24a` integration, the six relevant frontend suites passed
+160 tests, followed by typecheck, frontend build and CSS checks. New upstream
+update-view fixtures received the same legacy optional-label default.
+CLI Environment 12 and Runner-name 3 tests passed after `03c2c313`.
