@@ -643,6 +643,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             };
             let default_url = format!("http://{reachable}");
             let request = SetupRequest {
+                runner_display_name: None,
                 service_scope: service::ServiceScope::System,
                 mode: EnvironmentMode::Create {
                     listen: listen.into(),
@@ -682,6 +683,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 return Err("Legacy migration preserves the original Runner and requires --join URL --project PATH --token-file PATH".into());
             }
             let request = SetupRequest {
+                runner_display_name: None,
                 service_scope: service::ServiceScope::System,
                 mode: EnvironmentMode::Join,
                 server_url: canonical_server_url(
@@ -801,6 +803,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                         .map_err(|e| e.to_string())?;
                 let binaries = discover_binaries(input.bin_dir.as_deref())?;
                 SetupRequest {
+                    runner_display_name: None,
                     service_scope: resolve_service_scope(&store, input.scope)
                         .map_err(|e| e.to_string())?,
                     mode: if input.create {
