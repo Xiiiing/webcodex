@@ -23,6 +23,14 @@ impl Command {
     }
 }
 
+fn terminal_matches(command: Command, phase: webcodex_environment::UpgradePhase) -> bool {
+    match command {
+        Command::Apply | Command::Resume => phase == webcodex_environment::UpgradePhase::Committed,
+        Command::Rollback => phase == webcodex_environment::UpgradePhase::RolledBack,
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 struct Input {
     command: Command,
@@ -196,6 +204,7 @@ fn encode(status: &Status, json: bool) -> Result<String, String> {
             "active_tasks" => "Running work prevents replacement. Wait for a suitable window, then explicitly review status and apply again.",
             "task_observation_unavailable" => "Task status could not be confirmed. Restore the saved Server connection and review status before applying.",
             "manual_recovery_required" => "The current installation result is uncertain. Review environment update status/upgrade-preflight and the documented owner recovery procedure. This command will not dispatch another installer or guess that rollback is safe.",
+            "upgrade_rolled_back" => "The attempted update did not complete. Core verified that the previous installation was restored; review status before retrying.",
             "headless_dependencies_unavailable" => "The selected installed package format requires trusted system sudo and its existing package tools. Install the missing distribution dependencies; the updater does not switch package managers.",
             "authorization_required" => "System authorization was not obtained. Services were not prepared by this request; explicitly retry after reviewing status.",
             _ => "Review the saved update state and use the documented manual path when this installation is unsupported.",
@@ -440,12 +449,16 @@ async fn reconcile_effect(
     if !target_matches {
         return Err("operation_changed".into());
     }
-    if !matches!(
-        operation.phase,
-        webcodex_environment::UpgradePhase::Committed
-            | webcodex_environment::UpgradePhase::RolledBack
-    ) {
-        return Err("manual_recovery_required".into());
+    if !terminal_matches(input.command, operation.phase) {
+        return Err(
+            if input.command == Command::Apply
+                && operation.phase == webcodex_environment::UpgradePhase::RolledBack
+            {
+                "upgrade_rolled_back".into()
+            } else {
+                "manual_recovery_required".into()
+            },
+        );
     }
     manager
         .reconcile_pending_guarded(&UpgradeTarget {
@@ -623,6 +636,23 @@ mod tests {
             Err("explicit_confirmation_required")
         );
     }
+    #[test]
+    fn effect_success_requires_the_terminal_state_requested_by_the_command() {
+        use webcodex_environment::UpgradePhase;
+        assert!(terminal_matches(Command::Apply, UpgradePhase::Committed));
+        assert!(!terminal_matches(Command::Apply, UpgradePhase::RolledBack));
+        assert!(terminal_matches(Command::Resume, UpgradePhase::Committed));
+        assert!(!terminal_matches(Command::Resume, UpgradePhase::RolledBack));
+        assert!(terminal_matches(
+            Command::Rollback,
+            UpgradePhase::RolledBack
+        ));
+        assert!(!terminal_matches(
+            Command::Rollback,
+            UpgradePhase::Committed
+        ));
+    }
+
     #[tokio::test]
     async fn absent_status_does_not_create_environment_or_desktop_cache() {
         let temp = tempfile::tempdir().unwrap();
