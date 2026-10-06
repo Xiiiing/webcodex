@@ -86,3 +86,48 @@ New native passes: **0**. Native failures: **0**. Executed expected refusals: **
 The host and public-metadata observations succeeded. Continuing native execution requires the explicitly authorized disposable machines/accounts, selected packages (or an authorized development-package build), old/candidate upgrade pair, permitted user/system service and logout/reboot/fault-injection scopes, and an authorized ChatGPT/Tunnel test path when that chain is to be accepted. No production environment was borrowed or modified.
 
 Documentation checks passed: JSON parsing, source/release separation, recorded digest consistency, local Markdown links, preservation of the original pending targets, a bounded snapshot and `git diff --check`. An independent read-only review found no invented acceptance or distribution-support claim. No Cargo/frontend/runtime tests were rerun for this documentation-only change, and no compilation is presented as native evidence.
+
+## Follow-up acceptance preparation
+
+This supplement changes the preparation scope only. The observations, hashes,
+source `ed22e5c060ae05e5be354d600be20a05b6ffed7c`, JSON snapshot and zero-execution
+outcome above remain historical evidence from their original review. No new
+host/release observation, package build, installation, service action or secret
+configuration read was performed for this supplement.
+
+The [follow-up code/test gates](../unified-deployment-validation.md#follow-up-code-and-test-gates)
+separate P1 first-run UX, P2 Full/Runtime contracts, P3 Runtime packaging, P4 Linux
+terminal updates and P5 nonsecret payload export from native acceptance. Review
+their individual source/test reports and rerun their required focused gates on
+the final integrated revision. The candidate-relocation repair has source and
+disposable fixture evidence; its actual package-hook completion remains pending.
+
+| Additional independent target | Required before execution | Current result |
+| --- | --- | --- |
+| Linux Runtime x64 / DEB | Exact Debian 12 or Ubuntu 22.04+ target, Runtime package identity/hash, correct account and approved user/system service scope | Blocked; not run |
+| Linux Runtime ARM64 / DEB | Exact native ARM64 OS/version and Runtime package; independent service/session and old/candidate identity bindings | Blocked; not run |
+| Linux Runtime x64 / RPM | Exact admitted RPM distribution/version/dependencies, Runtime RPM and authorized x64 lifecycle scope | Blocked; not run |
+| Linux Runtime ARM64 / RPM | Exact native ARM64 distribution/version, Runtime RPM and independent hook/upgrade/recovery scope | Blocked; not run |
+
+Runtime acceptance must separately record absence of Desktop/GUI dependencies,
+fresh installation without service start, exact package-owned destinations and
+provenance, reciprocal Full/Runtime conflicts without conversion, Runtime receipt
+and preinstall hook architecture/format binding, protected candidate relocation,
+same-flavor upgrades and preserved original running/stopped state. Full evidence,
+DEB inspection, RPM rendering, CI and x64 runs cannot satisfy these four rows.
+Selecting a Runtime target does not broaden the existing OS/ABI support contract.
+For Runtime, the execution-evidence component set is CLI/Server/Runner; Desktop
+is not fabricated as a fourth installed component. Full still requires all four.
+
+P6 remains an adjusted security-design draft awaiting explicit review. P7 encrypted
+backup Core/CLI, P8 same-Environment controlled restore Core/CLI and P9 Desktop
+backup/restore adapter remain deferred. Neither the nonsecret export nor these
+documents authorize secret capture, service pause or restoration. Historical or
+unprovable captures are limited to authenticated private quarantine in the draft;
+current database/credential replacement needs separately reviewed complete proof
+and write barriers before implementation or acceptance can be planned.
+
+No target/package/account/scope authorization has been added. Runtime and all
+original native rows remain blocked/not run. The unmodified safe JSON snapshot
+contains only the original observations; this supplement supplies no new package
+hash, machine binding or passed scenario.

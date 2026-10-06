@@ -4,6 +4,11 @@
 
 This checklist records scope and evidence for the unified environment work. The optional unified build defines eight installer targets: Windows NSIS `.exe`, macOS `.pkg`, and Linux `.deb` and `.rpm`, each for x64 and arm64. Runtime/source identities remain six. Debian 12 / Ubuntu 22.04+ are the declared DEB scope; RPM distribution limits are recorded below. These targets have not received full native installation/session/upgrade acceptance or a complete public unified release. Source changes and CI/package construction do not prove real-machine behavior. No cross-platform equivalence claim is made.
 
+The follow-up preparation below keeps that Full baseline and adds four independent
+Linux Runtime targets (DEB/RPM, x64/arm64). The twelve-target catalog does not add
+a native pass or expand OS support. Historical observations and their source/hash
+bindings remain unchanged.
+
 ## Milestones and scope
 
 | Milestone | Scope | Evidence / acceptance boundary |
@@ -63,6 +68,55 @@ This evidence does **not** accept `.deb` installation, Core system-service migra
 | Ubuntu 22.04+ arm64, `.deb` | Not yet accepted on a native Ubuntu arm64 host | Not yet accepted: systemd user/system lifecycle, login/logout, authorized linger and unattended reboot conditions | No new Linux GUI helper backend is planned; confirm Desktop/runtime behavior without one | Not yet accepted: native package upgrade/rollback |
 | RPM x64, `.rpm` | Not yet accepted: exact Fedora/openEuler distribution/version and dependencies must be selected within the limits below | Not yet accepted: native systemd user/system, logout/login, linger and reboot | Not yet accepted: Desktop/runtime on that exact distribution; no Linux GUI helper backend | Not yet accepted: RPM-specific prepare, package hooks, finish and recovery |
 | RPM arm64, `.rpm` | Not yet accepted: exact distribution/version and native arm64 machine required; x64 evidence does not apply | Not yet accepted: native systemd user/system and unattended startup conditions | Not yet accepted: Desktop/runtime on that exact distribution | Not yet accepted: native RPM package upgrade/rollback |
+| Linux Runtime x64, `.deb` | Not yet accepted: select an exact Debian 12 or Ubuntu 22.04+ disposable x64 target and Runtime package | Not yet accepted: independently verify user/system systemd, logout/login, authorized linger and reboot | Desktop/GUI helper is outside Runtime package composition; headless behavior remains unaccepted | Not yet accepted: same-flavor DEB ownership, receipt/hook target, upgrade/rollback and original stopped state |
+| Linux Runtime arm64, `.deb` | Not yet accepted: select an exact Debian 12 or Ubuntu 22.04+ native arm64 target and Runtime package | Not yet accepted: native arm64 user/system service and unattended startup behavior | Desktop/GUI helper is outside Runtime package composition; x64 evidence does not apply | Not yet accepted: native same-flavor DEB upgrade, identity preservation and recovery |
+| Linux Runtime x64, `.rpm` | Not yet accepted: select exact RPM distribution/version, dependencies, x64 target and Runtime package | Not yet accepted: independently verify native systemd, logout/login, linger and reboot | Desktop/GUI helper is outside Runtime package composition; removal of GUI dependencies does not prove OS support | Not yet accepted: same-flavor RPM prepare, protected candidate relocation, target-bound hooks, finish and recovery |
+| Linux Runtime arm64, `.rpm` | Not yet accepted: select exact RPM distribution/version and native arm64 target/package | Not yet accepted: native arm64 user/system scope and no-login startup conditions | Desktop/GUI helper is outside Runtime package composition; neither Full nor x64 evidence applies | Not yet accepted: native same-flavor RPM upgrade/rollback and original service-state preservation |
+
+### Follow-up code and test gates
+
+This preparation update records review scope, not a fresh host/release observation
+or native execution. Each contribution's own revision and test report is the
+automated evidence; after integration, rerun the relevant gates on the final
+combined revision. No test count or artifact hash is transferred to a new build.
+
+| Workstream | Code/test evidence to review | Separate native evidence still needed |
+| --- | --- | --- |
+| P1: complete first-run UX ([#936](https://github.com/yyjeqhc/webcodex/pull/936), [onboarding contract](implementation/first-run-device-onboarding.md)) | First-run/Create/Join and optional-project fixtures; Runner display name; existing Tunnel connection editor; real ChatGPT-read instructions and user-report presentation | Actual correct-account service creation, device/project identities, persistent setup, and a real ChatGPT/Tunnel project read. Instructions or a user-reported outcome do not promote a native row. |
+| P2: [Full/Linux Runtime package contract](implementation/runtime-package-contract.md) | Schema/flavor/component and canonical-path fences; v2/legacy reader compatibility; cache/operation identity; exact Runtime receipt package target, ownership and fail-closed recovery tests | Actual installed DEB/RPM ownership and privilege boundary, hook authorization, package replacement, scope and service-state preservation on each selected architecture |
+| P3: [Linux Runtime packaging and metadata](implementation/linux-runtime-packaging.md) | Native-archive byte reuse, DEB content inspection/RPM rendering, reciprocal conflicts, no Desktop/GUI dependencies, exact twelve-target catalog and 32-record primary checksums | Actual x64/arm64 DEB/RPM installation, dependencies, same-flavor upgrade/rollback and refusal of conversion. Package inspection, workflow construction and CI do not establish these outcomes. |
+| P4: [Linux terminal update adapter](implementation/headless-unified-update.md) | Shared updater delegation, bounded secret-free JSON, status/check/download separation, TTY authorization admission, exact apply/resume/rollback target and conservative uncertain-handoff tests | Authorized native terminal/sudo and SSH TTY handoff; task-window behavior, package hooks and terminal recovery without redispatch or competing restoration |
+| P5: allowlisted nonsecret settings payload export ([#935](https://github.com/yyjeqhc/webcodex/pull/935), [export contract](implementation/nonsecret-settings-export.md)) | Exact allowlist/schema, secret/path canaries, bounded encoding and protected export-file tests; distinct from inventory-only metadata | Native output-file ownership/permissions on each admitted platform and confirmation that export preserves credentials, pairing, services and authoritative configuration |
+| Minimal installer prerequisite ([#938](https://github.com/yyjeqhc/webcodex/pull/938), [candidate relocation](implementation/installer-candidate-relocation.md)) | Source comparison and disposable verified-copy fixtures preserve hashes, provenance and relative layout across owner cache and package-hook storage | Actual Full/Runtime package-hook invocation and completion; source/fixture success does not prove native installation |
+
+P2/P3/P4 are tracked by task name until their final PR references are attached.
+Review and integration are prerequisites to native testing, not native evidence.
+Keep compilation, fixture tests, package inspection, CI, source-process regression
+and real-machine acceptance as separate results. Full evidence does not accept
+Runtime; DEB does not accept RPM; x64 does not accept arm64. Runtime's lack of
+GTK/WebKit does not grant support for a distribution whose ABI/dependencies have
+not been independently admitted.
+
+The [P6 draft security design](implementation/encrypted-environment-backup-design.md)
+([#934](https://github.com/yyjeqhc/webcodex/pull/934)) requires the requested design
+adjustment and explicit security review. P7 encrypted backup Core/CLI, P8 controlled
+same-Environment restore Core/CLI, and P9 Desktop backup/restore adaptation are
+**deferred; not implemented or accepted by this checklist**. Before P7, review
+capture-only behavior, exact admitted file slots, machine/account binding, owned
+service pause and permission adapters. Before P8, additionally review independent
+write/authority witnesses, domain validators and crash recovery. Historical or
+unprovable captures permit authenticated private quarantine only; current DB or
+credential replacement needs separately reviewed proof and write barriers.
+P9 waits for accepted Core contracts and must remain a thin adapter. Nonsecret
+export does not authorize secret capture, restoration or installer-receipt reuse.
+
+The remaining gates are: integrated focused Core/CLI/adapter and Python packaging
+tests; legacy/v2/schema and crash/cancellation/target-fence regressions; then an
+explicitly authorized native target, exact package bytes and old/candidate pair,
+account/service scope, and approved reboot/logout/fault-injection effects. P6
+review and P7/P8/P9 gates remain separate. This documentation update reruns only
+links/format and preserves **zero new native passes**; it supplies no machine
+authorization, package hash, release or deployment.
 
 ### Current native execution status (2026-10-06)
 
@@ -98,6 +152,8 @@ A successful cross-compiled build or package inspection is useful packaging evid
 ## 中文
 
 本清单记录统一环境工作的范围和证据边界。可选统一打包定义八类安装文件：Windows NSIS `.exe`、macOS `.pkg`、Linux `.deb` 和 `.rpm`，各含 x64、arm64；Runtime/source 身份仍为六个平台。DEB 声明范围为 Debian 12 / Ubuntu 22.04+，RPM 发行版限制见下文。这些文件尚未完成完整的原生安装、会话和升级验收，也未作为完整统一安装集合公开发布。源码和 CI/打包结果不能证明真实机器上的行为；本文不宣称跨平台体验一致。
+
+本轮准备保留上述 Full 基线，并新增 Linux Runtime 的 DEB/RPM、x64/arm64 四个独立目标。十二目标 catalog 不增加原生通过项，也不扩大 OS 支持范围；历史观察与对应源码/hash 绑定保持不变。
 
 ### 里程碑与范围
 
@@ -158,6 +214,27 @@ PR 在 `42fedb56` 的 CI 失败后，已将原生 Computer helper 导出范围�
 | Ubuntu 22.04+ arm64，`.deb` | 尚未在原生 Ubuntu arm64 主机验收 | 尚未验收 systemd user/system、注销/登录、获授权 linger 和无人登录开机条件 | 不计划新增 Linux GUI helper backend；需确认无该 backend 时 Desktop/runtime 行为 | 尚未验收原生安装包升级/回滚 |
 | RPM x64，`.rpm` | 尚未验收：需按下方限制选定 Fedora/openEuler 的准确版本和依赖 | 尚未验收 systemd user/system、注销/登录、linger 和重启 | 尚未验收该发行版 Desktop/runtime；不新增 Linux GUI helper | 尚未验收 RPM 专属 prepare、包 hook、finish 和恢复 |
 | RPM arm64，`.rpm` | 尚未验收：需准确发行版/版本及原生 arm64 主机；x64 证据不适用 | 尚未验收原生 systemd user/system 和无人登录开机条件 | 尚未验收该发行版 Desktop/runtime | 尚未验收原生 RPM 升级/回滚 |
+| Linux Runtime x64，`.deb` | 尚未验收：需选定准确 Debian 12 或 Ubuntu 22.04+ 可重装 x64 主机及 Runtime 包 | 尚未独立验收 systemd user/system、注销/登录、授权 linger 和重启 | Runtime 包不含 Desktop/GUI helper；headless 行为仍未验收 | 尚未验收同 flavor DEB ownership、receipt/hook target、升级/回滚及原先停止状态 |
+| Linux Runtime arm64，`.deb` | 尚未验收：需选定准确 Debian 12 或 Ubuntu 22.04+ 原生 arm64 主机及 Runtime 包 | 尚未验收原生 arm64 服务和无人登录开机条件 | Runtime 包不含 Desktop/GUI helper；x64 证据不适用 | 尚未验收原生同 flavor DEB 升级、身份保留及恢复 |
+| Linux Runtime x64，`.rpm` | 尚未验收：需准确 RPM 发行版/版本、依赖、x64 主机及 Runtime 包 | 尚未独立验收 systemd、注销/登录、linger 和重启 | Runtime 包不含 Desktop/GUI helper；移除 GUI 依赖不证明 OS 支持 | 尚未验收同 flavor RPM prepare、受保护候选搬移、target-bound hooks、finish 和恢复 |
+| Linux Runtime arm64，`.rpm` | 尚未验收：需准确 RPM 发行版/版本及原生 arm64 主机/包 | 尚未验收原生 arm64 user/system scope 和无人登录开机条件 | Runtime 包不含 Desktop/GUI helper；Full 或 x64 证据均不适用 | 尚未验收原生同 flavor RPM 升级/回滚及原服务状态保留 |
+
+### 后续代码与测试门禁
+
+本轮仅更新验收准备，没有重新观察主机/公开发布，也没有执行原生操作。P1–P5 的代码和测试以各自修订、PR 及上方[代码与测试门禁表](#follow-up-code-and-test-gates)为准；整合后必须在最终组合修订重跑相关门禁，不向新构建转移历史测试计数或 hash。
+
+- P1 [#936](https://github.com/yyjeqhc/webcodex/pull/936)：完整首次配置 UX，含 Runner display name、现有 Tunnel 连接编辑器、真实 ChatGPT 读取说明和用户报告。UI/adapter 测试不接受真实服务创建、设备/项目身份或 ChatGPT/Tunnel 读取；用户报告单独记录。
+- P2：Full/Linux Runtime 包合同、严格 schema/flavor/路径、v2 与旧 reader、cache/operation target、Runtime receipt 的准确包格式、ownership 和恢复。仍需各架构真实 DEB/RPM 权限、包 hook 和替换证据。
+- P3：Linux Runtime 包与发布元数据复用原生 archive 字节；包内容/RPM spec/CI、十二目标 catalog、32 条主校验记录属于自动化或打包证据。仍需独立原生安装、依赖、同 flavor 升级/回滚和拒绝转换证据。
+- P4：Linux 终端更新薄适配，复用共享 updater，区分 status/check/download，限制 TTY 授权、secret-free JSON 和准确 apply/resume/rollback target。实际 sudo/SSH TTY、任务窗口、安装器 handoff 和恢复仍未验收。
+- P5 [#935](https://github.com/yyjeqhc/webcodex/pull/935)：白名单非敏感设置载荷导出，与 inventory-only 元数据区分。canary/边界测试不替代原生文件权限与凭据、配对、服务和配置保持证据。
+- 前置 [#938](https://github.com/yyjeqhc/webcodex/pull/938)：修复已验证候选搬到包 hook 暂存位置后的身份比较；源码与私有 fixture 保留 hash、provenance 和相对路径，只证明该比较行为，没有原生安装证据。
+
+P2/P3/P4 先按任务名称跟踪，最终 PR 链接由整合记录补齐。Full 不替代 Runtime，DEB 不替代 RPM，x64 不替代 arm64；无 GTK/WebKit 依赖不自动接受任何发行版。
+
+P6 [#934](https://github.com/yyjeqhc/webcodex/pull/934)仍是要求调整、等待明确安全审查的设计草稿。P7 加密备份 Core/CLI、P8 同 Environment 受控恢复 Core/CLI、P9 Desktop 备份恢复薄适配均**暂缓，未实现，未验收**。P7 前需审查 capture-only、准确文件槽、机器/账户绑定、已知自有服务暂停和权限 adapter；P8 还需独立写入/authority witness、只读领域 validator 及 crash recovery。历史或无法证明的 capture 只能认证后私有隔离暂存；替换当前 DB/凭据必须另有经审查的完整证明与写入屏障。P9 等待获接受的 Core 合同。P5 非敏感导出不授予 secret capture、恢复或借用 installer receipt 的权限。
+
+后续门禁依次为整合后的 Core/CLI/adapter 与 Python 打包定向测试、legacy/v2/schema 和 crash/cancel/target fence 回归，再到明确授权的原生测试机、准确包字节、旧包/候选包、账户/service scope 及重启/注销/故障注入范围。P6 安全审查和 P7/P8/P9 门禁独立保持。本轮仅核对文档链接/格式，**新增原生通过仍为零**，没有生成机器授权、包 hash、Release 或部署证据。
 
 ### 本轮原生执行状态（2026-10-06）
 
