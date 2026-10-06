@@ -46,3 +46,11 @@ The package-hook candidate relocation prerequisite is separately reviewed.
 No real package installation, sudo interaction, logout/reboot, release or existing
 service operation was performed. Windows/macOS Runtime packages are unsupported;
 native Full regression acceptance remains the existing platform matrix.
+
+The integrated public CLI entry test reproduced a stack overflow in the default
+unoptimized CI profile; optimized dogfood tests had passed. The adapter now boxes
+its large internal domain future, retaining the same command/authorization path.
+The same default-profile public status test passes with the normal thread stack;
+no stack-size override, timeout increase or weaker test was used. This correction
+is a follow-up commit in this feature PR, alongside the existing dispatch and
+Windows private-fixture corrections, rather than another contribution.
