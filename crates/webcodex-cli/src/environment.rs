@@ -184,7 +184,9 @@ fn parse(args: &[String]) -> Result<Input, String> {
 }
 
 pub(crate) async fn run(args: &[String]) -> Result<String, String> {
-    run_inner(args).await.map_err(|error| {
+    // Setup and update branches carry large domain futures. Keep the public
+    // adapter's future small on the default executor/test thread stack.
+    Box::pin(run_inner(args)).await.map_err(|error| {
         if args.iter().any(|arg| arg == "--json")
             && serde_json::from_str::<serde_json::Value>(&error).is_err()
         {
