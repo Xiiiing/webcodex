@@ -127,15 +127,23 @@ class RuntimeInstallerTests(unittest.TestCase):
                 stage.mkdir()
                 packaging.stage_deb_metadata(manifest, stage, candidate)
                 deb_hook = (stage / "DEBIAN/preinst").read_text()
-                rpm_hook = packaging.rpm_spec(manifest, stage).split("%pre\n", 1)[1].split("%post\n", 1)[0]
-                for fmt, hook in (("deb", deb_hook), ("rpm", rpm_hook)):
-                    command = next(line for line in hook.splitlines() if " environment installer-verify " in line)
-                    self.assertIn(f"--installer-target {platform}-runtime-{fmt} --json", command)
-                    self.assertEqual(hook.count("--installer-target"), 1)
-                    self.assertEqual(subprocess.run(["sh", "-n"], input=hook, text=True, capture_output=True).returncode, 0)
+                deb_post = (stage / "DEBIAN/postinst").read_text()
+                rpm_spec = packaging.rpm_spec(manifest, stage)
+                rpm_hook = rpm_spec.split("%pre\n", 1)[1].split("%post\n", 1)[0]
+                rpm_post = rpm_spec.split("%post\n", 1)[1].split("%files\n", 1)[0]
+                for fmt, pre, post in (("deb", deb_hook, deb_post), ("rpm", rpm_hook, rpm_post)):
+                    for hook, count in ((pre, 2), (post, 1)):
+                        commands = [line for line in hook.splitlines() if " environment installer-verify " in line or " environment installer-verify-same " in line]
+                        self.assertEqual(len(commands), count)
+                        for command in commands:
+                            self.assertIn(f"--installer-target {platform}-runtime-{fmt} --json", command)
+                        self.assertEqual(hook.count("--installer-target"), count)
+                        self.assertEqual(subprocess.run(["sh", "-n"], input=hook, text=True, capture_output=True).returncode, 0)
             # Existing Full/PKG helpers emit their unchanged argument shape.
             self.assertNotIn("--installer-target", packaging.rpm_preinstall())
+            self.assertNotIn("--installer-target", packaging.rpm_postinstall())
             self.assertNotIn("--installer-target", packaging._upgrade_preinstall("candidate", "transaction", "authorization", "runtime"))
+            self.assertNotIn("--installer-target", packaging._upgrade_postinstall("cli", "transaction", "authorization"))
             with self.assertRaises(packaging.PackageError):
                 packaging.rpm_preinstall("linux-x64-runtime-deb;false")
 

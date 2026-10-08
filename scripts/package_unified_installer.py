@@ -333,7 +333,7 @@ if [ -f '{authorization_file}' ]; then
     fi
   fi
 elif [ "$existing_install" -eq 1 ]; then
-  if ! "$cli" environment installer-verify-same --candidate-dir "$candidate" --expected-runtime-dir '{runtime_dir}' --json; then
+  if ! "$cli" environment installer-verify-same --candidate-dir "$candidate" --expected-runtime-dir '{runtime_dir}'{target_option} --json; then
     echo "WebCodex upgrade needs a prepared owner receipt. Prepare from the original user account, then authorize that receipt before retrying this package." >&2
     exit 1
   fi
@@ -361,7 +361,8 @@ fi
 """
 
 
-def _upgrade_postinstall(installed_cli: str, transaction_dir: str, authorization_file: str, recovery_dir: str = "", runtime_dir: str = "", same_marker_file: str = "") -> str:
+def _upgrade_postinstall(installed_cli: str, transaction_dir: str, authorization_file: str, recovery_dir: str = "", runtime_dir: str = "", same_marker_file: str = "", installer_target: str = "") -> str:
+    target_option = _installer_target_option(installer_target)
     return f"""#!/bin/sh
 set -eu
 if [ -f '{authorization_file}' ]; then
@@ -374,7 +375,7 @@ if [ -f '{authorization_file}' ]; then
   exit 0
 fi
 if [ -f '{same_marker_file}' ]; then
-  if ! '{installed_cli}' environment installer-verify-same --candidate-dir '{recovery_dir}/candidate' --expected-runtime-dir '{runtime_dir}' --json; then
+  if ! '{installed_cli}' environment installer-verify-same --candidate-dir '{recovery_dir}/candidate' --expected-runtime-dir '{runtime_dir}'{target_option} --json; then
     echo "WebCodex installed files changed after idempotency preflight; the verification marker and candidate are retained." >&2
     exit 1
   fi
@@ -435,7 +436,7 @@ done"""
     preinst.write_text(_upgrade_preinstall("upgrade-candidate", "/var/lib/webcodex-installer/transaction", "/var/lib/webcodex-installer/authorization.json", "/usr/lib/webcodex/webcodex-runtime", ownership, "/var/lib/webcodex-installer/recovery", "/var/lib/webcodex-installer/same-package.pending", artifacts["webcodex"]["sha256"], "/usr/bin/sha256sum", "/usr/lib/webcodex/webcodex-runtime/webcodex", installer_target=f"{manifest['platform']}-runtime-deb" if runtime else ""), encoding="utf-8")
     preinst.chmod(0o755)
     postinst = control / "postinst"
-    postinst.write_text(_upgrade_postinstall("/usr/lib/webcodex/webcodex-runtime/webcodex", "/var/lib/webcodex-installer/transaction", "/var/lib/webcodex-installer/authorization.json", "/var/lib/webcodex-installer/recovery", "/usr/lib/webcodex/webcodex-runtime", "/var/lib/webcodex-installer/same-package.pending"), encoding="utf-8")
+    postinst.write_text(_upgrade_postinstall("/usr/lib/webcodex/webcodex-runtime/webcodex", "/var/lib/webcodex-installer/transaction", "/var/lib/webcodex-installer/authorization.json", "/var/lib/webcodex-installer/recovery", "/usr/lib/webcodex/webcodex-runtime", "/var/lib/webcodex-installer/same-package.pending", installer_target=f"{manifest['platform']}-runtime-deb" if runtime else ""), encoding="utf-8")
     postinst.chmod(0o755)
 
 
@@ -465,7 +466,7 @@ fi
 if [ -f "$authorization" ]; then
   "$cli" environment installer-verify --candidate-dir "$candidate" --expected-runtime-dir /usr/lib/webcodex/webcodex-runtime""" + target_option + """ --json
 elif [ -f "$same_marker" ]; then
-  "$cli" environment installer-verify-same --candidate-dir "$candidate" --expected-runtime-dir /usr/lib/webcodex/webcodex-runtime --json
+  "$cli" environment installer-verify-same --candidate-dir "$candidate" --expected-runtime-dir /usr/lib/webcodex/webcodex-runtime""" + target_option + """ --json
 else
   echo "WebCodex RPM upgrade requires a prepared owner receipt or same-package marker." >&2
   exit 1
@@ -473,7 +474,8 @@ fi
 """
 
 
-def rpm_postinstall() -> str:
+def rpm_postinstall(installer_target: str = "") -> str:
+    target_option = _installer_target_option(installer_target)
     return """set -eu
 if [ "$1" -eq 1 ]; then
   exit 0
@@ -489,7 +491,7 @@ if [ -f "$authorization" ]; then
   exit 0
 fi
 if [ -f "$same_marker" ]; then
-  "$cli" environment installer-verify-same --candidate-dir "$candidate" --expected-runtime-dir /usr/lib/webcodex/webcodex-runtime --json
+  "$cli" environment installer-verify-same --candidate-dir "$candidate" --expected-runtime-dir /usr/lib/webcodex/webcodex-runtime""" + target_option + """ --json
   rm -f "$same_marker"
   rm -rf "$candidate"
   exit 0
@@ -546,7 +548,7 @@ cp -a "{payload_root}/." "%{{buildroot}}/"
 %pre
 {rpm_preinstall(f"{manifest['platform']}-runtime-rpm" if runtime else "")}
 %post
-{rpm_postinstall()}
+{rpm_postinstall(f"{manifest['platform']}-runtime-rpm" if runtime else "")}
 %files
 """ + "\n".join(files) + "\n"
 
