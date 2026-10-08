@@ -29,10 +29,17 @@ recovery remains `/var/lib/webcodex-installer/recovery/candidate`. Maintainer
 scripts retain the manifest-bound candidate CLI check, installation detection,
 owner receipt, same-package marker and guarded finish. Fresh installation does
 not start services; failed owner finish retains authorization/recovery evidence.
-Runtime authorized preinstall hooks pass their literal
-`linux-{x64|arm64}-runtime-{deb|rpm}` installer target to Core, which binds it to
-the schema-2 receipt before any package replacement. Full hooks retain their
-existing argument contract.
+Runtime verification hooks, including same-package checks before and after
+installation, pass their literal `linux-{x64|arm64}-runtime-{deb|rpm}` installer
+target to Core. Core binds authorization to the schema-2 receipt and verifies
+the same package manager and flavor for same-package checks. Full hooks retain
+their existing argument contract.
+
+RPM packages preserve the already measured binary bytes, including their retained
+recovery candidates. RPM buildroot stripping and debug rewriting are disabled;
+dependency generation and the guarded maintainer scripts remain enabled. The
+native Runtime packaging job builds and extracts disposable Full/Runtime RPM
+fixtures to verify that installed and retained bytes match their input hashes.
 Core's flavor-aware candidate/receipt and installed-package ownership changes
 are prerequisites; Python packaging alone does not authorize a package switch.
 

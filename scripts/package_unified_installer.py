@@ -524,7 +524,12 @@ def rpm_spec(manifest: dict[str, Any], payload_root: Path) -> str:
         files = [item for item in files if item not in ("/usr/lib/webcodex/webcodex-desktop", "/usr/share/applications/webcodex.desktop")]
         files = [item.replace("/usr/share/doc/webcodex/", "/usr/share/doc/webcodex-runtime/").replace("/usr/share/webcodex/", "/usr/share/webcodex-runtime/") for item in files]
     package_name = "webcodex-runtime" if runtime else "webcodex"
-    return f"""Name: {package_name}
+    return f"""# These prebuilt binaries and recovery candidates are bound to source SHA-256.
+# RPM buildroot stripping/debug rewriting would invalidate those identities.
+%global __os_install_post %{{nil}}
+%global debug_package %{{nil}}
+
+Name: {package_name}
 Conflicts: {'webcodex' if runtime else 'webcodex-runtime'}
 Version: {version}
 Release: 1
