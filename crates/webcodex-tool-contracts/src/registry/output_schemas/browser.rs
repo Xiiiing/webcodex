@@ -17,6 +17,8 @@ fn target_schema() -> Value {
                     "browser_control": {"type": "boolean"},
                     "browser_element_action_admission": {"type": "boolean"},
                     "browser_batch": {"type": "boolean"},
+                    "browser_semantic_query": {"type": "boolean"},
+                    "browser_complex_controls": {"type": "boolean"},
                     "browser_launch": {"type": "boolean"},
                     "browser_managed_profile": {"type": "boolean"},
                     "browser_surface_handoff": {"type": "boolean"},
@@ -62,6 +64,31 @@ fn page_schema() -> Value {
     })
 }
 
+fn form_context_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "field_signature": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+            "dom_tag": {"type": "string", "maxLength": 32},
+            "input_type": {"type": "string", "maxLength": 32},
+            "html_name": {"type": "string", "maxLength": 256},
+            "placeholder": {"type": "string", "maxLength": 512},
+            "autocomplete": {"type": "string", "maxLength": 128},
+            "nearby_label": {"type": "string", "maxLength": 512},
+            "group_label": {"type": "string", "maxLength": 512},
+            "group_index": {"type": "integer", "minimum": 0, "maximum": 31},
+            "group_size": {"type": "integer", "minimum": 1, "maximum": 32},
+            "section_label": {"type": "string", "maxLength": 512},
+            "component_hint": {"type": "string", "maxLength": 64},
+            "aria_invalid": {"type": "boolean"},
+            "validation_hint": {"type": "string", "maxLength": 512},
+            "option_count": {"type": "integer", "minimum": 0, "maximum": 256}
+        },
+        "required": ["field_signature", "dom_tag"]
+    })
+}
+
 fn node_schema() -> Value {
     json!({
         "type": "object",
@@ -79,14 +106,15 @@ fn node_schema() -> Value {
             "required": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
             "disabled": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
             "read_only": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
+            "form_context": {"anyOf": [form_context_schema(), {"type": "null"}]},
             "element_id": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
             "actions": {
                 "type": "array",
-                "maxItems": 5,
+                "maxItems": 7,
                 "uniqueItems": true,
                 "items": {
                     "type": "string",
-                    "enum": ["click", "input_text", "select_option", "set_value", "upload_file"]
+                    "enum": ["click", "input_text", "select_option", "select_choice", "set_date", "set_value", "upload_file"]
                 }
             },
             "actionable": {"type": "boolean"}
@@ -319,6 +347,17 @@ pub fn output_schema_for_tool(name: &str) -> Option<Value> {
                 (
                     "node_count",
                     json!({"type": "integer", "minimum": 0, "maximum": 256}),
+                ),
+                (
+                    "node_offset",
+                    json!({"type": "integer", "minimum": 0, "maximum": 4096}),
+                ),
+                (
+                    "next_node_offset",
+                    json!({"anyOf": [
+                        {"type": "integer", "minimum": 0, "maximum": 4096},
+                        {"type": "null"}
+                    ]}),
                 ),
                 (
                     "nodes",

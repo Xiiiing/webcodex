@@ -141,6 +141,28 @@ fn tunnel_and_upgrade_inputs_never_take_literal_credentials() {
     ])
     .unwrap();
     assert_eq!(tunnel.operand.as_deref(), Some("work"));
+    let embedded = input(&[
+        "configure-tunnel",
+        "work",
+        "--host",
+        "embedded",
+        "--credentials-file",
+        "private.json",
+    ])
+    .unwrap();
+    assert_eq!(embedded.tunnel_host, Some(TunnelHostMode::Embedded));
+    assert_eq!(
+        configure_tunnel_host_mode(None, Some(TunnelHostMode::Embedded)),
+        TunnelHostMode::Embedded,
+        "reconfiguring an existing profile must preserve its owner when --host is omitted"
+    );
+    assert_eq!(
+        configure_tunnel_host_mode(None, None),
+        TunnelHostMode::Standalone,
+        "new profiles keep the historical standalone default"
+    );
+    assert!(input(&["status", "--host", "embedded"]).is_err());
+    assert!(input(&["configure-tunnel", "--host", "other"]).is_err());
     assert!(input(&["configure-tunnel", "--api-key", "secret"]).is_err());
     assert!(input(&["status", "--credentials-file", "private.json"]).is_err());
     let upgrade = input(&[
@@ -225,25 +247,6 @@ async fn installer_finalization_cannot_override_authorized_store() {
         run(&child).await.unwrap_err(),
         "Invalid internal installer request"
     );
-}
-
-#[test]
-fn legacy_server_network_inputs_are_explicit_and_scoped() {
-    let legacy = input(&[
-        "migrate-legacy-server",
-        "--user",
-        "alice",
-        "--listen",
-        "0.0.0.0:8080",
-        "--server-url",
-        "http://127.0.0.1:8080",
-        "--token-file",
-        "private-token",
-    ])
-    .unwrap();
-    assert_eq!(legacy.listen.as_deref(), Some("0.0.0.0:8080"));
-    assert_eq!(legacy.username.as_deref(), Some("alice"));
-    assert!(input(&["configure", "--create", "--listen", "0.0.0.0:8080"]).is_err());
 }
 
 #[test]

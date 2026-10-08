@@ -2481,6 +2481,19 @@ impl RunnerRegistry {
         validate_id(&client_id, "client_id")?;
         let operation_kind = RunnerBrowserOperationKind::from_wire(kind)
             .ok_or_else(|| "invalid browser request kind".to_string())?;
+        if payload.len() > operation_kind.max_payload_bytes() || payload.contains('\0') {
+            return Err("browser request payload is invalid or too large".to_string());
+        }
+        let semantic_query = operation_kind == RunnerBrowserOperationKind::Snapshot
+            && serde_json::from_str::<serde_json::Value>(&payload)
+                .map_err(|_| "invalid browser snapshot payload".to_string())?
+                .get("query")
+                .is_some_and(|value| !value.is_null());
+        let complex_batch = operation_kind == RunnerBrowserOperationKind::Batch
+            && operation_kind.requires_complex_controls(
+                &serde_json::from_str::<serde_json::Value>(&payload)
+                    .map_err(|_| "invalid browser batch payload".to_string())?,
+            );
         // Match the canonical enum exhaustively: adding a wire operation must
         // also choose its registry admission, not silently hit a string fallback.
         use RunnerBrowserOperationKind as BrowserKind;
@@ -2508,6 +2521,11 @@ impl RunnerRegistry {
             | BrowserKind::Console
             | BrowserKind::Network
             | BrowserKind::Diagnostics => &[RunnerFeature::BrowserObserve],
+            BrowserKind::Snapshot if semantic_query => &[
+                RunnerFeature::BrowserObserve,
+                RunnerFeature::BrowserElementActionAdmission,
+                RunnerFeature::BrowserSemanticQuery,
+            ],
             BrowserKind::Snapshot => &[
                 RunnerFeature::BrowserObserve,
                 RunnerFeature::BrowserElementActionAdmission,
@@ -2528,15 +2546,23 @@ impl RunnerRegistry {
                 RunnerFeature::BrowserControl,
                 RunnerFeature::BrowserElementActionAdmission,
             ],
+            BrowserKind::SelectChoice | BrowserKind::SetDate => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserElementActionAdmission,
+                RunnerFeature::BrowserComplexControls,
+            ],
+            BrowserKind::Batch if complex_batch => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserBatch,
+                RunnerFeature::BrowserElementActionAdmission,
+                RunnerFeature::BrowserComplexControls,
+            ],
             BrowserKind::Batch => &[
                 RunnerFeature::BrowserControl,
                 RunnerFeature::BrowserBatch,
                 RunnerFeature::BrowserElementActionAdmission,
             ],
         };
-        if payload.len() > operation_kind.max_payload_bytes() || payload.contains('\0') {
-            return Err("browser request payload is invalid or too large".to_string());
-        }
         let request_id = next_request_id();
         let (tx, rx) = oneshot::channel();
         let request = encode_runner_operation(
