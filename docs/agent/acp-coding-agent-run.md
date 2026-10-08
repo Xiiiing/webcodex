@@ -545,6 +545,17 @@ before Run start. The Server must never receive executable path, argv, PID,
 environment values, credential material, stderr, local config contents, or raw
 ACP auth data.
 
+Startup diagnostics retain the existing initialize, session/new, and
+session/set_config_option error codes, with fixed summaries distinguishing
+process exit, stdout closure, malformed JSON, oversized messages, I/O failure,
+timeout, and provider rejection. Total-deadline summaries name the active setup
+stage. Only the Runner's local structured log contains observed pre-cleanup exit
+codes/signals, numeric RPC codes, and controlled I/O kinds. Raw provider error
+message/data, stderr, environment values, and private paths never become terminal
+diagnostics sent to the Server or retained in Run state. stderr continues to be
+drained and discarded. Prompt-dispatch uncertainty and cancellation semantics
+remain authoritative; improved diagnostics never authorize redispatch.
+
 `env_from_env` is resolved only on the Runner immediately before spawn. The
 caller supplies neither source names nor values. The ACP child must follow the
 existing static-MCP provider boundary: clear the inherited process environment
@@ -1010,6 +1021,44 @@ coverage and one opt-in real Codex ACP smoke for compatibility. Cover at least:
 - cleared child environment plus explicit `env_from_env` injection;
 - terminal child-process cleanup;
 - durable audit/telemetry privacy for prompt, message, reasoning, and tool bodies.
+
+### Opt-in coding acceptance for #978
+
+The ignored Runner tests pin `@agentclientprotocol/codex-acp@2.1.1`. Run them
+explicitly with existing local authentication and a working provider sandbox:
+
+```bash
+cargo test --locked -p webcodex-runner real_codex_acp_opt_in -- --ignored --test-threads=1
+```
+
+By default `npx` resolves the pinned package. To use an existing installation,
+set `WEBCODEX_TEST_CODEX_ACP_SCRIPT` to its absolute `dist/index.js` and optionally
+`WEBCODEX_TEST_CODEX_ACP_NODE` to its Node executable. The test verifies adapter
+package metadata. It maps existing `PATH`, `HOME`, `CODEX_HOME`, `USER`, `SHELL`,
+uppercase/lowercase HTTP/HTTPS/ALL/NO proxy variables, and `SSL_CERT_FILE` /
+`SSL_CERT_DIR`; it does not forward `CODEX_PATH`, so this exercises the package's
+bundled Codex. Production mappings remain explicitly operator-selected.
+
+The coding case creates a temporary Git project with a failing Python function
+and fixed acceptance tests. It requires normalized message/activity progress,
+an implemented function, a separate added test, unchanged fixed tests,
+`end_turn`, and independently passing standard-library tests. Separate cases
+require cancellation during observable progress and real adapter failure before
+prompt dispatch. All cases drain owned workers, including on assertion failure;
+permission requests remain fail-closed. Provider messages and raw diagnostics
+are never printed in assertions.
+
+On 2026-10-08, Linux probes with Node 24.20.0, codex-acp 2.1.1, and bundled
+Codex 0.159.3 passed initialization with explicit PATH mapping, cancellation,
+and startup failure exit. Coding acceptance remained blocked: the turn returned
+text and `end_turn` without tool activity or file edits. A separate no-model
+`codex sandbox linux -- /bin/true` probe exited 1, with a controlled diagnostic
+identifying denied Bubblewrap loopback initialization. Session metadata confirmed
+`agent` mode, `default` collaboration mode, and an advertised model. These facts
+identify a host sandbox limitation but do not establish the original reporter's
+root cause. Re-run all three cases on a sandbox-capable Linux host before ready
+PR publication. macOS and the original unknown reporter environment remain
+unverified; this evidence does not justify closing #978.
 
 ## 15. Explicitly deferred
 
