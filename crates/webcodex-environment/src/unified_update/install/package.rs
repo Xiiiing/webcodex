@@ -239,6 +239,7 @@ pub(crate) fn verify_candidate_target(
 
 /// Re-read package identity at the privileged effect boundary, including the
 /// package manager. Saved receipts never authorize an installation conversion.
+#[cfg(target_os = "linux")]
 pub(crate) fn verify_installed_target(
     target: InstallerTarget,
     binaries: &RuntimeBinaries,
@@ -252,6 +253,7 @@ pub(crate) fn verify_installed_target(
         recovery: "Refresh the installation assessment; do not reuse this installer handoff".into(),
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn installed_target_matches(
     expected: InstallerTarget,
     observed: Option<InstallerTarget>,
