@@ -6,7 +6,7 @@ use webcodex_environment::*;
 mod cloudflare;
 mod update;
 
-const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--provider openai|cloudflare_named|cloudflare_quick]\n                 [--host embedded|standalone] [--name NAME] [--autostart true|false]\n                 [--expected-revision N] [--credentials-file PATH | --token-file PATH]\n                 [--public-origin HTTPS_ORIGIN --tunnel-id ID] [--ingress-port PORT]\ncloudflare-status|cloudflare-start|cloudflare-stop PROFILE\ncloudflare-oauth PROFILE --redirect-uri URL [--scopes JSON_ARRAY] [--replace]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE] [--expected-revision N]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH [--installer-target TARGET]\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure only).\n--runner enables local work without requiring an initial project.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nOpenAI credentials use hidden input or protected JSON with tunnel_id and api_key.\nNamed Cloudflare uses protected JSON with tunnel_id, public_origin and token, or --token-file plus identity/origin options. Quick Tunnel takes no credentials or saved origin.\nNew Cloudflare profiles default to embedded Server ownership; OpenAI retains its standalone default.\nExisting Cloudflare edits require --expected-revision. Separate Cloudflare services must be selected for startup before installation; stop and uninstall before deselecting them.\nCloudflare OAuth configuration returns a newly issued client secret once; repeat configuration retains the existing secret. Use --replace explicitly to recover a lost secret or change the callback; replacement revokes the previous client authorization.\n";
+const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--provider openai|cloudflare_named|cloudflare_quick]\n                 [--host embedded|standalone] [--name NAME] [--autostart true|false]\n                 [--expected-revision N] [--credentials-file PATH | --token-file PATH]\n                 [--public-origin HTTPS_ORIGIN --tunnel-id ID] [--ingress-port PORT]\ncloudflare-status|cloudflare-start|cloudflare-stop PROFILE\ncloudflare-oauth PROFILE --redirect-uri URL [--scopes JSON_ARRAY] [--replace]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE] [--expected-revision N]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH [--installer-target TARGET]\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure only).\n--runner enables local work without requiring an initial project.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nOpenAI credentials use hidden input or protected JSON with tunnel_id and api_key.\nNamed Cloudflare uses protected JSON with tunnel_id, public_origin and token, or --token-file plus identity/origin options. Quick Tunnel takes no credentials or saved origin.\nNew Cloudflare profiles default to embedded Server ownership; OpenAI retains its standalone default.\nExisting Cloudflare edits require --expected-revision. Separate Cloudflare services must be selected for startup before installation; stop and uninstall before deselecting them.\nCloudflare OAuth configuration returns a newly issued client secret once; repeat configuration retains the existing secret. Use --replace explicitly to recover a lost secret or change the callback; replacement revokes the previous client authorization.\nRuntime Join: configure --join URL --runner --no-project (hidden terminal pairing input, or --code-stdin).\nJoining starts only this machine’s Runner; it never creates or starts the central Server.\n";
 #[derive(Default)]
 struct Input {
     command: String,
@@ -167,6 +167,10 @@ fn parse(args: &[String]) -> Result<Input, String> {
     if input.runner_name.is_some() && !input.runner && input.project.is_none() {
         return Err("--runner-name requires --runner or --project PATH".into());
     }
+    webcodex_core::runner_protocol::validate_optional_runner_field(
+        &input.runner_name,
+        "display_name",
+    )?;
     if input.development_build
         && !matches!(
             input.command.as_str(),
@@ -760,27 +764,13 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                             .map_err(|_| "Project folder does not exist".to_string())
                     })
                     .transpose()?;
-                let server_url =
-                    canonical_server_url(input.join.as_deref().unwrap_or("http://127.0.0.1:8080"))
-                        .map_err(|e| e.to_string())?;
-                let binaries = discover_binaries(input.bin_dir.as_deref())?;
-                SetupRequest {
-                    runner_display_name: input.runner_name.clone(),
-                    service_scope: resolve_service_scope(&store, input.scope)
-                        .map_err(|e| e.to_string())?,
-                    mode: if input.create {
-                        EnvironmentMode::Create {
-                            listen: "127.0.0.1:8080".into(),
-                        }
-                    } else {
-                        EnvironmentMode::Join
-                    },
-                    server_url,
+                configure_request(
+                    &input,
+                    resolve_service_scope(&store, input.scope).map_err(|e| e.to_string())?,
                     project,
-                    runner: input.runner.then_some(true),
-                    account: current_account().map_err(|e| e.to_string())?,
-                    binaries,
-                }
+                    current_account().map_err(|e| e.to_string())?,
+                    discover_binaries(input.bin_dir.as_deref())?,
+                )?
             };
             let mut secrets = SetupSecrets {
                 replacement_pairing_code: input.new_code,
@@ -1136,6 +1126,35 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
         }
         _ => Err(USAGE.into()),
     }
+}
+
+fn configure_request(
+    input: &Input,
+    service_scope: service::ServiceScope,
+    project: Option<PathBuf>,
+    account: LocalAccount,
+    binaries: RuntimeBinaries,
+) -> Result<SetupRequest, String> {
+    let (mode, url) = match (input.create, input.join.as_deref()) {
+        (true, None) => (
+            EnvironmentMode::Create {
+                listen: "127.0.0.1:8080".into(),
+            },
+            "http://127.0.0.1:8080",
+        ),
+        (false, Some(url)) => (EnvironmentMode::Join, url),
+        _ => return Err("Choose exactly one of --create or --join URL".into()),
+    };
+    Ok(SetupRequest {
+        service_scope,
+        mode,
+        server_url: canonical_server_url(url).map_err(|e| e.to_string())?,
+        project,
+        runner: input.runner.then_some(true),
+        runner_display_name: input.runner_name.clone(),
+        account,
+        binaries,
+    })
 }
 
 fn observed_boolean(value: Option<bool>) -> &'static str {
