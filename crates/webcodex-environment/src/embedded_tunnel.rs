@@ -29,6 +29,9 @@ pub fn embedded_tunnel_profiles(root: &Path) -> SetupResultValue<Vec<EmbeddedTun
     let mut identities = BTreeSet::new();
     let mut output = Vec::new();
     for profile in profiles {
+        if profile.provider != TunnelProvider::Openai {
+            continue;
+        }
         let directory = root.join("server/tunnels").join(&profile.profile_id);
         let binding_path = directory.join("webcodex.env");
         let binding_present = match std::fs::symlink_metadata(&binding_path) {
