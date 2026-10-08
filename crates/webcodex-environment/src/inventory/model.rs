@@ -99,8 +99,8 @@ pub struct IdentityObservation {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PathInventory {
-    /// Internal allowlisted observations share this inventory's revision. They
-    /// are emitted only by the separate settings-export contract.
+    /// Allowlisted values captured by the same bounded Runner configuration read.
+    /// Only settings export emits them; they do not affect the path revision.
     #[serde(skip)]
     pub settings: super::SettingsObservation,
     pub schema_version: u16,

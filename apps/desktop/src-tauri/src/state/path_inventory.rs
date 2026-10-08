@@ -45,22 +45,14 @@ fn inventory_error(code: &str) -> DesktopError {
 }
 
 impl AppState {
-    pub async fn path_inventory(
-        &self,
-        locale: &crate::desktop_locale::DesktopLocaleState,
-    ) -> DesktopResult<PathInventory> {
+    pub async fn path_inventory(&self) -> DesktopResult<PathInventory> {
         let slot = self.core.lock().await;
         let core = slot
             .as_ref()
             .ok_or_else(|| inventory_error("desktop_operation_busy"))?;
         let root =
             webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
-        let inventory = desktop_inventory(
-            core,
-            &root,
-            self.desktop_data_dir.source.label(),
-            locale.get(),
-        );
+        let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
         export::bounded_json(&inventory)?;
         Ok(inventory)
     }
@@ -68,7 +60,6 @@ impl AppState {
     pub async fn open_inventory_location(
         &self,
         request: OpenInventoryRequest,
-        locale: &crate::desktop_locale::DesktopLocaleState,
     ) -> DesktopResult<()> {
         // Keep the selected Desktop context stable through native navigation.
         // External changes are reflected by rebuilding the read-only projection.
@@ -78,12 +69,7 @@ impl AppState {
             .ok_or_else(|| inventory_error("desktop_operation_busy"))?;
         let root =
             webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
-        let inventory = desktop_inventory(
-            core,
-            &root,
-            self.desktop_data_dir.source.label(),
-            locale.get(),
-        );
+        let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
         let directory = confirmed_location(&inventory, &request)?;
         crate::platform::opener::directory(&directory)
     }
@@ -99,19 +85,21 @@ impl AppState {
             .ok_or_else(|| inventory_error("desktop_operation_busy"))?;
         let root =
             webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
-        let inventory = desktop_inventory(
-            core,
-            &root,
-            self.desktop_data_dir.source.label(),
-            locale.get(),
-        );
-        export_document(&inventory, &request)
+        let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
+        export_document(&inventory, &request, || {
+            desktop_preferences(
+                &core.config,
+                core.configuration_issue.is_some(),
+                locale.get(),
+            )
+        })
     }
 }
 
 fn export_document(
     inventory: &PathInventory,
     request: &ExportInventoryRequest,
+    preferences: impl FnOnce() -> Setting<DesktopPreferences>,
 ) -> DesktopResult<()> {
     check_revision(inventory, &request.expected_revision)?;
     let bytes = match request.kind {
@@ -120,7 +108,11 @@ fn export_document(
             export::bounded_json(&build_backup_manifest(inventory))?
         }
         InventoryDocument::SettingsExport => {
-            export::bounded_json(&build_settings_export(inventory))?
+            // The UI previews locations, not settings values. Fence that context,
+            // then capture the current owned preferences for this explicit export.
+            let mut settings = build_settings_export(inventory);
+            settings.desktop_preferences = preferences();
+            export::bounded_json(&settings)?
         }
     };
     export::write_document(&request.path, &bytes, inventory)
@@ -196,18 +188,12 @@ fn reference(
     }
 }
 
-fn desktop_inventory(
-    core: &DesktopCore,
-    root: &Path,
-    source: &str,
-    locale: crate::desktop_locale::DesktopLocale,
-) -> PathInventory {
+fn desktop_inventory(core: &DesktopCore, root: &Path, source: &str) -> PathInventory {
     let context = InventoryContext {
         config: &core.config,
         data_dir: &core.data_dir,
         config_path: &core.config_path,
         configuration_issue: core.configuration_issue.is_some(),
-        language: settings_language(locale),
         cached_builds: core
             .adapter
             .binaries()
@@ -222,7 +208,6 @@ struct InventoryContext<'a> {
     data_dir: &'a Path,
     config_path: &'a Path,
     configuration_issue: bool,
-    language: SettingsLanguage,
     cached_builds: &'a [webcodex_core::desktop_runtime_contract::MachineBuildInfo],
 }
 
@@ -324,21 +309,12 @@ fn collect_inventory(core: &InventoryContext<'_>, root: &Path, source: &str) -> 
         SafetyCategory::Log,
     ));
     if core.configuration_issue {
-        inventory.settings.desktop_preferences = Setting::Unknown;
         inventory.issues.push(InventoryIssue {
             code: "desktop_configuration_unconfirmed".into(),
             entry_id: Some("desktop.settings".into()),
         });
     } else if legacy {
         append_legacy_locations(&mut inventory, core);
-    }
-    if !core.configuration_issue {
-        inventory.settings.desktop_preferences = Setting::Known {
-            value: DesktopPreferences {
-                language: core.language,
-                automatic_update_download: core.config.update_cache.automatic_download,
-            },
-        };
     }
     let mut build = crate::commands::get_desktop_build_info();
     build.version = env!("CARGO_PKG_VERSION").into();
@@ -473,6 +449,23 @@ fn append_legacy_locations(inventory: &mut PathInventory, core: &InventoryContex
     }
     // Legacy Desktop children retain output in memory. Do not manufacture
     // persistent lifecycle logs for processes not managed as OS services.
+}
+
+fn desktop_preferences(
+    config: &StoredDesktopConfig,
+    configuration_issue: bool,
+    locale: crate::desktop_locale::DesktopLocale,
+) -> Setting<DesktopPreferences> {
+    if configuration_issue {
+        Setting::Unknown
+    } else {
+        Setting::Known {
+            value: DesktopPreferences {
+                language: settings_language(locale),
+                automatic_update_download: config.update_cache.automatic_download,
+            },
+        }
+    }
 }
 
 fn settings_language(locale: crate::desktop_locale::DesktopLocale) -> SettingsLanguage {

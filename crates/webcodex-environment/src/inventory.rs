@@ -56,7 +56,8 @@ pub(super) fn safe_identifier(value: &str) -> bool {
         && !webcodex_core::sensitive_text::secret_like_value(value)
 }
 
-/// Stable revision of the complete projection, excluding observation time. Desktop
+/// Stable revision of the serialized path projection, excluding observation time.
+/// Internal settings observations do not revise location/manifest actions. Desktop
 /// calls this again after adding its own authoritative metadata. Not a capability.
 pub fn recompute_revision(inventory: &mut PathInventory) {
     // Public adapter additions share one bound. Fixed metadata callers can never
@@ -93,9 +94,7 @@ pub fn recompute_revision(inventory: &mut PathInventory) {
     projection.revision.clear();
     inventory.revision = format!(
         "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(&(&projection, &projection.settings)).unwrap_or_default()
-        )
+        Sha256::digest(serde_json::to_vec(&projection).unwrap_or_default())
     );
 }
 

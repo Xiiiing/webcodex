@@ -34,14 +34,17 @@ inventory's existing sensitive-text guard. This guard is not a guarantee about
 arbitrary user-entered metadata: names and path references may be private or
 contain information the user entered. Review the output before sharing it.
 
-The settings observation joins the existing inventory revision but is not
-serialized into path inventory or `manifest_only` documents. Changing an
-exported device name, language or update preference invalidates an earlier
-revision. Existing inventory and manifest wire fields and planning behavior
-remain unchanged. Native export reprojects the selected context, checks the
-revision before writing, and uses the existing bounded JSON/create-new writer.
-The native save chooser selects a new `.json` document; existing files and managed
-locations cannot be overwritten. Cancelled or stale selections do not write.
+The inventory revision continues to bind its existing serialized location
+projection (excluding observation time) and Desktop selection context. The Runner
+name is an internal allowlisted observation from the same bounded configuration
+read; it is not serialized into inventory or manifest documents and does not
+change their revision. Native export reprojects and checks the visible context
+before collecting current Desktop preferences, only for explicit settings export.
+Settings values are not previewed, so language, name or update preference changes
+alone do not stale navigation or metadata export. No separate settings revision is
+introduced. The native save chooser selects a new `.json` document; existing
+files and managed locations cannot be overwritten. Cancelled or stale context
+selections do not write.
 Incomplete inventories cannot establish a safe destination and refuse export.
 Native output remains capped at 1 MiB and uses mode 0600/no-follow on Unix.
 

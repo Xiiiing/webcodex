@@ -146,7 +146,7 @@ fn invalid_duplicate_secret_or_mismatched_runner_values_remain_unknown() {
 }
 
 #[test]
-fn display_name_changes_revision_while_manifest_keeps_its_existing_contract() {
+fn display_name_changes_preserve_inventory_and_manifest_revisions() {
     let (temp, _) = fixture(false, true);
     let root = temp.path().join("environment");
     private_file(&root.join("runner.toml"), RUNNER.as_bytes());
@@ -156,11 +156,20 @@ fn display_name_changes_revision_while_manifest_keeps_its_existing_contract() {
         RUNNER.replace("Work laptop", "Home laptop").as_bytes(),
     );
     let after = inspect_environment_paths(&root, None);
-    assert_ne!(before.revision, after.revision);
+    assert_eq!(before.revision, after.revision);
+    assert_eq!(
+        build_settings_export(&after).device_display_name,
+        Setting::Known {
+            value: Some("Home laptop".into())
+        }
+    );
+    let mut decoded: PathInventory =
+        serde_json::from_value(serde_json::to_value(&after).unwrap()).unwrap();
+    recompute_revision(&mut decoded);
+    assert_eq!(decoded.revision, after.revision);
     let mut before = serde_json::to_value(build_backup_manifest(&before)).unwrap();
     let mut after = serde_json::to_value(build_backup_manifest(&after)).unwrap();
     for value in [&mut before, &mut after] {
-        value["inventory"]["revision"] = serde_json::Value::Null;
         value["inventory"]["observed_at_ms"] = serde_json::Value::Null;
     }
     assert_eq!(before, after);

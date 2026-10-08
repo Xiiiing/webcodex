@@ -39,19 +39,10 @@ pub struct DesktopPreferences {
     pub automatic_update_download: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsObservation {
     pub device_display_name: Setting<Option<String>>,
-    pub desktop_preferences: Setting<DesktopPreferences>,
-}
-impl Default for SettingsObservation {
-    fn default() -> Self {
-        Self {
-            device_display_name: Setting::Unknown,
-            desktop_preferences: Setting::NotApplicable,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,7 +151,8 @@ pub fn build_settings_export(inventory: &PathInventory) -> SettingsExport {
             projects,
         },
         device_display_name: inventory.settings.device_display_name.clone(),
-        desktop_preferences: inventory.settings.desktop_preferences.clone(),
+        // Desktop captures its current preferences only at explicit export.
+        desktop_preferences: Setting::NotApplicable,
     }
 }
 
