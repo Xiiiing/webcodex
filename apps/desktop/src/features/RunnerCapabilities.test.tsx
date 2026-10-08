@@ -86,6 +86,70 @@ describe("Desktop Coding Agents", () => {
     expect(query).toHaveBeenLastCalledWith({ kind: "runner_details" });
   });
 
+  it("leaves environment empty until the user chooses the PATH/HOME shortcut and saves only names", async () => {
+    const initial = state(); initial.coding_agents = { ...EMPTY_CODING_AGENTS, profiles: [profile] };
+    api.saveCodingAgent.mockResolvedValue(initial);
+    render(<Harness initial={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Pi Agent" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/ACP agents start with a cleared environment/)).toBeVisible();
+    expect(within(dialog).queryByLabelText("Child Environment Variable 1")).not.toBeInTheDocument();
+    expect(api.saveCodingAgent).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Missing PATH/HOME Mappings" }));
+    expect(within(dialog).getByLabelText("Child Environment Variable 1")).toBeVisible();
+    expect(within(dialog).getByLabelText("Child Environment Variable 1")).toHaveValue("PATH");
+    expect(within(dialog).getByLabelText("Runner Environment Variable 2")).toHaveValue("HOME");
+    expect(within(dialog).getByRole("button", { name: "Add Missing PATH/HOME Mappings" })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.saveCodingAgent).toHaveBeenCalledWith(expect.objectContaining({ profile: { ...profile, env_from_env: { PATH: "PATH", HOME: "HOME" } } })));
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it("saves no implicit environment mappings when the shortcut is not selected", async () => {
+    const initial = state(); initial.coding_agents = { ...EMPTY_CODING_AGENTS, profiles: [profile] };
+    api.saveCodingAgent.mockResolvedValue(initial);
+    render(<Harness initial={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Pi Agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.saveCodingAgent).toHaveBeenCalledWith(expect.objectContaining({ profile })));
+  });
+
+  it("preserves case-insensitive destinations and user-entered Runner sources while adding only missing names", async () => {
+    const initial = state(); initial.coding_agents = { ...EMPTY_CODING_AGENTS, profiles: [{ ...profile, env_from_env: { path: "CUSTOM_PATH" } }] };
+    api.saveCodingAgent.mockResolvedValue(initial);
+    render(<Harness initial={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Pi Agent" }));
+    fireEvent.click(screen.getByText("Advanced"));
+    fireEvent.change(screen.getByLabelText("Runner Environment Variable 1"), { target: { value: "MY_NODE_PATH" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Missing PATH/HOME Mappings" }));
+    expect(screen.getByLabelText("Child Environment Variable 1")).toHaveValue("path");
+    expect(screen.getByLabelText("Runner Environment Variable 1")).toHaveValue("MY_NODE_PATH");
+    expect(screen.getByLabelText("Child Environment Variable 2")).toHaveValue("HOME");
+    expect(screen.queryByLabelText("Child Environment Variable 3")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.saveCodingAgent).toHaveBeenCalledWith(expect.objectContaining({ profile: { ...profile, env_from_env: { path: "MY_NODE_PATH", HOME: "HOME" } } })));
+  });
+
+  it("adds only the available mapping slot, then allows the remaining name after a row is removed", async () => {
+    const env = Object.fromEntries(Array.from({ length: 63 }, (_, i) => [`VAR_${i}`, `SOURCE_${i}`]));
+    const initial = state(); initial.coding_agents = { ...EMPTY_CODING_AGENTS, profiles: [{ ...profile, env_from_env: env }] };
+    api.saveCodingAgent.mockResolvedValue(initial);
+    render(<Harness initial={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Pi Agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Missing PATH/HOME Mappings" }));
+    expect(screen.getByLabelText("Child Environment Variable 64")).toHaveValue("PATH");
+    expect(screen.queryByLabelText("Child Environment Variable 65")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Missing PATH/HOME Mappings" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add Environment Mapping" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Environment Mapping 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Missing PATH/HOME Mappings" }));
+    expect(screen.getByLabelText("Child Environment Variable 65")).toHaveValue("HOME");
+    expect(screen.getByRole("button", { name: "Add Missing PATH/HOME Mappings" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const { VAR_0: _removed, ...remaining } = env;
+    await waitFor(() => expect(api.saveCodingAgent).toHaveBeenCalledWith(expect.objectContaining({ profile: { ...profile, env_from_env: { ...remaining, PATH: "PATH", HOME: "HOME" } } })));
+  });
+
   it("never invents Active from desired state, another Runner or a stale provider name", async () => {
     expect(codingAgentIsActive(profile, null)).toBe(false);
     expect(codingAgentIsActive(profile, { client_id: "fixture", connected: false, coding_agent_providers: [profile] })).toBe(false);

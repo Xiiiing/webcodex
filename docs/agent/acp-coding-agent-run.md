@@ -492,8 +492,27 @@ args = []
 
 [acp.agents.env_from_env]
 # Explicit operator mappings only. Values never go to the Server.
-HTTPS_PROXY = "HTTPS_PROXY"
+PATH = "PATH"
+HOME = "HOME"
 ```
+
+The child environment remains cleared before explicit mappings. For an npm
+adapter, Runner's mapped `PATH` must include the real Node executable, including
+its Homebrew/NVM directory when applicable. `PATH` and `HOME` alone are not a
+complete-environment guarantee: explicitly map user state via `HOME` and, when
+used, `CODEX_HOME`, plus required proxy/certificate variables. Map only sources
+that exist in Runner's environment; missing configured sources fail before
+launch. Restart Runner after configuration or launch-environment changes.
+Desktop exposes a user-selected PATH/HOME shortcut, never implicit inheritance.
+
+The npm `codex-acp` adapter normally launches its bundled Codex rather than the
+system `codex` executable. A `CODEX_PATH` override requires an explicit
+`CODEX_PATH = "CODEX_PATH"` mapping and the corresponding Runner source.
+A Linux equivalent reproduction of `codex-acp` 2.1.1 with bundled Codex 0.159.3
+exited 127 before `initialize` without `PATH`; explicit mapping of a Runner
+`PATH` containing Node passed initialization. The original reporter's
+environment is unknown and macOS is unverified; this evidence alone does not
+close the reported issue. See [Runner setup](../RUNNER.md#acp-coding-agents-explicit-startup-environment) for the operator checklist.
 
 The exact executable example is operator-specific; WebCodex must not prescribe
 `npx -y` as a production default or download packages at request time.
