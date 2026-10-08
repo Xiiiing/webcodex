@@ -5,8 +5,7 @@ use webcodex_environment::*;
 
 mod update;
 
-const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--credentials-file PATH]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\nmigrate-legacy-runner --join URL --project PATH --token-file PATH [--profile PROFILE] (Linux)\nmigrate-legacy-server --user NAME --token-file PATH --listen ORIGINAL_ADDR [--server-url URL] (Linux)\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure and explicit migration).\n--runner enables local work without requiring an initial project.\nRuntime Join: configure --join URL --runner --no-project (hidden terminal pairing input, or --code-stdin).\nJoining starts only this machine’s Runner; it never creates or starts the central Server.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nTunnel credentials use hidden input or a protected JSON file with tunnel_id and api_key.\n";
-
+const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--host embedded|standalone] [--credentials-file PATH]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure only).\n--runner enables local work without requiring an initial project.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nTunnel credentials use hidden input or a protected JSON file with tunnel_id and api_key.\nRuntime Join: configure --join URL --runner --no-project (hidden terminal pairing input, or --code-stdin).\nJoining starts only this machine’s Runner; it never creates or starts the central Server.\n";
 #[derive(Default)]
 struct Input {
     command: String,
@@ -36,9 +35,6 @@ struct Input {
     upgrade_target_file: Option<PathBuf>,
     operation_id: Option<String>,
     operation_id_output: bool,
-    username: Option<String>,
-    listen: Option<String>,
-    server_url: Option<String>,
 }
 
 fn parse(args: &[String]) -> Result<Input, String> {
@@ -59,9 +55,6 @@ fn parse(args: &[String]) -> Result<Input, String> {
                     .ok_or_else(|| "Missing option value".into())
             };
         match arg.as_str() {
-            "--user" => input.username = Some(value(&mut iter)?),
-            "--listen" => input.listen = Some(value(&mut iter)?),
-            "--server-url" => input.server_url = Some(value(&mut iter)?),
             "--create" => input.create = true,
             "--join" => input.join = Some(value(&mut iter)?),
             "--project" => input.project = Some(PathBuf::from(value(&mut iter)?)),
@@ -142,19 +135,13 @@ fn parse(args: &[String]) -> Result<Input, String> {
     if input.installer_file.is_some() && input.command != "installer-apply" {
         return Err("--installer-file applies only to verified unified installer handoff".into());
     }
-    if input.tunnel_host.is_some() && input.command != "tunnel-host" {
-        return Err("--host applies only to the explicit tunnel-host command".into());
+    if input.tunnel_host.is_some()
+        && !matches!(input.command.as_str(), "configure-tunnel" | "tunnel-host")
+    {
+        return Err("--host applies only to configure-tunnel or tunnel-host".into());
     }
     if input.credentials_file.is_some() && input.command != "configure-tunnel" {
         return Err("--credentials-file applies only to configure-tunnel".into());
-    }
-    if (input.username.is_some() || input.listen.is_some() || input.server_url.is_some())
-        && input.command != "migrate-legacy-server"
-    {
-        return Err(
-            "--user, --listen and --server-url apply only to explicit legacy Server migration"
-                .into(),
-        );
     }
     if input.upgrade_target_file.is_some() {
         if !matches!(
@@ -194,6 +181,13 @@ fn parse(args: &[String]) -> Result<Input, String> {
         return Err("Guarded installer operation options require --upgrade-target-file".into());
     }
     Ok(input)
+}
+
+fn configure_tunnel_host_mode(
+    requested: Option<TunnelHostMode>,
+    existing: Option<TunnelHostMode>,
+) -> TunnelHostMode {
+    requested.or(existing).unwrap_or(TunnelHostMode::Standalone)
 }
 
 pub(crate) async fn run(args: &[String]) -> Result<String, String> {
@@ -526,7 +520,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 .ok_or("Specify --expected-runtime-dir PATH")?,
         )?;
         if input.command == "installer-classify" {
-            let kind = windows_legacy::classify(&store, &runtime)
+            let kind = windows_package::classify(&store, &runtime)
                 .await
                 .map_err(|e| e.to_string())?;
             return Ok(serde_json::json!({"kind":kind}).to_string());
@@ -541,7 +535,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 )?;
                 match input.command.as_str() {
                     "package-upgrade-preflight" => {
-                        let result = windows_legacy::preflight(&store, &candidate, &runtime)
+                        let result = windows_package::preflight(&store, &candidate, &runtime)
                             .await
                             .map_err(|e| e.to_string())?;
                         if !result.ready {
@@ -549,22 +543,22 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                         }
                     }
                     "package-upgrade-prepare" => {
-                        windows_legacy::prepare(&store, &candidate, &runtime)
+                        windows_package::prepare(&store, &candidate, &runtime)
                             .await
                             .map_err(|e| e.to_string())?
                     }
                     _ => {
-                        windows_legacy::verify(&store, &candidate, &runtime)
+                        windows_package::verify(&store, &candidate, &runtime)
                             .await
                             .map_err(|e| e.to_string())?;
                     }
                 }
             }
-            "package-upgrade-finish" => windows_legacy::finish(&store, &runtime)
+            "package-upgrade-finish" => windows_package::finish(&store, &runtime)
                 .await
                 .map_err(|e| e.to_string())?,
             "package-upgrade-rollback" => {
-                windows_legacy::rollback(&store, &runtime).map_err(|e| e.to_string())?
+                windows_package::rollback(&store, &runtime).map_err(|e| e.to_string())?
             }
             _ => return Err("Unknown package upgrade command".into()),
         }
@@ -640,119 +634,6 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             }
             .map_err(|e| e.to_string())?;
             Ok("{\"ready\":true}".into())
-        }
-        #[cfg(target_os = "linux")]
-        "migrate-legacy-server" => {
-            if input.create
-                || input.join.is_some()
-                || input.project.is_some()
-                || input.code_stdin
-                || input.new_code
-            {
-                return Err("Legacy Server migration preserves its original listener and credentials; use --listen, --user and --token-file".into());
-            }
-            let listen = input
-                .listen
-                .as_deref()
-                .ok_or("Specify the original --listen ADDRESS")?;
-            let socket: std::net::SocketAddr = listen
-                .parse()
-                .map_err(|_| "The original listen address is invalid")?;
-            let reachable = if socket.ip().is_unspecified() {
-                std::net::SocketAddr::new(
-                    if socket.is_ipv6() {
-                        std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
-                    } else {
-                        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
-                    },
-                    socket.port(),
-                )
-            } else {
-                socket
-            };
-            let default_url = format!("http://{reachable}");
-            let request = SetupRequest {
-                runner_display_name: None,
-                service_scope: service::ServiceScope::System,
-                mode: EnvironmentMode::Create {
-                    listen: listen.into(),
-                },
-                server_url: canonical_server_url(
-                    input.server_url.as_deref().unwrap_or(&default_url),
-                )
-                .map_err(|e| e.to_string())?,
-                project: None,
-                runner: None,
-                account: current_account().map_err(|e| e.to_string())?,
-                binaries: discover_binaries(input.bin_dir.as_deref())?,
-            };
-            let legacy = LegacyCliServerInput {
-                username: input.username.ok_or("Specify the original --user NAME")?,
-                user_token_file: absolute(
-                    input
-                        .token_file
-                        .as_deref()
-                        .ok_or("Specify the original user's --token-file PATH")?,
-                )?,
-            };
-            let result = migrate_legacy_cli_system_server(
-                &store,
-                request,
-                legacy,
-                &SetupSecrets::default(),
-                progress_sink(input.json),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            render(&result, input.json)
-        }
-        #[cfg(target_os = "linux")]
-        "migrate-legacy-runner" => {
-            if input.create || input.no_project || input.code_stdin || input.new_code {
-                return Err("Legacy migration preserves the original Runner and requires --join URL --project PATH --token-file PATH".into());
-            }
-            let request = SetupRequest {
-                runner_display_name: None,
-                service_scope: service::ServiceScope::System,
-                mode: EnvironmentMode::Join,
-                server_url: canonical_server_url(
-                    input
-                        .join
-                        .as_deref()
-                        .ok_or("Specify the original --join URL")?,
-                )
-                .map_err(|e| e.to_string())?,
-                project: Some(
-                    input
-                        .project
-                        .as_deref()
-                        .ok_or("Specify an original --project PATH")?
-                        .canonicalize()
-                        .map_err(|_| "The original project is unavailable")?,
-                ),
-                runner: None,
-                account: current_account().map_err(|e| e.to_string())?,
-                binaries: discover_binaries(input.bin_dir.as_deref())?,
-            };
-            let legacy = LegacyCliRunnerInput {
-                profile: input.profile,
-                user_token_file: absolute(
-                    input
-                        .token_file
-                        .as_deref()
-                        .ok_or("Specify the original user's --token-file PATH")?,
-                )?,
-            };
-            let result = migrate_legacy_cli_user_runner(
-                &store,
-                request,
-                legacy,
-                &SetupSecrets::default(),
-                progress_sink(input.json),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            render(&result, input.json)
         }
         "status" | "doctor" => {
             let result = if input.command == "doctor" {
@@ -950,13 +831,11 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
         }
         "configure-tunnel" => {
             let profile = input.operand.as_deref().unwrap_or("default");
+            let profiles = tunnel_profiles(&store).map_err(|e| e.to_string())?;
+            let existing = profiles.iter().find(|entry| entry.profile_id == profile);
             let credentials = if let Some(path) = input.credentials_file {
                 Some(read_tunnel_credentials(&absolute(&path)?)?)
-            } else if tunnel_profiles(&store)
-                .map_err(|e| e.to_string())?
-                .iter()
-                .any(|entry| entry.profile_id == profile)
-            {
+            } else if existing.is_some() {
                 None
             } else if std::io::stdin().is_terminal() {
                 Some(TunnelCredentials {
@@ -968,16 +847,53 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                     "Supply the protected --credentials-file for this Tunnel profile".into(),
                 );
             };
-            let status = core
+            let host_mode = configure_tunnel_host_mode(
+                input.tunnel_host,
+                existing.map(|entry| entry.host_mode),
+            );
+            let result = core
                 .backend
-                .configure_tunnel(&store, profile, credentials.as_ref())
+                .configure_tunnel_profile(
+                    &store,
+                    profile,
+                    None,
+                    host_mode,
+                    None,
+                    None,
+                    credentials.as_ref(),
+                    host_mode == TunnelHostMode::Standalone,
+                )
                 .await
                 .map_err(|e| e.to_string())?;
             if input.json {
-                serde_json::to_string_pretty(&status)
+                serde_json::to_string_pretty(&result)
                     .map_err(|_| "Could not encode Tunnel status".into())
             } else {
-                Ok(format!("{}: Tunnel and local MCP are ready", status.id))
+                Ok(match result.next_action {
+                    TunnelConfigurationNextAction::None
+                        if result.profile.host_mode == TunnelHostMode::Embedded =>
+                    {
+                        format!(
+                            "{profile}: saved for WebCodex Server; no Server restart is required"
+                        )
+                    }
+                    TunnelConfigurationNextAction::None => format!(
+                        "{}: Tunnel and local MCP are ready",
+                        result.owner_status.id
+                    ),
+                    TunnelConfigurationNextAction::StartServer => format!(
+                        "{profile}: saved for WebCodex Server; start the Server to supervise it"
+                    ),
+                    TunnelConfigurationNextAction::RestartServer => format!(
+                        "{profile}: saved for WebCodex Server; restart the Server once after configuring all profiles"
+                    ),
+                    TunnelConfigurationNextAction::StartStandalone => format!(
+                        "{profile}: saved; start the separate Tunnel service explicitly"
+                    ),
+                    TunnelConfigurationNextAction::RestartStandalone => format!(
+                        "{profile}: saved; restart the separate Tunnel service explicitly"
+                    ),
+                })
             }
         }
         "tunnel-host" => {
@@ -1009,12 +925,15 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                     .map_err(|_| "Could not encode Tunnel status".into())
             } else {
                 Ok(format!(
-                    "{}: host={:?}, running={:?}, Tunnel ready={}, local MCP ready={}",
-                    status.service_status.id,
+                    "{} (Tunnel {}): host={:?}, autostart={}, running={:?}, Tunnel ready={}, local MCP ready={}, Server restart required={}",
+                    status.profile_id,
+                    status.tunnel_id,
                     status.host_mode,
+                    status.autostart,
                     status.service_status.running,
                     status.tunnel_ready,
-                    status.local_mcp_ready
+                    status.local_mcp_ready,
+                    status.server_restart_required
                 ))
             }
         }
