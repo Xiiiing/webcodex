@@ -18,6 +18,13 @@ serialized receipts remain unchanged. Privileged dispatch rechecks current
 package identity and layout before authorization and again before spawning.
 Unknown/ambiguous identity fails closed. No package or service is adopted.
 
+DEB hook verification admits dpkg's `half-installed` preinst and
+`half-configured` postinst states while retaining exact package ownership and
+candidate checks. Ordinary assessment, prepare, authorization and privileged
+launch still require `installed`. Runtime same-package hooks also supply the
+exact installer target; identical payload bytes do not permit changing package
+manager.
+
 Runtime recovery journals use schema2 and journal-only `runtime_<phase>` values;
 internal phases/recovery semantics remain existing Core values. Old readers with
 the closed legacy phase enum reject every Runtime journal instead of treating a
