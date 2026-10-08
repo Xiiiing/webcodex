@@ -28,7 +28,8 @@ observe_browser / control_browser
 `observe_browser` is guaranteed read-only and has the closed actions `targets`,
 `discover`, `browsers`, `pages`, `surface`, `snapshot`, `screenshot`, `console`, `network`, and `diagnostics`.
 `control_browser` has the closed actions `launch`, `attach`, `new_page`, `navigate`, `reload`,
-`click`, `input_text`, `select_option`, `set_value`, `upload_file`, `batch`, `key`,
+`click`, `input_text`, `select_option`, `set_value`, `select_choice`, `set_date`,
+`upload_file`, `batch`, `key`,
 `clear_diagnostics`, `close_page`, and `close_browser`. The model surface does not expose one MCP tool
 per CDP primitive, and it does not accept arbitrary protocol methods, scripts,
 Browser executables, command-line arguments, profile paths, debugger endpoints,
@@ -40,11 +41,70 @@ navigation, element effects, key input, and close operations. This separation
 preserves rolling compatibility, capability admission, telemetry, and exact
 failure attribution without inflating the model tool inventory.
 
+### Bounded semantic queries
+
+`observe_browser(action=snapshot, query={...})` filters the existing semantic
+source before applying `node_offset` / `max_nodes`. It does not concatenate
+successive snapshots. `fields_only=true` finds native and semantic form fields,
+including disabled/read-only controls. `text` is a case-insensitive literal
+substring of name, description, nearby label or placeholder; `role` is exact
+(case-insensitive), and `group` / `section` are literal label substrings. Filters
+are conjunctive, limited to 128 nonblank characters, and never grant actions.
+No regex, selector or script is accepted. Query terms are omitted from durable
+Browser audit projections.
+
+For example, `query={"fields_only":true,"section":"Education"}` returns fields
+across ordinary snapshot page boundaries in one call. With a query, `auto` keeps
+semantic text instead of silently compacting it away; explicit `interactive`
+still limits results to interactive semantics. Up to 4,352 existing source nodes
+(the existing pagination horizon) are searched once. Return limits remain
+256 nodes / 64 KiB; CDP reads keep the existing depth, message-byte and request
+deadline bounds. There is no unbounded pagination loop or widening of iframe
+collection. `truncated=true` makes a missing match inconclusive, including an
+exhausted search horizon or AX-advertised descendants omitted by the depth bound.
+`next_node_offset` addresses remaining matches within that horizon, with the same
+query; a null offset does not make a truncated result complete.
+
+Every returned element belongs to one new snapshot generation and can be used in
+one existing batch. A new query or snapshot invalidates every older element id.
+Do not combine ids from different result windows; narrow the semantic query to
+obtain the relevant controls together. Unreturned nodes receive no retained
+identity. The additive `browser_semantic_query` capability is checked both by
+ToolRuntime and under the Runner registry lock; older Runners still receive the
+original snapshot payload when query is absent.
+
+### Conservative clickable cards
+
+A top-document `div`, `li` or `article` already represented as a generic/group/
+listitem/article AX node can gain **click only**. One private read-only
+`DOMSnapshot.captureSnapshot` supplies Chromium's `isClickable` event-response
+fact and computed layout/style evidence. Admission additionally requires a
+visible, nonzero box, pointer cursor, enabled pointer events, readable bounded
+text, and a fully known content subtree without nested interactive targets,
+shadow roots or frame documents. Hidden, inert, disabled, editable and invisible
+ancestors suppress admission; nested event targets are ambiguous and suppressed.
+Neither pointer styling nor `onclick` alone grants authority. No site selector,
+listener source, raw DOM or CDP entry point is exposed to the model.
+
+Before the extra capture, the existing depth-bounded DOM must prove a complete
+tree of at most 4,352 nodes (including shadow/frame contents); missing children
+or unknown frame documents suppress capture entirely. The existing CDP
+message/deadline ceilings guard changes racing that preflight. Classification
+also rejects documents over 4,352 captured nodes, scans at most that many DOM/AX nodes,
+checks at most 64 content nodes per candidate, and admits at most 32 cards.
+Missing/oversized evidence fails closed for cards while existing native control
+semantics remain unchanged. Root DOM identity and a post-capture loader check
+prevent joining different documents. This slice does not infer cards inside
+shadow roots or iframes, and does not infer delegated ancestor handlers.
+
+Card `actions` and opaque ids use the same projection, generation, lease and
+document fences as native controls. No new effect path or replay behavior exists.
+
 ### Bounded form batches
 
 `control_browser(action=batch)` sends one `browser_batch` Runner invocation containing
-1..32 ordered `input_text`, `select_option`, `set_value`, `click`, or `upload_file`
-operations for one exact Browser/page. Each operation carries only an opaque
+1..32 ordered `input_text`, `select_option`, `set_value`, `select_choice`,
+`set_date`, `click`, or `upload_file` operations for one exact Browser/page. Each operation carries only an opaque
 element identity and its action-specific value; upload additionally supplies the
 authorized same-Runner Project and relative path. Server Project authorization
 and Runner upload-path validation run before any batch effect. The batch payload
@@ -76,6 +136,87 @@ absence. `needs_snapshot` and observation recovery replace retry suggestions.
 Always take a fresh verification snapshot after filling, and observe after
 structural/page changes. `campus-application` remains a planner and final submit
 remains `ready_for_review`.
+
+### Typed custom choices and dates
+
+`select_choice` and `set_date` are high-level actions on the same admitted
+opaque element ids. They work as individual `control_browser` actions or as
+operations inside the existing batch:
+
+```json
+{"action":"select_choice","element_id":"<current id>","choice_path":["Province","City","District"]}
+{"action":"set_date","element_id":"<current id>","value":"2026-06"}
+```
+
+The enclosing call still supplies the exact `client_id`, `browser_id`, and
+`page_id`. A choice has 1..4 nonblank exact semantic steps, each NUL-free and at
+most 4,096 UTF-8 bytes. Matching normalizes Unicode and whitespace; it never
+uses fuzzy matching or model-authored selectors. `choice_path` is distinct from
+the existing upload `path`, which remains a Project-relative string. Dates
+accept only calendar-valid `YYYY-MM` or `YYYY-MM-DD`, including leap-year
+validation. Invalid input is rejected before effects.
+
+The additive `browser_complex_controls` Runner capability defaults to false.
+ToolRuntime and the Runner registry check it before dispatch, including a mixed
+batch containing a later complex operation: an older Runner must not execute
+the earlier native operations and then discover an unsupported widget. Batches
+also require `browser_batch`; every element still requires the particular
+action on its current snapshot.
+
+Native selects retain `select_option`; native date/month and other structured
+inputs retain `set_value`. The new actions require successful DOM classification
+of a supported custom control: semantic combobox/listbox evidence or bounded
+select/cascader/date component hints on appropriate text/search controls. Date
+popup evidence specializes that authority to `set_date`. Plain buttons and
+native file/number/date inputs are not promoted by an incidental role or class.
+Read-only custom text inputs can retain a picker action while losing direct text
+writes; disabled controls retain no effects. A missing DOM index grants neither
+new action. `fields_only` includes the admitted custom widgets and listboxes.
+
+The Runner implements each high-level action with one bounded asynchronous CDP
+function call and its existing final stability wait. Shared internal mechanics
+cover control ownership, visibility, disabled state, exact option matching,
+native backing values, and postcondition readback. Native backing controls use
+their native value setter plus input/change events where that establishes the
+requested value. Otherwise the built-in engine opens the scoped popup and
+selects a unique option at each path level. A later cascader level must come
+from a linked child surface or new/changed options; an old-column sibling does
+not establish a child. An editable search string alone does not prove a
+committed selection.
+
+The date fallback supports semantic year/month selects, explicit year/month
+panels and bounded navigation, followed by exact day selection when a day was
+requested. A bare day number can be selected only when the displayed year and
+month are established. Month-only profile values never invent a day. These are
+generic DOM semantics and bounded framework hints, not recruiting-site adapters
+or a framework-specific model tool.
+
+Each internal traversal visits at most 4,096 nodes, with at most 256 options and
+a 3.5-second widget deadline inside a 5-second CDP request. Short mutation/value
+observations stay inside that same action; they do not take layer-by-layer
+Browser snapshots or full-page network-settling waits. DOM event activation
+uses no screenshot or coordinate-pointer path. The public tools expose neither
+the internal JavaScript nor arbitrary evaluation/CDP capabilities.
+
+A verified already-selected path/date succeeds without dispatching a field
+change. Missing, duplicate, disabled, stale, or unsupported evidence never
+permits a guessed choice. Once opening or an intermediate selection may have
+taken effect, a later failure preserves `outcome_unknown`; it is not a
+retry-safe failure. Batch progress, document/generation fences and the existing
+observation-first recovery contract are unchanged. Durable audit records retain
+only path depth or date presence/byte length, never the choice/date contents.
+
+Local validation combines deterministic fixtures with owned Chromium tests:
+
+```bash
+cargo test --locked -p webcodex-browser --lib widget -- --include-ignored --test-threads=1 --nocapture
+```
+
+The real-browser matrix covers custom choices, 2/3/4-level cascaders, native
+backing controls, date/month fast paths and calendar navigation, delayed
+popups, rerendered controls, ambiguity, disabled/missing options, stale ids,
+already-selected controls, and partial batch failures. These fixtures do not
+require a recruiting-page Share, and contain only fictional data.
 
 ## Authority and model surfaces
 
@@ -127,6 +268,20 @@ URLs, profile paths, PIDs and native node identities remain Runner-private.
 The owned Chromium process tree is spawned through `webcodex-process::ManagedChild`.
 Manual close, idle/lifetime reaping, and Runner shutdown use bounded process-tree
 termination/reaping only for owned instances; external attachments only detach.
+Each Supervisor owns one low-frequency cleanup worker shared by its clones. It
+checks idle and absolute lifetime expiry every 60 seconds even without subsequent
+Browser requests. A busy operation mutex skips that tick; the next tick checks
+current activity under the same mutex before removing expired identities. Backend
+cleanup runs after releasing the mutex, using the existing ownership-specific
+shutdown path and bounded budget. Opportunistic expiry checks remain in place.
+Shutdown admission wakes the worker without waiting for Browser I/O. Final shutdown
+waits for in-flight cleanup only until its deadline and retains the worker's ownership
+if cleanup is still running. The shutdown report includes removed runtimes, completed
+cleanup failures, and pending cleanup as timeouts; fixed-size counters retain late
+failures without retaining a cleanup history. Remaining cleanup skips graceful work
+once shutdown begins. The final Supervisor owner also stops and joins the worker;
+its idle wait never retains Browser state. An unavailable or exited worker rejects
+launch/attachment before acquiring a Browser runtime.
 Runner restart invalidates all opaque Browser identities. Managed profile data
 survives, but no old Browser/page/element identity is recovered or reused.
 
@@ -145,7 +300,8 @@ opaque `element_id` values and an `actions` list.
 `actions` is the canonical admission for that element. It is not inferred from
 the accessibility role alone. The resolved element's local name and input type
 select the effect: native `select` admits `select_option`; text-like inputs and
-`textarea` admit `click` and `input_text`; `number`, `range`, date/time-like
+`textarea` admit `click`, `input_text` (caret insertion), and `set_value`
+(exact replacement via the native value setter plus input/change events); `number`, `range`, date/time-like
 inputs, and `color` admit `set_value`; `file` admits `upload_file`. Native
 `option` nodes remain observable choices and admit no effect. Accessibility
 `spinbutton` and `slider` nodes are not generically actionable. Descendants
@@ -187,7 +343,8 @@ the runtime cannot distinguish `month`, `week`, and `datetime-local`, which
 admit `set_value` when classification succeeds. A custom `combobox` still
 keeps legacy `click`. Pages containing frames require successful DOM
 classification; they do not fall back to role-only authority when that read fails.
-`click`, `input_text`, `select_option`, `set_value`, and `upload_file` reject an
+`click`, `input_text`, `select_option`, `set_value`, `select_choice`, `set_date`,
+and `upload_file` reject an
 element that does not list that action.
 
 Same-origin iframe documents are classified separately using the same DOM and AX
@@ -215,8 +372,8 @@ invalidation behavior as top-document snapshots.
 Element authority is fenced to Browser identity, page identity, current document
 (loader) identity, and snapshot generation. Navigation, document replacement, page
 replacement, a newer snapshot, or Runner restart makes older element IDs stale.
-Before any element effect (`click`, `input_text`, `select_option`, `set_value`, or
-`upload_file`), the runtime re-observes the current page document and requires the
+Before any element effect (`click`, `input_text`, `select_option`, `set_value`,
+`select_choice`, `set_date`, or `upload_file`), the runtime re-observes the current page document and requires the
 complete fence to remain exact. A stale failure never guesses or
 retargets a replacement element; recovery is a fresh
 `observe_browser(action=snapshot, ...)`.

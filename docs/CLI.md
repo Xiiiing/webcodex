@@ -26,11 +26,14 @@ For everyday development, follow the [Full Setup guide](PERSONAL_SETUP.md) and u
 ### Environment configuration
 
 For a new personal machine: `webcodex environment configure --create --runner --scope user`,
-then `webcodex environment configure-tunnel default` and `webcodex environment status`.
-Local user/Runner credentials are created internally; no pairing input is needed.
-Linux user services depend on linger for post-logout persistence; macOS LaunchAgents
-and Windows interactive tasks require a signed-in owner. Scope changes do not adopt
-existing services. [Lifecycle and compatibility details](implementation/personal-environment-lifecycle.md).
+then `webcodex environment configure-tunnel default --host embedded` and
+`webcodex environment status`. Embedded is the recommended persistent ownership:
+the Server loads the profile at startup, while configuration never installs a
+standalone Tunnel service or restarts a running Server implicitly. Local user/Runner
+credentials are created internally; no pairing input is needed. Linux user services
+depend on linger for post-logout persistence; macOS LaunchAgents and Windows
+interactive tasks require a signed-in owner. Scope changes do not adopt existing
+services. [Lifecycle and compatibility details](implementation/personal-environment-lifecycle.md).
 
 `webcodex environment` and Desktop call the same setup core. This namespace configures the machine's persistent environment; the existing project-level `webcodex setup` command keeps its original meaning. Installer availability and native acceptance are tracked in [Unified installation](unified-installation.md) and [Deployment validation](unified-deployment-validation.md).
 
@@ -44,7 +47,10 @@ existing services. [Lifecycle and compatibility details](implementation/personal
 | `invite` | Create a short-lived Runner invitation on the environment's local Server; the displayed code is sensitive. |
 | `add-project PATH` | Reuse the existing Runner identity; a viewer must complete Runner enrollment first. |
 | `status --json` / `doctor --json` | Inspect saved configuration, Server reachability, Runner/project readiness, and structured diagnostics. |
-| `start COMPONENT` / `stop COMPONENT` / `restart COMPONENT` | Explicitly manage an environment-owned `server`, `runner`, or `tunnel`. |
+| `start COMPONENT` / `stop COMPONENT` / `restart COMPONENT` | Explicitly manage an environment-owned `server`, `runner`, or standalone `tunnel`; use `--profile NAME` for a named standalone Tunnel. |
+| `configure-tunnel [PROFILE] --host embedded\|standalone [--credentials-file PATH]` | Create a named profile directly under the Server lifecycle or as a separate service. Credentials come only from hidden input or a protected file. |
+| `tunnel-status [PROFILE]` | Inspect the exact profile identity, owner, readiness and whether an explicit Server restart is required. |
+| `tunnel-host PROFILE --host embedded\|standalone` | Transfer an existing profile only after the previous owner is cleanly stopped and, for standalone, uninstalled. |
 | `repair-user-credential [--token-file PATH]` | Verify and replace the saved user credential without pairing or changing service state. |
 | `repair-credential runner` | Repair Windows SCM account credentials through hidden input. |
 
@@ -127,7 +133,7 @@ For supervised machine integration, `webcodex share --json --stop-on-stdin-eof` 
 
 Shared-key OAuth delegation for Browser Use requires explicit `--oauth-browser-permissions` on `connect --auth oauth`. It adds only `browser:read`, `browser:control`, and `browser:launch`. The baseline excludes Browser scopes. Browser authority is independent of `--oauth-computer-permissions` and its consent checkboxes. Existing clients never expand automatically; narrow historical profiles gain only the explicitly selected class. Scope ceiling changes revoke old grants and require reauthorization. Reusing a Browser-enabled profile requires the flag again.
 
-Operator/admin diagnostics such as `read_tool_trace` are outside ordinary OAuth delegation. Neither OAuth supported scopes nor the shared-key bridge ceiling includes `admin`. Manifest discovery checks caller authority as well as protocol capability. Hard-coded calls remain denied without a challenge suggesting OAuth reconnect can grant `admin`. Missing delegable scopes such as Browser scopes still return the standard `WWW-Authenticate: Bearer error="insufficient_scope"` challenge.
+For managed OAuth, use a PAT with `account:manage` (or the `admin` super-scope) to create/list/update/revoke OAuth clients; ordinary account managers remain limited to their own clients. OAuth access tokens cannot perform these first-party management operations. Authorize only scopes held by the PAT; `offline_access` is a refresh capability, not a runtime permission. To enable admin diagnostics in a managed OAuth connection, authorize your own managed client with an admin PAT. Existing connections need one reauthorization after upgrade; later refreshes preserve the grant authority. Shared-key `connect --auth oauth` does not grant admin. See [Authentication](AUTH_MODEL.md#oauth2).
 
 The advanced managed identity flow remains available as `--auth managed-oauth --oauth-redirect-uri <exact-callback>` and requires `webcodex login`; `--user` applies only to that mode.
 

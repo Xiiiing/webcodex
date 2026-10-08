@@ -11,6 +11,7 @@ use crate::auth::{
 use crate::runner_http::RunnerFeature;
 use serde_json::{json, Value};
 use std::time::Duration;
+use webcodex_core::runner_operation::RunnerBrowserOperationKind;
 
 const BROWSER_WAIT_SECS: u64 = 30;
 const MAX_BROWSER_TARGETS: usize = 64;
@@ -22,6 +23,8 @@ fn browser_snapshot_payload(
     mode: &str,
     max_nodes: Option<usize>,
     max_depth: Option<u32>,
+    node_offset: Option<usize>,
+    query: Option<&webcodex_core::browser_query::BrowserSnapshotQuery>,
 ) -> Value {
     let mut payload = json!({
         "browser_id": browser_id,
@@ -35,6 +38,12 @@ fn browser_snapshot_payload(
     }
     if let Some(max_depth) = max_depth {
         payload["max_depth"] = json!(max_depth);
+    }
+    if let Some(node_offset) = node_offset {
+        payload["node_offset"] = json!(node_offset);
+    }
+    if let Some(query) = query {
+        payload["query"] = json!(query);
     }
     payload
 }
@@ -108,24 +117,6 @@ fn browser_act_policy(call: &BrowserActToolCall) -> SpecializedOperationPolicy {
     }
 }
 
-fn browser_specialized_terminal(result: &ToolResult) -> (&str, Option<&str>) {
-    let dispatch_certainty = result
-        .output
-        .get("execution_state")
-        .and_then(Value::as_str)
-        .unwrap_or(if result.success {
-            "completed"
-        } else {
-            "not_started"
-        });
-    let failure_kind = result
-        .output
-        .get("failure_kind")
-        .or_else(|| result.output.get("error_kind"))
-        .and_then(Value::as_str);
-    (dispatch_certainty, failure_kind)
-}
-
 impl ToolRuntime {
     pub(crate) async fn invoke_browser_observe_gateway(
         &self,
@@ -149,7 +140,7 @@ impl ToolRuntime {
         let result = self
             .dispatch_browser_tool(ToolCall::BrowserObserve(call), auth)
             .await;
-        let (dispatch_certainty, failure_kind) = browser_specialized_terminal(&result);
+        let (dispatch_certainty, failure_kind) = super::specialized::specialized_terminal(&result);
         self.finish_specialized_invocation(
             permit,
             result.success,
@@ -181,7 +172,7 @@ impl ToolRuntime {
         let result = self
             .dispatch_browser_tool(ToolCall::BrowserAct(call), auth)
             .await;
-        let (dispatch_certainty, failure_kind) = browser_specialized_terminal(&result);
+        let (dispatch_certainty, failure_kind) = super::specialized::specialized_terminal(&result);
         self.finish_specialized_invocation(
             permit,
             result.success,
@@ -261,6 +252,8 @@ impl ToolRuntime {
                 mode,
                 max_nodes,
                 max_depth,
+                node_offset,
+                query,
             }) => {
                 self.dispatch_browser_request(
                     &client_id,
@@ -271,6 +264,8 @@ impl ToolRuntime {
                         mode.as_str(),
                         max_nodes,
                         max_depth,
+                        node_offset,
+                        query.as_ref(),
                     ),
                     auth,
                     false,
@@ -538,6 +533,50 @@ impl ToolRuntime {
                 )
                 .await
             }
+            ToolCall::BrowserAct(BrowserActToolCall::SelectChoice {
+                client_id,
+                browser_id,
+                page_id,
+                element_id,
+                choice_path,
+            }) => {
+                self.dispatch_browser_request(
+                    &client_id,
+                    "browser_select_choice",
+                    json!({
+                        "browser_id": browser_id,
+                        "page_id": page_id,
+                        "element_id": element_id,
+                        "choice_path": choice_path
+                    }),
+                    auth,
+                    true,
+                    BrowserRecoveryContext::snapshot(&client_id, &browser_id, &page_id),
+                )
+                .await
+            }
+            ToolCall::BrowserAct(BrowserActToolCall::SetDate {
+                client_id,
+                browser_id,
+                page_id,
+                element_id,
+                value,
+            }) => {
+                self.dispatch_browser_request(
+                    &client_id,
+                    "browser_set_date",
+                    json!({
+                        "browser_id": browser_id,
+                        "page_id": page_id,
+                        "element_id": element_id,
+                        "value": value
+                    }),
+                    auth,
+                    true,
+                    BrowserRecoveryContext::snapshot(&client_id, &browser_id, &page_id),
+                )
+                .await
+            }
             ToolCall::BrowserAct(BrowserActToolCall::SetValue {
                 client_id,
                 browser_id,
@@ -695,6 +734,8 @@ impl ToolRuntime {
                 client.supports(RunnerFeature::BrowserElementActionAdmission);
             let browser_launch = client.supports(RunnerFeature::BrowserLaunch);
             let browser_batch = client.supports(RunnerFeature::BrowserBatch);
+            let browser_semantic_query = client.supports(RunnerFeature::BrowserSemanticQuery);
+            let browser_complex_controls = client.supports(RunnerFeature::BrowserComplexControls);
             let browser_managed_profile = client.supports(RunnerFeature::BrowserManagedProfile);
             let browser_extension_bridge = client.supports(RunnerFeature::BrowserExtensionBridge);
             let browser_surface_handoff = client.supports(RunnerFeature::BrowserSurfaceHandoff);
@@ -715,6 +756,8 @@ impl ToolRuntime {
                     "browser_control": browser_control,
                     "browser_element_action_admission": browser_element_action_admission,
                     "browser_batch": browser_batch,
+                    "browser_semantic_query": browser_semantic_query,
+                    "browser_complex_controls": browser_complex_controls,
                     "browser_managed_profile": browser_managed_profile,
                     "browser_extension_bridge": browser_extension_bridge,
                     "browser_surface_handoff": browser_surface_handoff,
@@ -757,6 +800,8 @@ impl ToolRuntime {
                 | "browser_click"
                 | "browser_input_text"
                 | "browser_select_option"
+                | "browser_select_choice"
+                | "browser_set_date"
                 | "browser_set_value"
                 | "browser_upload_file"
                 | "browser_batch"
@@ -779,6 +824,8 @@ impl ToolRuntime {
             | "browser_click"
             | "browser_input_text"
             | "browser_select_option"
+            | "browser_select_choice"
+            | "browser_set_date"
             | "browser_set_value"
             | "browser_upload_file"
             | "browser_batch"
@@ -845,6 +892,30 @@ impl ToolRuntime {
                     "target Runner does not advertise {}",
                     RunnerFeature::BrowserElementActionAdmission.as_wire_name()
                 ),
+                "not_started",
+                false,
+                None,
+            );
+        }
+        if kind == "browser_snapshot"
+            && payload.get("query").is_some()
+            && !client.supports(RunnerFeature::BrowserSemanticQuery)
+        {
+            return browser_error(
+                "capability_unavailable",
+                "target Runner does not advertise browser_semantic_query",
+                "not_started",
+                false,
+                None,
+            );
+        }
+        if RunnerBrowserOperationKind::from_wire(kind)
+            .is_some_and(|operation| operation.requires_complex_controls(&payload))
+            && !client.supports(RunnerFeature::BrowserComplexControls)
+        {
+            return browser_error(
+                "capability_unavailable",
+                "target Runner does not advertise browser_complex_controls",
                 "not_started",
                 false,
                 None,
@@ -1242,12 +1313,15 @@ mod tests {
             "auto",
             None,
             None,
+            None,
+            None,
         );
         assert_eq!(snapshot["browser_id"], "browser_abcdefghijklmnop");
         assert_eq!(snapshot["page_id"], "page_abcdefghijklmnop");
         assert!(snapshot.get("mode").is_none());
         assert!(snapshot.get("max_nodes").is_none());
         assert!(snapshot.get("max_depth").is_none());
+        assert!(snapshot.get("node_offset").is_none());
 
         let enhanced = browser_snapshot_payload(
             "browser_abcdefghijklmnop",
@@ -1255,10 +1329,29 @@ mod tests {
             "interactive",
             Some(48),
             Some(10),
+            Some(256),
+            None,
         );
         assert_eq!(enhanced["mode"], "interactive");
         assert_eq!(enhanced["max_nodes"], 48);
         assert_eq!(enhanced["max_depth"], 10);
+        assert_eq!(enhanced["node_offset"], 256);
+        let query = webcodex_core::browser_query::BrowserSnapshotQuery {
+            fields_only: true,
+            text: Some("School".into()),
+            ..Default::default()
+        };
+        let queried = browser_snapshot_payload(
+            "browser_fixture",
+            "page_fixture",
+            "auto",
+            None,
+            None,
+            None,
+            Some(&query),
+        );
+        assert_eq!(queried["query"]["fields_only"], true);
+        assert_eq!(queried["query"]["text"], "School");
 
         let diagnostics = browser_diagnostics_payload(
             "browser_abcdefghijklmnop",

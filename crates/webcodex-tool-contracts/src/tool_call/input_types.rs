@@ -309,7 +309,11 @@ pub struct ReadFilesItem {
     /// or manually transfer this value: Runtime places it in parser-ready read_files suggested_call
     /// items when a partial range must continue. If supplied, Runtime rejects the item when that
     /// snapshot is no longer current.
-    #[serde(default, deserialize_with = "deserialize_optional_read_revision")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_read_revision",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub expected_read_revision: Option<u64>,
 }
 
@@ -758,6 +762,15 @@ pub enum BrowserObserveToolCall {
         #[schemars(range(min = 1, max = 32))]
         #[serde(default)]
         max_depth: Option<u32>,
+        /// Skip this many post-filter semantic nodes before returning the bounded window.
+        /// Each window is a fresh snapshot and therefore stales element ids from prior windows.
+        #[schemars(range(min = 0, max = 4096))]
+        #[serde(default)]
+        node_offset: Option<usize>,
+        /// Filter one bounded source before pagination; all returned ids share a fresh generation.
+        /// AND filters; auto mode keeps semantic text. At most 4352 source nodes are searched.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<webcodex_core::browser_query::BrowserSnapshotQuery>,
     },
     Console {
         #[schemars(length(min = 1, max = 128))]
@@ -886,6 +899,26 @@ pub enum BrowserBatchOperation {
         /// Exact native option value or trimmed visible option text.
         #[schemars(length(min = 1, max = 4096))]
         option: String,
+    },
+    /// Choose a custom semantic option or a hierarchical path in one operation.
+    SelectChoice {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Exact normalized labels/values, from outermost choice to leaf.
+        #[schemars(length(min = 1, max = 4))]
+        #[schemars(inner(length(min = 1, max = 4096)))]
+        choice_path: Vec<String>,
+    },
+    /// Set a custom date picker, using a backing input or bounded calendar navigation.
+    SetDate {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Canonical ISO year-month or complete date; calendar validity is checked before effects.
+        #[schemars(length(min = 7, max = 10))]
+        #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}(-[0-9]{2})?$"))]
+        value: String,
     },
     SetValue {
         #[schemars(length(min = 1, max = 128))]
@@ -1025,6 +1058,42 @@ pub enum BrowserActToolCall {
         #[schemars(length(min = 1, max = 4096))]
         option: String,
     },
+    /// Choose a custom semantic option or a hierarchical path in one operation.
+    SelectChoice {
+        #[schemars(length(min = 1, max = 128))]
+        client_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^browser_[A-Za-z0-9_-]{16,64}$"))]
+        browser_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^page_[A-Za-z0-9_-]{16,64}$"))]
+        page_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Exact normalized labels/values, from outermost choice to leaf.
+        #[schemars(length(min = 1, max = 4))]
+        #[schemars(inner(length(min = 1, max = 4096)))]
+        choice_path: Vec<String>,
+    },
+    /// Set a custom date picker, using a backing input or bounded calendar navigation.
+    SetDate {
+        #[schemars(length(min = 1, max = 128))]
+        client_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^browser_[A-Za-z0-9_-]{16,64}$"))]
+        browser_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^page_[A-Za-z0-9_-]{16,64}$"))]
+        page_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Canonical ISO year-month or complete date; calendar validity is checked before effects.
+        #[schemars(length(min = 7, max = 10))]
+        #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}(-[0-9]{2})?$"))]
+        value: String,
+    },
     SetValue {
         #[schemars(length(min = 1, max = 128))]
         client_id: String,
@@ -1111,6 +1180,8 @@ impl BrowserActToolCall {
             Self::Click { .. } => "click",
             Self::InputText { .. } => "input_text",
             Self::SelectOption { .. } => "select_option",
+            Self::SelectChoice { .. } => "select_choice",
+            Self::SetDate { .. } => "set_date",
             Self::SetValue { .. } => "set_value",
             Self::UploadFile { .. } => "upload_file",
             Self::Batch { .. } => "batch",

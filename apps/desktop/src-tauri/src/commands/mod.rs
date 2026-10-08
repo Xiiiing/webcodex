@@ -7,6 +7,37 @@ use crate::tray;
 use serde::Deserialize;
 use tauri::{AppHandle, Manager, State};
 
+// UI intents are process-local and grant no execution or Runtime authority.
+#[tauri::command]
+pub fn desktop_shell_restore_only(shell: State<'_, desktop_shell::DesktopShellState>) -> bool {
+    shell.restore_only()
+}
+
+#[tauri::command]
+pub fn desktop_shell_bootstrap_complete(
+    app: AppHandle,
+    shell: State<'_, desktop_shell::DesktopShellState>,
+) {
+    shell.mark_bootstrap_complete();
+    let snapshot = app.state::<AppState>().get_state();
+    tray::refresh_from_snapshot(&app, &snapshot);
+}
+
+#[tauri::command]
+pub fn read_desktop_navigation(
+    shell: State<'_, desktop_shell::DesktopShellState>,
+) -> Option<desktop_shell::NavigationIntent> {
+    shell.pending_navigation()
+}
+
+#[tauri::command]
+pub fn acknowledge_desktop_navigation(
+    sequence: u32,
+    shell: State<'_, desktop_shell::DesktopShellState>,
+) {
+    shell.acknowledge_navigation(sequence);
+}
+
 #[tauri::command]
 pub fn set_desktop_locale(
     app: AppHandle,
@@ -114,7 +145,7 @@ pub async fn save_tunnel_profile(
 pub async fn tunnel_profile_action(
     app: AppHandle,
     state: State<'_, AppState>,
-    profile_id: crate::connection_id::TunnelProfileId,
+    profile_id: String,
     action: crate::state::ConnectionAction,
 ) -> DesktopResult<DesktopStateSnapshot> {
     project_state_result(&app, state.tunnel_profile_action(profile_id, action).await)
@@ -481,6 +512,15 @@ pub async fn update_runner_allowed_roots(
     project_state_result(&app, state.update_runner_allowed_roots(request).await)
 }
 #[tauri::command]
+pub async fn save_runner_job_concurrency(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: crate::webcodex::settings::JobConcurrencyUpdate,
+) -> Result<DesktopStateSnapshot, DesktopError> {
+    project_state_result(&app, state.save_runner_job_concurrency(request).await)
+}
+
+#[tauri::command]
 pub async fn restart_owned_runner(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -720,7 +760,7 @@ pub async fn install_verified_update(
     {
         // Only the explicit Install confirmation authorizes this exit. The
         // normal exit path closes Desktop-owned processes, not persistent services.
-        app.exit(0);
+        desktop_shell::request_application_exit(&app);
     }
     Ok(())
 }
