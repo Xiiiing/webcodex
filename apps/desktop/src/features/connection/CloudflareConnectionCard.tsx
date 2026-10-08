@@ -79,6 +79,7 @@ export function CloudflareConnectionCard({ profile, canStart, busy, onEdit, onDe
     const observed = current.current;
     if (!observed || inFlight.current || busy) return;
     inFlight.current = true; const attempt = ++sequence.current; setWorking(true); setFailed(false); setOauth(false); setCopied(false);
+    current.current = null; setStatus(null);
     const stop: CloudflareConnectionRequest = { action: "stop", profile_id: profile.id, server_instance_id: observed.server_instance_id, process_generation: observed.process_generation };
     try {
       if (action === "restart") await desktopApi.cloudflareConnection(stop);
@@ -94,8 +95,10 @@ export function CloudflareConnectionCard({ profile, canStart, busy, onEdit, onDe
   return <article className="connection-profile" aria-labelledby={`connection-${profile.id}`} data-tunnel-profile-id={profile.id}>
     <header className="workspace-section-heading"><div><h2 id={`connection-${profile.id}`}>{profile.name}</h2><span className="workspace-observation">{quick ? c("cloudflareQuick") : c("cloudflareNamed")} · {profile.host_mode === "embedded" ? c("serverOwned") : c("separateService")}</span></div><span role="status" className="connection-state">{status?.lifecycle === "running" ? p("running") : status?.lifecycle === "starting" ? p("starting") : status?.lifecycle === "stopped" ? p("stopped") : status?.lifecycle === "disconnected" ? c("cloudflareDisconnected") : status?.lifecycle === "error" ? c("connectionUnavailable") : c("awaitingStatus")}</span></header>
     {origin && <div className="connection-id"><span>MCP</span><code>{origin}/mcp</code><button type="button" className="text-button" onClick={() => { void writeText(`${origin}/mcp`).then(() => setCopied(true)).catch(() => setFailed(true)); }}>{copied ? p("copied") : c("copyMcpAddress")}</button></div>}
+    {status && <p>{c("localForwardingTarget")}: <code>{status.local_target}</code></p>}
     {quick && <p className="workspace-notice">{c("quickReauthorize")}</p>}
     {unselectedService && <p className="workspace-notice">{c("cloudflareSelectService")}</p>}
+    <p>{status?.oauth_configured ? c("oauthConfigured") : c("oauthNotConfigured")}</p>
     <p>{status?.observed_authorization ? c("oauthObserved") : c("oauthNotObserved")}</p>
     {profile.server_restart_required && <p role="status">{c("profileRestartHelp")}</p>}
     {failed && <p role="alert">{c("operationFailed")}</p>}

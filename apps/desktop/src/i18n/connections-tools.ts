@@ -3,6 +3,9 @@ import { PRODUCT_LOCALES } from "./product";
 
 // English, Chinese, German, French, Japanese, Korean; names remain user text.
 export const CONNECTIONS_TOOLS_MESSAGES = {
+  localForwardingTarget: ["Local forwarding target", "本机转发目标", "Lokales Weiterleitungsziel", "Cible locale du transfert", "ローカル転送先", "로컬 전달 대상", "本機轉送目標"],
+  oauthConfigured: ["OAuth configured", "OAuth 已配置", "OAuth konfiguriert", "OAuth configuré", "OAuth 設定済み", "OAuth 설정됨", "OAuth 已設定"],
+  oauthNotConfigured: ["OAuth not configured", "OAuth 尚未配置", "OAuth nicht konfiguriert", "OAuth non configuré", "OAuth 未設定", "OAuth 설정 안 됨", "OAuth 尚未設定"],
   oauthOptionalScopes: ["Optional scopes: add only the permissions your MCP client needs", "可选权限：仅添加 MCP 客户端需要的权限", "Optionale Berechtigungen: nur vom MCP-Client benötigte Rechte hinzufügen", "Autorisations facultatives : ajoutez uniquement celles requises par le client MCP", "任意のスコープ：MCP クライアントに必要な権限だけを追加", "선택 범위: MCP 클라이언트에 필요한 권한만 추가하세요", "可選權限：僅新增 MCP 用戶端需要的權限"],
   cloudflareDisconnected: ["Forwarding disconnected", "转发连接中断", "Weiterleitung unterbrochen", "Transfert déconnecté", "転送接続が切断されました", "전달 연결 끊김", "轉送連線中斷"],
   cloudflareSelectService: ["Enable Start automatically in Edit to select this standalone Cloudflare service before starting it.", "请在编辑中启用自动启动，以选择此独立 Cloudflare 服务后再启动。", "Vor dem Start unter Bearbeiten den automatischen Start aktivieren, um diesen eigenständigen Cloudflare-Dienst auszuwählen.", "Activez le démarrage automatique dans Modifier pour sélectionner ce service Cloudflare indépendant avant de le démarrer.", "起動前に編集で自動起動を有効にし、この個別の Cloudflare サービスを選択してください。", "시작하기 전에 편집에서 자동 시작을 켜 이 독립 Cloudflare 서비스를 선택하세요.", "請在編輯中啟用自動啟動，以選取此獨立 Cloudflare 服務後再啟動。"],

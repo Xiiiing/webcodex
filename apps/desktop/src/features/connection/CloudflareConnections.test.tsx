@@ -68,6 +68,8 @@ describe("Cloudflare private native controls and OAuth handoff",()=>{
     fireEvent.click(await screen.findByRole("button",{name:"Copy MCP address"}));
     await waitFor(()=>expect(clipboard.writeText).toHaveBeenCalledWith("https://current.example/mcp"));
     expect(screen.getByText("OAuth authorization not yet observed")).toBeInTheDocument();
+    expect(screen.getByText("OAuth not configured")).toBeInTheDocument();
+    expect(screen.getByText("http://127.0.0.1:8900")).toBeInTheDocument();
     expect(screen.getByText(/addresses change on reconnect/)).toBeInTheDocument();
   });
   it("shows the first client secret only after explicit callback handoff and clears it on close",async()=>{
@@ -92,6 +94,19 @@ describe("Cloudflare private native controls and OAuth handoff",()=>{
     fireEvent.click(await screen.findByRole("button",{name:"Reconnect"}));
     await waitFor(()=>expect(api.cloudflareConnection).toHaveBeenCalledWith({action:"start",profile_id:"cf",server_instance_id:"server-selected",expected_revision:4}));
     expect(api.cloudflareConnection).toHaveBeenCalledWith({action:"stop",profile_id:"cf",server_instance_id:"server-selected",process_generation:7});
+  });
+  it("clears the old Quick address and authorization observation before reconnect completes",async()=>{
+    let completeStop!: (value:CloudflareConnectionStatus)=>void;
+    api.cloudflareConnection.mockImplementation(request=>request.action==="stop"?new Promise<CloudflareConnectionStatus>(resolve=>{completeStop=resolve;}):Promise.resolve(request.action==="start"?{...status,lifecycle:"starting",public_origin:null,observed_authorization:false}:{...status,oauth_configured:true,observed_authorization:true}));
+    mount();
+    await screen.findByText("OAuth authorization observed");
+    expect(screen.getByText("OAuth configured")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"Reconnect"}));
+    expect(screen.queryByRole("button",{name:"Copy MCP address"})).toBeNull();
+    expect(screen.queryByText("https://current.example/mcp")).toBeNull();
+    expect(screen.queryByText("OAuth authorization observed")).toBeNull();
+    completeStop({...status,lifecycle:"stopped",public_origin:null});
+    await waitFor(()=>expect(api.cloudflareConnection).toHaveBeenCalledWith({action:"start",profile_id:"cf",server_instance_id:"server-selected",expected_revision:4}));
   });
   it("retains address and fenced Stop/Reconnect controls while forwarding is disconnected",async()=>{
     api.cloudflareConnection.mockResolvedValue({...status,lifecycle:"disconnected",reason_code:"network_disconnected",oauth_configured:true,observed_authorization:true});
