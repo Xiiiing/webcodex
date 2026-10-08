@@ -98,3 +98,32 @@ files through existing storage helpers; production permission checks remain
 strict. Three relocation regressions passed on Linux. Windows confirmation for
 this follow-up remains the CI gate, not a native installation claim. The repair
 is appended to this feature PR and does not introduce Runtime dependencies.
+
+## Windows CI investigation, 2026-10-08
+
+At settings-export head `7a322714`, Windows Runner
+[job 113218810442](https://github.com/yyjeqhc/webcodex/actions/runs/37749427831/job/113218810442)
+failed the initial open in
+`runner_windows_local_persistent_shell_preserves_state_and_existing_protocol`:
+the result was `poisoned`, rather than `running` (926 passed, one failed,
+47 ignored). The test never reached its later command/state assertions. This
+was a test failure after compilation, on Windows Server 2025 x64, not an
+installation or native acceptance result. At that failing head, the Runner,
+process and persistent-shell sources matched the upstream baseline.
+
+The old assertion omitted the actual error, and initialization merged timeout
+and lost-control outcomes into the same human-readable message. The diagnostic
+follow-up distinguishes those outcomes and reports only whether a control frame
+and each stream's synchronization marker arrived. It preserves the existing
+error code, terminal state, close reason, shutdown and 30-second startup budget.
+It never emits the control token/path, cwd, initialization source or retained
+stdout/stderr. The native fixture now includes the error and elapsed open time
+in its failure assertion.
+
+Two deterministic fake-transport regressions passed in the dogfood profile;
+they verify diagnostic privacy, terminal poisoning/shutdown and rejection of
+subsequent execution without another transport write. Windows-target library
+and test compilation, Rust formatting and diff checks passed. Cross-compilation
+does not execute Windows behavior. The original native cause remains unconfirmed
+until the updated Windows CI reproduces or supplies a precise outcome; a
+successful later attempt alone must not be described as a repaired startup race.
