@@ -11,7 +11,7 @@ fn input(args: &[&str]) -> Result<Input, String> {
 fn profile() -> CloudflareTunnelRuntimeProfile {
     CloudflareTunnelRuntimeProfile {
         profile_id: "quick".into(),
-        configuration_id: "legacy:quick".into(),
+        configuration_id: "00000000-0000-4000-8000-000000000001".into(),
         provider: TunnelProvider::CloudflareQuick,
         host_mode: TunnelHostMode::Embedded,
         autostart: false,
@@ -153,7 +153,7 @@ fn oauth_scopes_are_bounded_and_identity_sources_do_not_silently_override() {
 
 #[test]
 fn oauth_replacement_requires_explicit_command_scoped_opt_in() {
-    let status = json!({"server_instance_id":"server-one"});
+    let status = json!({"server_instance_id":"server-one","process_generation":42});
     let args = [
         "cloudflare-oauth",
         "quick",
@@ -164,6 +164,7 @@ fn oauth_replacement_requires_explicit_command_scoped_opt_in() {
     let request = oauth_request(&normal, "quick", &status).unwrap();
     assert_eq!(request["replace"], false);
     assert_eq!(request["server_instance_id"], "server-one");
+    assert_eq!(request["process_generation"], 42);
     let mut replace_args = args.to_vec();
     replace_args.push("--replace");
     let replace = input(&replace_args).unwrap();
@@ -171,7 +172,18 @@ fn oauth_replacement_requires_explicit_command_scoped_opt_in() {
     assert_eq!(request["replace"], true);
     assert_eq!(request["redirect_uri"], "https://callback.example.com");
     assert_eq!(request["profile_id"], "quick");
-    assert!(oauth_request(&replace, "quick", &json!({})).is_err());
+    assert_eq!(request["process_generation"], 42);
+    for status in [
+        json!({}),
+        json!({"server_instance_id":"server-one"}),
+        json!({"server_instance_id":"server-one","process_generation":0}),
+        json!({"server_instance_id":"server-one","process_generation":-1}),
+        json!({"server_instance_id":"server-one","process_generation":"42"}),
+        json!({"server_instance_id":"server-one","process_generation":u64::MAX}),
+        json!({"process_generation":42}),
+    ] {
+        assert!(oauth_request(&replace, "quick", &status).is_err());
+    }
     replace_args.push("--replace");
     assert!(input(&replace_args).is_err());
     for command in [
@@ -210,6 +222,47 @@ async fn rejected_control_never_echoes_response_credentials_or_follows_redirect(
     assert!(!error.contains("private-response-credential"));
     assert!(!error.contains("private-bootstrap-fixture"));
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn control_restart_hint_requires_exact_bounded_unapplied_ingress_response() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let restart = json!({
+        "error": "cloudflare_ingress_not_applied",
+        "next_action": "restart_server",
+    })
+    .to_string();
+    for (status, body, expected) in [
+        ("503 Service Unavailable", restart.clone(), INGRESS_RESTART_REQUIRED),
+        ("503 Service Unavailable", json!({"error":"cloudflare_ingress_not_applied","next_action":"restart_server","message":"private-response-credential"}).to_string(), CONTROL_ACTION_REJECTED),
+        ("502 Bad Gateway", restart.clone(), CONTROL_ACTION_REJECTED),
+        ("503 Service Unavailable", json!({"error":"cloudflare_ingress_not_applied"}).to_string(), CONTROL_ACTION_REJECTED),
+        ("503 Service Unavailable", json!({"error":"other","next_action":"restart_server"}).to_string(), CONTROL_ACTION_REJECTED),
+        ("503 Service Unavailable", json!({"error":"cloudflare_ingress_not_applied","next_action":"other"}).to_string(), CONTROL_ACTION_REJECTED),
+        ("503 Service Unavailable", "private-response-credential".into(), CONTROL_ACTION_REJECTED),
+        ("503 Service Unavailable", format!("{restart}{}", " ".repeat(64 * 1024)), CONTROL_ACTION_REJECTED),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            socket.write_all(format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            ).as_bytes()).await.unwrap();
+        });
+        let mut profile = profile();
+        profile.local_server_url = format!("http://{address}");
+        let error = control(&profile, json!({"action":"status","profile_id":"quick"}))
+            .await
+            .unwrap_err();
+        assert_eq!(error, expected);
+        assert!(!error.contains("private-response-credential"));
+        assert!(!error.contains("private-bootstrap-fixture"));
+        server.await.unwrap();
+    }
 }
 
 #[cfg(unix)]

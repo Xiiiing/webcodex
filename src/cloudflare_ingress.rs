@@ -111,6 +111,7 @@ enum ControlRequest {
     ConfigureOauth {
         profile_id: String,
         server_instance_id: String,
+        process_generation: i64,
         redirect_uri: String,
         #[serde(default)]
         scopes: Vec<String>,
@@ -849,6 +850,7 @@ pub(crate) async fn cloudflare_control_handler(
             } => control.stop(&id, &server_instance_id, process_generation, None)?,
             ControlRequest::ConfigureOauth {
                 server_instance_id,
+                process_generation,
                 redirect_uri,
                 scopes,
                 replace,
@@ -864,7 +866,13 @@ pub(crate) async fn cloudflare_control_handler(
                 }) {
                     return Err("cloudflare_owner_administration_required");
                 }
-                return control.provision_oauth(&id, &redirect_uri, scopes, replace);
+                return control.provision_oauth(
+                    &id,
+                    process_generation,
+                    &redirect_uri,
+                    scopes,
+                    replace,
+                );
             }
         }
         serde_json::to_value(control.status(&id)?).map_err(|_| "cloudflare_state_unavailable")
@@ -885,10 +893,16 @@ impl CloudflareControl {
     fn provision_oauth(
         &self,
         id: &str,
+        process_generation: i64,
         redirect_uri: &str,
         scopes: Vec<String>,
         replace: bool,
     ) -> Result<serde_json::Value, &'static str> {
+        // A delayed configuration request must retain the process target the
+        // caller observed, including when a Quick profile has since restarted.
+        if !self.current(id, &self.instance_id, process_generation) {
+            return Err("cloudflare_stale_attempt");
+        }
         crate::oauth_http::validate_redirect_uri(redirect_uri)
             .map_err(|_| "cloudflare_redirect_invalid")?;
         let entry = self
@@ -896,10 +910,27 @@ impl CloudflareControl {
             .get_public_ingress_entry_for_profile(id)
             .map_err(|_| "ingress_store_unavailable")?
             .ok_or("cloudflare_start_required")?;
-        if entry.server_instance_id != self.instance_id {
-            return Err("cloudflare_start_required");
+        if entry.server_instance_id != self.instance_id
+            || entry.process_generation != process_generation
+        {
+            return Err("cloudflare_stale_attempt");
         }
         let profile = self.profile(id)?;
+        // A standalone lease may outlive deletion and same-name recreation.
+        // Retained monotonic profile revisions also fence that replacement.
+        if !self
+            .attempt
+            .lock()
+            .map_err(|_| "ingress_state_unavailable")?
+            .as_ref()
+            .is_some_and(|attempt| {
+                attempt.profile_id == id
+                    && attempt.generation == process_generation
+                    && attempt.revision == profile.revision
+            })
+        {
+            return Err("cloudflare_stale_attempt");
+        }
         let user = self
             .db
             .get_user_by_username(&profile.owner_username)
@@ -946,6 +977,13 @@ impl CloudflareControl {
                 if client.redirect_uris != redirect_uri || client.allowed_scopes != scopes.join(" ")
                 {
                     return Err("cloudflare_oauth_replace_required");
+                }
+                if !self
+                    .db
+                    .oauth_client_matches_public_ingress(&client.client_id, &entry.fence())
+                    .map_err(|_| "ingress_store_unavailable")?
+                {
+                    return Err("cloudflare_stale_attempt");
                 }
                 return Ok(
                     serde_json::json!({"client_id":client.client_id,"client_secret":null,"already_configured":true}),
@@ -1096,6 +1134,12 @@ impl CloudflareOwner {
             generation: std::sync::atomic::AtomicI64::new(0),
             attempt: Mutex::new(None),
         });
+        // Acquire the listener before retiring persisted admission. A failed
+        // bind must leave the current owner's readiness and grants untouched.
+        let acceptor = TcpListener::new(format!("127.0.0.1:{port}"))
+            .try_bind()
+            .await
+            .map_err(std::io::Error::other)?;
         // Persisted readiness never survives takeover. Named grant epochs do.
         if let Some(entry) = db
             .get_active_public_ingress_entry()
@@ -1104,10 +1148,6 @@ impl CloudflareOwner {
             db.set_public_ingress_admission(&entry.fence(), false)
                 .map_err(std::io::Error::other)?;
         }
-        let acceptor = TcpListener::new(format!("127.0.0.1:{port}"))
-            .try_bind()
-            .await
-            .map_err(std::io::Error::other)?;
         let router = Router::new()
             .hoop(crate::server_shutdown::DrainAdmission::new(shutdown))
             .hoop(affix_state::inject(control.clone()))
@@ -1124,7 +1164,6 @@ impl CloudflareOwner {
             .push(
                 Router::new()
                     .hoop(PublicSnapshot)
-                    .hoop(ClientIngressGate)
                     .push(
                         Router::with_path(crate::route_metadata::root_path(
                             crate::route_metadata::RouteId::McpPost,
@@ -1155,30 +1194,35 @@ impl CloudflareOwner {
                         Router::with_path(crate::route_metadata::root_path(
                             crate::route_metadata::RouteId::OAuthAuthorize,
                         ))
+                        .hoop(ClientIngressGate::ClientId)
                         .get(crate::oauth_http::oauth_authorize),
                     )
                     .push(
                         Router::with_path(crate::route_metadata::root_path(
                             crate::route_metadata::RouteId::OAuthAuthorizeLogin,
                         ))
+                        .hoop(ClientIngressGate::LoginReturnTo)
                         .post(crate::oauth_http::oauth_authorize_login),
                     )
                     .push(
                         Router::with_path(crate::route_metadata::root_path(
                             crate::route_metadata::RouteId::OAuthAuthorizeConsent,
                         ))
+                        .hoop(ClientIngressGate::ClientId)
                         .post(crate::oauth_http::oauth_authorize_consent),
                     )
                     .push(
                         Router::with_path(crate::route_metadata::root_path(
                             crate::route_metadata::RouteId::OAuthToken,
                         ))
+                        .hoop(ClientIngressGate::ClientId)
                         .post(crate::oauth_http::oauth_token),
                     )
                     .push(
                         Router::with_path(crate::route_metadata::root_path(
                             crate::route_metadata::RouteId::OAuthRevoke,
                         ))
+                        .hoop(ClientIngressGate::ClientId)
                         .post(crate::oauth_http::oauth_revoke),
                     ),
             );

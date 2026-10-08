@@ -27,7 +27,7 @@ fn default_revision() -> u64 {
     1
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TunnelRecord {
     pub profile_id: String,
     #[serde(default)]
@@ -162,6 +162,21 @@ pub fn tunnel_service_spec(
     profile_id: &str,
 ) -> SetupResultValue<ServiceSpec> {
     validate_id(profile_id)?;
+    let provider = tunnel_profiles(store)?
+        .into_iter()
+        .find(|profile| profile.profile_id == profile_id)
+        .map(|profile| profile.provider)
+        .unwrap_or_default();
+    tunnel_service_spec_for_provider(store, record, profile_id, &provider)
+}
+
+fn tunnel_service_spec_for_provider(
+    store: &EnvironmentStore,
+    record: &EnvironmentRecord,
+    profile_id: &str,
+    provider: &TunnelProvider,
+) -> SetupResultValue<ServiceSpec> {
+    validate_id(profile_id)?;
     if !record.request.local_server() {
         return Err(diagnostic(
             "tunnel_local_server",
@@ -184,28 +199,23 @@ pub fn tunnel_service_spec(
         "openai".into(),
         "--json".into(),
     ];
-    if let Some(profile) = tunnel_profiles(store)?
-        .iter()
-        .find(|profile| profile.profile_id == profile_id)
-    {
-        if profile.provider != TunnelProvider::Openai {
-            args = vec![
-                "server".into(),
-                "tunnel".into(),
-                "--runtime-binding".into(),
-                directory
-                    .join("runtime.json")
-                    .to_string_lossy()
-                    .into_owned(),
-                "--provider".into(),
-                match profile.provider {
-                    TunnelProvider::CloudflareNamed { .. } => "cloudflare_named",
-                    _ => "cloudflare_quick",
-                }
-                .into(),
-                "--json".into(),
-            ];
-        }
+    if provider != &TunnelProvider::Openai {
+        args = vec![
+            "server".into(),
+            "tunnel".into(),
+            "--runtime-binding".into(),
+            directory
+                .join("runtime.json")
+                .to_string_lossy()
+                .into_owned(),
+            "--provider".into(),
+            match provider {
+                TunnelProvider::CloudflareNamed { .. } => "cloudflare_named",
+                _ => "cloudflare_quick",
+            }
+            .into(),
+            "--json".into(),
+        ];
     }
     if cfg!(windows) && record.request.service_scope.is_system() {
         args.splice(0..0, ["--windows-service".into(), id.clone()]);
@@ -803,6 +813,7 @@ impl NativeEnvironment {
         start_standalone: bool,
     ) -> SetupResultValue<TunnelConfigurationResult> {
         validate_id(profile_id)?;
+        crate::cloudflare_tunnel::ensure_cloudflare_profile_available(store, profile_id)?;
         let environment = store
             .load_environment()?
             .or_else(|| {
@@ -1166,10 +1177,30 @@ impl NativeEnvironment {
             ));
         }
         let mut profiles = tunnel_profiles(store)?;
-        let profile = profiles
+        let current = profiles
             .iter()
             .find(|profile| profile.profile_id == profile_id)
             .cloned();
+        let pending =
+            crate::cloudflare_tunnel::pending_cloudflare_profile_cleanup(store, profile_id)?;
+        if let Some(pending) = &pending {
+            if pending.environment_id != environment.environment_id {
+                return Err(diagnostic(
+                    "environment_changed",
+                    "The unfinished Cloudflare removal belongs to another Environment",
+                ));
+            }
+            if current
+                .as_ref()
+                .is_some_and(|profile| *profile != pending.profile)
+            {
+                return Err(diagnostic(
+                    "tunnel_revision_stale",
+                    "The unfinished removal cannot target a replacement Tunnel profile",
+                ));
+            }
+        }
+        let profile = current.or_else(|| pending.map(|pending| pending.profile));
         validate_expected_revision(profile.as_ref(), expected_revision)?;
         let profile =
             profile.ok_or_else(|| diagnostic("tunnel_profile", "Tunnel profile does not exist"))?;
@@ -1181,7 +1212,8 @@ impl NativeEnvironment {
                 "The Tunnel profile was replaced; reload it before removal",
             ));
         }
-        let spec = tunnel_service_spec(store, &environment, profile_id)?;
+        let spec =
+            tunnel_service_spec_for_provider(store, &environment, profile_id, &profile.provider)?;
         let standalone = ServiceManager::inspect(&spec).map_err(service_error)?;
         if profile.host_mode == TunnelHostMode::Embedded {
             let server = ServiceManager::inspect(&crate::service_spec(
@@ -1251,55 +1283,24 @@ impl NativeEnvironment {
                 std::fs::remove_file(&health).map_err(|_| SetupDiagnostic::io())?;
             }
         } else {
-            // The retained directory owns the monotonic edit fence across
-            // deletion/recreation. Flush it before withdrawing the catalog.
-            crate::cloudflare_tunnel::retain_cloudflare_profile_revision(store, &profile)?;
+            // Persist the exact retirement before withdrawing the sole live
+            // catalog record. A crash on either side remains safely resumable.
+            crate::cloudflare_tunnel::begin_cloudflare_profile_cleanup(
+                store,
+                &_lock,
+                &environment.environment_id,
+                &profile,
+            )?;
         }
         profiles.retain(|profile| profile.profile_id != profile_id);
         store.write_json("tunnel.json", &profiles)?;
         if profile.provider != TunnelProvider::Openai {
-            if env.exists() {
-                std::fs::remove_file(env).map_err(|_| SetupDiagnostic::io())?;
-            }
-            if health.exists() {
-                std::fs::remove_file(&health).map_err(|_| SetupDiagnostic::io())?;
-            }
-            let runtime = spec.working_directory.join("runtime.json");
-            if runtime.try_exists().map_err(|_| SetupDiagnostic::io())? {
-                std::fs::remove_file(runtime).map_err(|_| SetupDiagnostic::io())?;
-            }
-            let tokens = spec.working_directory.join("tokens");
-            if tokens.try_exists().map_err(|_| SetupDiagnostic::io())? {
-                crate::storage::validate_existing_private_directory(&tokens)?;
-                let paths = std::fs::read_dir(&tokens)
-                    .map_err(|_| SetupDiagnostic::io())?
-                    .take(65)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|_| SetupDiagnostic::io())?;
-                if paths.len() > 64 {
-                    return Err(diagnostic(
-                        "cloudflare_token_capacity",
-                        "Cloudflare credential cleanup exceeds its bounded capacity",
-                    ));
-                }
-                for entry in paths {
-                    let path = entry.path();
-                    let metadata =
-                        std::fs::symlink_metadata(&path).map_err(|_| SetupDiagnostic::io())?;
-                    if crate::storage::is_link(&metadata)
-                        || !metadata.is_file()
-                        || uuid::Uuid::parse_str(&entry.file_name().to_string_lossy()).is_err()
-                    {
-                        return Err(diagnostic(
-                            "cloudflare_token",
-                            "Cloudflare credential cleanup found an unexpected private entry",
-                        ));
-                    }
-                    std::fs::remove_file(path).map_err(|_| SetupDiagnostic::io())?;
-                }
-                std::fs::remove_dir(tokens).map_err(|_| SetupDiagnostic::io())?;
-            }
-            materialize_cloudflare_tunnel_profiles(store)?;
+            crate::cloudflare_tunnel::complete_cloudflare_profile_cleanup(
+                store,
+                &_lock,
+                &environment.environment_id,
+                &profile,
+            )?;
         }
         Ok(())
     }
@@ -1310,18 +1311,77 @@ impl NativeEnvironment {
         profile_id: &str,
         operation: ServiceOperation,
     ) -> SetupResultValue<service::ServiceStatus> {
+        self.control_tunnel_with_observation(store, profile_id, operation, None)
+            .await
+    }
+
+    /// Control only the exact Cloudflare configuration observed by the caller.
+    /// The observation is rechecked under the setup lock before any service effect.
+    pub async fn control_cloudflare_tunnel(
+        &self,
+        store: &EnvironmentStore,
+        expected_environment_id: &str,
+        expected_profile: &CloudflareTunnelRuntimeProfile,
+        operation: ServiceOperation,
+    ) -> SetupResultValue<service::ServiceStatus> {
+        self.control_tunnel_with_observation(
+            store,
+            &expected_profile.profile_id,
+            operation,
+            Some((expected_environment_id, expected_profile)),
+        )
+        .await
+    }
+
+    async fn control_tunnel_with_observation(
+        &self,
+        store: &EnvironmentStore,
+        profile_id: &str,
+        operation: ServiceOperation,
+        observation: Option<(&str, &CloudflareTunnelRuntimeProfile)>,
+    ) -> SetupResultValue<service::ServiceStatus> {
         let _lock = store.lock()?;
         crate::ensure_upgrade_idle_under_lock(store)?;
-        require_standalone(store, profile_id)?;
         let environment = store.load_environment()?.ok_or_else(|| {
             diagnostic("not_configured", "Configure the Server environment first")
         })?;
+        let profile = tunnel_profiles(store)?
+            .into_iter()
+            .find(|profile| profile.profile_id == profile_id);
+        if let Some((expected_environment_id, expected_profile)) = observation {
+            if environment.environment_id != expected_environment_id {
+                return Err(diagnostic(
+                    "environment_changed",
+                    "The saved Environment changed; refresh before controlling its Tunnel",
+                ));
+            }
+            validate_expected_revision(profile.as_ref(), Some(expected_profile.revision))?;
+            let current = profile.as_ref().ok_or_else(|| {
+                diagnostic(
+                    "tunnel_revision_stale",
+                    "The Tunnel profile no longer exists",
+                )
+            })?;
+            if current.provider == TunnelProvider::Openai
+                || current.provider != expected_profile.provider
+                || current.host_mode != expected_profile.host_mode
+                || current.effective_configuration_id().as_deref()
+                    != Some(expected_profile.configuration_id.as_str())
+            {
+                return Err(diagnostic(
+                    "tunnel_revision_stale",
+                    "The Cloudflare profile was replaced; refresh before controlling it",
+                ));
+            }
+        }
+        let cloudflare_profile = profile
+            .as_ref()
+            .filter(|profile| profile.provider != TunnelProvider::Openai);
+        let cloudflare = cloudflare_profile.is_some();
+        crate::cloudflare_tunnel::ensure_cloudflare_profile_available(store, profile_id)?;
+        require_standalone(store, profile_id)?;
         let spec = tunnel_service_spec(store, &environment, profile_id)?;
         let mut status = ServiceManager::inspect(&spec).map_err(service_error)?;
-        let cloudflare_profile = tunnel_profiles(store)?.into_iter().find(|profile| {
-            profile.profile_id == profile_id && profile.provider != TunnelProvider::Openai
-        });
-        let cloudflare = cloudflare_profile.is_some();
         if cloudflare_profile
             .as_ref()
             .is_some_and(|profile| !profile.autostart)

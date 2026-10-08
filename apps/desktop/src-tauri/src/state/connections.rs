@@ -320,6 +320,29 @@ impl DesktopCore {
         let store = super::environment::store()?;
         self.tunnel_config
             .ensure_persistent_catalog_compatible(&store)?;
+        let native = webcodex_environment::NativeEnvironment::new()
+            .map_err(super::environment::desktop_error)?;
+        if action == ConnectionAction::Delete {
+            if let (Some(revision), Some(configuration_id), Some(environment_id)) = (
+                expected_revision,
+                expected_configuration_id,
+                self.config.persistent_environment.as_deref(),
+            ) {
+                // Cleanup may outlive removal from the catalog. Preserve the caller's
+                // exact retired identity so a retry cannot delete a replacement.
+                native
+                    .remove_tunnel_fenced(
+                        &store,
+                        id,
+                        Some(revision),
+                        Some(environment_id),
+                        Some(configuration_id),
+                    )
+                    .await
+                    .map_err(super::environment::desktop_error)?;
+                return cancellation.check();
+            }
+        }
         let profile = webcodex_environment::tunnel_profile_snapshots(&store)
             .map_err(super::environment::desktop_error)?
             .into_iter()
@@ -339,8 +362,6 @@ impl DesktopCore {
                 ));
             }
         }
-        let native = webcodex_environment::NativeEnvironment::new()
-            .map_err(super::environment::desktop_error)?;
         if action == ConnectionAction::Delete {
             if profile.provider != webcodex_environment::TunnelProvider::Openai
                 && (expected_revision.is_none() || expected_configuration_id.is_none())

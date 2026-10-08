@@ -100,6 +100,11 @@ fresh Server instance once, then pins all callbacks to it. Desktop action
 requests use the observed instance/revision and never retry against a newly
 observed owner automatically.
 
+OAuth client provisioning and replacement also carry the caller-observed Server
+instance and `process_generation`. The Server verifies that exact active attempt
+and its current profile revision before changing the client. A stale request
+preserves the existing client and authorization grants.
+
 Desktop and CLI distinguish process/network state, OAuth configuration and an
 actually observed valid OAuth request. A successful transport probe does not
 prove that ChatGPT has connected. A temporary forwarding failure becomes
@@ -109,13 +114,24 @@ After a new Quick URL, update the ChatGPT MCP address and authorize again. Named
 restarts with the same origin and owner preserve grants; a changed origin/owner,
 or deleting and recreating a profile, invalidates the old authorization.
 
+Removal verifies the stopped lifecycle owner, then records the exact Environment,
+profile incarnation and revision being retired. If private cleanup fails, retry
+removal with that original observation even if the catalog entry is already gone.
+Pending cleanup blocks launch, editing and recreation; unknown private files are
+retained and reported instead of deleted. The retirement record permits cleanup
+recovery only and never supplies a launchable configuration.
+
 Network reconnect changes observation only. It never resubmits a tool call or
 recreates a Job. Observe the existing Job by its original identity using the
 Runtime's existing reconciliation and recovery contracts.
 
-The ingress port is allocated once and saved separately. A port conflict fails
-startup explicitly; the Server does not pick a different hidden target. Windows
-services use installer-granted protected runtime materializations instead of
+The ingress port is allocated once and saved separately. The first dedicated
+listener is applied at Server startup. A running Server that predates it returns
+`cloudflare_ingress_not_applied` with `next_action: restart_server`; Desktop offers
+an explicit Server restart for this response. Ordinary connection errors do not
+imply that a restart is required. A port conflict fails startup explicitly; the
+Server does not pick a different hidden target. Windows services use
+installer-granted protected runtime materializations instead of
 reading the user's root catalog. Changed/new protected metadata requires an
 explicit stopped-owner Server apply/restart to grant its exact service identity;
 unchanged files preserve their existing ACL. No broad root-directory ACL is added.

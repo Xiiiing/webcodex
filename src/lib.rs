@@ -714,7 +714,6 @@ explicitly allow remote shared-key auth."
         .hoop(affix_state::inject(cloudflare_control))
         .hoop(affix_state::inject(project_auth.clone()))
         .hoop(affix_state::inject(console_asset_source))
-        .hoop(public_ingress_auth::ClientIngressGate)
         .hoop(cors.into_handler())
         .push(api_router)
         .push(health_router)
@@ -725,10 +724,12 @@ explicitly allow remote shared-key auth."
         // client_id + client_secret in the form body.
         .push(
             Router::with_path(route_metadata::root_path(RouteId::OAuthToken))
+                .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                 .post(oauth_http::oauth_token),
         )
         .push(
             Router::with_path(route_metadata::root_path(RouteId::OAuthRevoke))
+                .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                 .post(oauth_http::oauth_revoke),
         )
         // /oauth/authorize is NOT behind AuthMiddleware: the handler accepts
@@ -740,14 +741,17 @@ explicitly allow remote shared-key auth."
             Router::new()
                 .push(
                     Router::with_path(route_metadata::root_path(RouteId::OAuthAuthorize))
+                        .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                         .get(oauth_http::oauth_authorize),
                 )
                 .push(
                     Router::with_path(route_metadata::root_path(RouteId::OAuthAuthorizeLogin))
+                        .hoop(public_ingress_auth::ClientIngressGate::LoginReturnTo)
                         .post(oauth_http::oauth_authorize_login),
                 )
                 .push(
                     Router::with_path(route_metadata::root_path(RouteId::OAuthAuthorizeConsent))
+                        .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                         .post(oauth_http::oauth_authorize_consent),
                 )
                 .push(

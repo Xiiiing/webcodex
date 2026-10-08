@@ -71,6 +71,26 @@ describe("Cloudflare private native controls and OAuth handoff",()=>{
     expect(repair).toHaveBeenCalledOnce();
     expect(api.cloudflareConnection.mock.calls.every(([request])=>request.action==="status")).toBe(true);
   });
+  it("offers an explicit Server restart when the Server has not loaded its first Cloudflare connection",async()=>{
+    const restart=vi.fn();
+    api.cloudflareConnection.mockRejectedValue({code:"cloudflare_ingress_not_applied",message:"Cloudflare is not loaded",next_action:"Restart the Server"});
+    render(wrap(<CloudflareConnectionCard profile={connectionFixture({id:"cf",revision:4,provider:{kind:"cloudflare_quick"},host_mode:"standalone",autostart:true})} canStart busy={false} onEdit={vi.fn()} onDelete={vi.fn()} onRestartServer={restart} />));
+    expect(await screen.findByText("Restart WebCodex Server to apply saved connections")).toBeInTheDocument();
+    expect(screen.getByText(/Active Server and Runner work may be interrupted/)).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"Start"})).toBeDisabled();
+    expect(restart).not.toHaveBeenCalled();
+    expect(api.cloudflareConnection.mock.calls.every(([request])=>request.action==="status")).toBe(true);
+    fireEvent.click(screen.getByRole("button",{name:"Restart Server"}));
+    expect(restart).toHaveBeenCalledOnce();
+  });
+  it("does not infer a Server restart from an ordinary control failure",async()=>{
+    api.cloudflareConnection.mockRejectedValue(new Error("private-response-body"));
+    render(wrap(<CloudflareConnectionCard profile={connectionFixture({id:"cf",revision:4,provider:{kind:"cloudflare_quick"}})} canStart busy={false} onEdit={vi.fn()} onDelete={vi.fn()} onRestartServer={vi.fn()} />));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:"Restart Server"})).toBeNull();
+    expect(screen.queryByText("private-response-body")).toBeNull();
+    expect(screen.queryByText("Restart WebCodex Server to apply saved connections")).toBeNull();
+  });
   function mount() {return render(wrap(<CloudflareConnectionCard profile={connectionFixture({id:"cf",revision:4,provider:{kind:"cloudflare_quick"},credential_present:false,host_mode:"embedded"})} canStart busy={false} onEdit={vi.fn()} onDelete={vi.fn()} />));}
   it("copies the current MCP origin and keeps observed authorization separate from process readiness",async()=>{
     mount();
@@ -92,7 +112,7 @@ describe("Cloudflare private native controls and OAuth handoff",()=>{
     fireEvent.change(screen.getByLabelText("OAuth callback URL"),{target:{value:"https://client.example/callback"}});
     fireEvent.click(screen.getByRole("button",{name:"Create client credentials"}));
     expect(await screen.findByLabelText("Client secret")).toHaveValue("one-time-secret");
-    expect(api.cloudflareConnection).toHaveBeenCalledWith({action:"configure_oauth",profile_id:"cf",server_instance_id:"server-selected",redirect_uri:"https://client.example/callback",scopes:["runtime:read","runner:manage","session:collaborate","project:read","project:write","job:run"],replace:false});
+    expect(api.cloudflareConnection).toHaveBeenCalledWith({action:"configure_oauth",profile_id:"cf",server_instance_id:"server-selected",process_generation:7,redirect_uri:"https://client.example/callback",scopes:["runtime:read","runner:manage","session:collaborate","project:read","project:write","job:run"],replace:false});
     fireEvent.click(screen.getAllByRole("button",{name:"Close"})[0]);
     await waitFor(()=>expect(screen.queryByLabelText("Client secret")).toBeNull());
     fireEvent.click(screen.getByRole("button",{name:"Configure OAuth"}));
@@ -134,7 +154,7 @@ describe("Cloudflare private native controls and OAuth handoff",()=>{
     expect(screen.getByText(/secret cannot be read again/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("OAuth callback URL"),{target:{value:"https://client.example/new"}});
     fireEvent.click(screen.getByRole("button",{name:"Replace credentials and reauthorize"}));
-    await waitFor(()=>expect(api.cloudflareConnection).toHaveBeenCalledWith(expect.objectContaining({action:"configure_oauth",replace:true,server_instance_id:"server-selected"})));
+    await waitFor(()=>expect(api.cloudflareConnection).toHaveBeenCalledWith(expect.objectContaining({action:"configure_oauth",replace:true,server_instance_id:"server-selected",process_generation:7})));
   });
   it("does not retry a rejected action against a replacement Server",async()=>{
     api.cloudflareConnection.mockImplementation(async request=> {

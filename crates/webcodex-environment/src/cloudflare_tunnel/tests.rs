@@ -539,6 +539,7 @@ fn revision_tombstone_overflow_and_corruption_fail_closed() {
         &path,
         &serde_json::to_vec(&RevisionTombstone {
             last_revision: u64::MAX,
+            pending_cleanup: None,
         })
         .unwrap(),
     )
@@ -589,4 +590,354 @@ async fn deletion_fence_rejects_replaced_environment_and_cross_provider_incarnat
     );
     assert_eq!(read_secret(&token).unwrap().expose(), "retained-token");
     assert_eq!(tunnel_profiles(&store).unwrap().len(), 1);
+}
+
+fn saved_cloudflare_control_fixture() -> (tempfile::TempDir, EnvironmentStore, TunnelRecord, PathBuf)
+{
+    let (temp, store) = fixture();
+    save_environment(&store);
+    store
+        .write_json(
+            "server/cloudflare-ingress.json",
+            &IngressConfiguration { port: 45678 },
+        )
+        .unwrap();
+    let mut saved = record("named", named("https://mcp.example.com", "id-one"), true);
+    saved.configuration_id = Some(uuid::Uuid::new_v4().to_string());
+    saved.host_mode = TunnelHostMode::Standalone;
+    let token = bind(&store, &saved, Some("retained-token")).unwrap();
+    store.write_json("tunnel.json", &[saved.clone()]).unwrap();
+    (temp, store, saved, token)
+}
+
+#[tokio::test]
+async fn standalone_control_rechecks_observed_identity_under_lock_before_service_effects() {
+    let (_temp, store, saved, token) = saved_cloudflare_control_fixture();
+    let observed = cloudflare_tunnel_profile(&store, &saved.profile_id).unwrap();
+    let environment = store.load_environment().unwrap().unwrap();
+    let backend = NativeEnvironment::new().unwrap();
+    let held = store.lock().unwrap();
+    assert_eq!(
+        backend
+            .control_cloudflare_tunnel(
+                &store,
+                &environment.environment_id,
+                &observed,
+                ServiceOperation::Start,
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "setup_busy"
+    );
+    drop(held);
+    for change in [
+        "revision",
+        "incarnation",
+        "environment",
+        "provider",
+        "host_mode",
+    ] {
+        let mut current = saved.clone();
+        let mut current_environment = environment.clone();
+        match change {
+            "revision" => current.revision += 1,
+            "incarnation" => current.configuration_id = Some(uuid::Uuid::new_v4().to_string()),
+            "environment" => current_environment.environment_id = "replacement-environment".into(),
+            "provider" => current.provider = TunnelProvider::CloudflareQuick,
+            "host_mode" => current.host_mode = TunnelHostMode::Embedded,
+            _ => unreachable!(),
+        }
+        store.write_json("tunnel.json", &[current]).unwrap();
+        store.save_environment(&current_environment).unwrap();
+        for operation in [ServiceOperation::Start, ServiceOperation::Stop] {
+            let error = backend
+                .control_cloudflare_tunnel(
+                    &store,
+                    &environment.environment_id,
+                    &observed,
+                    operation,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                if change == "environment" {
+                    "environment_changed"
+                } else {
+                    "tunnel_revision_stale"
+                },
+                "{change}"
+            );
+        }
+        assert_eq!(read_secret(&token).unwrap().expose(), "retained-token");
+        assert!(!profile_directory(&store, &saved.profile_id)
+            .join("runtime.json")
+            .exists());
+        assert!(!store.root().join("server/cloudflare-tunnels.json").exists());
+    }
+}
+
+#[tokio::test]
+async fn retirement_intent_fences_live_catalog_before_withdrawal_and_rejects_replacement() {
+    let (_temp, store, saved, token) = saved_cloudflare_control_fixture();
+    let observed = cloudflare_tunnel_profile(&store, &saved.profile_id).unwrap();
+    let runtime = materialize_cloudflare_tunnel_profiles(&store)
+        .unwrap()
+        .remove(0);
+    let backend = NativeEnvironment::new().unwrap();
+    let held = store.lock().unwrap();
+    // Model a crash after the owner gate and durable intent, before catalog commit.
+    begin_cloudflare_profile_cleanup(&store, &held, "environment", &saved).unwrap();
+    drop(held);
+    assert_eq!(tunnel_profiles(&store).unwrap(), vec![saved.clone()]);
+    assert_eq!(
+        backend
+            .set_tunnel_host(&store, &saved.profile_id, saved.host_mode)
+            .unwrap_err()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    assert_eq!(
+        cloudflare_tunnel_profile(&store, &saved.profile_id)
+            .err()
+            .unwrap()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    assert_eq!(
+        load_cloudflare_tunnel_materialization(&runtime)
+            .err()
+            .unwrap()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    assert_eq!(
+        embedded_tunnel_profiles(store.root()).unwrap_err().code,
+        "tunnel_profile_recovery_required"
+    );
+    assert_eq!(
+        materialize_cloudflare_tunnel_profiles(&store)
+            .unwrap_err()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    let request = CloudflareTunnelProfileRequest {
+        profile_id: &saved.profile_id,
+        name: Some("Changed while deletion is pending"),
+        host_mode: saved.host_mode,
+        autostart: saved.autostart,
+        expected_revision: Some(saved.revision),
+        provider: saved.provider.clone(),
+        token: None,
+        ingress_port: None,
+    };
+    assert_eq!(
+        backend
+            .configure_cloudflare_tunnel_profile(&store, &request)
+            .await
+            .unwrap_err()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    assert_eq!(
+        backend
+            .control_cloudflare_tunnel(&store, "environment", &observed, ServiceOperation::Start,)
+            .await
+            .unwrap_err()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    let mut replacement = saved.clone();
+    replacement.configuration_id = Some(uuid::Uuid::new_v4().to_string());
+    store
+        .write_json("tunnel.json", &[replacement.clone()])
+        .unwrap();
+    assert_eq!(
+        backend
+            .remove_tunnel_fenced(
+                &store,
+                &replacement.profile_id,
+                Some(replacement.revision),
+                Some("environment"),
+                replacement.configuration_id.as_deref(),
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "tunnel_revision_stale"
+    );
+    assert_eq!(tunnel_profiles(&store).unwrap(), vec![replacement]);
+    assert_eq!(read_secret(&token).unwrap().expose(), "retained-token");
+}
+
+#[tokio::test]
+async fn withdrawn_profile_cleanup_retains_exact_recovery_and_resumes_after_local_failure() {
+    let (_temp, store, saved, token) = saved_cloudflare_control_fixture();
+    let directory = profile_directory(&store, &saved.profile_id);
+    let runtime = materialize_cloudflare_tunnel_profiles(&store)
+        .unwrap()
+        .remove(0);
+    let unknown = directory.join("tokens/unknown-private-entry");
+    let interrupted_write = directory.join(format!(".setup-{}", uuid::Uuid::new_v4().simple()));
+    atomic_private_write(&interrupted_write, b"private-bootstrap-canary").unwrap();
+    let lifecycle_log = directory.join(service::SERVICE_LOG_NAME);
+    atomic_private_write(&lifecycle_log, b"retained-lifecycle-events").unwrap();
+    let held = store.lock().unwrap();
+    // The native stopped-owner gate precedes this filesystem transaction.
+    begin_cloudflare_profile_cleanup(&store, &held, "environment", &saved).unwrap();
+    store
+        .write_json("tunnel.json", &Vec::<TunnelRecord>::new())
+        .unwrap();
+    let error =
+        complete_cloudflare_profile_cleanup(&store, &held, "environment", &saved).unwrap_err();
+    assert_eq!(error.code, "cloudflare_token");
+    assert!(tunnel_profiles(&store).unwrap().is_empty());
+    assert_eq!(read_secret(&token).unwrap().expose(), "retained-token");
+    assert_eq!(
+        read_secret(&interrupted_write).unwrap().expose(),
+        "private-bootstrap-canary"
+    );
+    // Resolve only the injected root artifact, then independently inject an
+    // unknown token entry and prove that failure also preserves the intent.
+    std::fs::remove_file(&interrupted_write).unwrap();
+    atomic_private_write(&unknown, b"do-not-remove-unrecognized-files").unwrap();
+    assert_eq!(
+        complete_cloudflare_profile_cleanup(&store, &held, "environment", &saved)
+            .unwrap_err()
+            .code,
+        "cloudflare_token"
+    );
+    assert_eq!(
+        read_secret(&unknown).unwrap().expose(),
+        "do-not-remove-unrecognized-files"
+    );
+    assert_eq!(
+        pending_cloudflare_profile_cleanup(&store, &saved.profile_id)
+            .unwrap()
+            .unwrap()
+            .profile,
+        saved
+    );
+    drop(held);
+    let backend = NativeEnvironment::new().unwrap();
+    for (revision, environment, configuration, expected_error) in [
+        (
+            saved.revision + 1,
+            "environment",
+            saved.configuration_id.as_deref().unwrap(),
+            "tunnel_revision_stale",
+        ),
+        (
+            saved.revision,
+            "replaced-environment",
+            saved.configuration_id.as_deref().unwrap(),
+            "environment_changed",
+        ),
+        (
+            saved.revision,
+            "environment",
+            "another-incarnation",
+            "tunnel_revision_stale",
+        ),
+    ] {
+        assert_eq!(
+            backend
+                .remove_tunnel_fenced(
+                    &store,
+                    &saved.profile_id,
+                    Some(revision),
+                    Some(environment),
+                    Some(configuration),
+                )
+                .await
+                .unwrap_err()
+                .code,
+            expected_error
+        );
+        assert!(token.exists());
+        assert!(unknown.exists());
+    }
+    let replacement_token = Secret::new("replacement-token".into());
+    let request = CloudflareTunnelProfileRequest {
+        profile_id: &saved.profile_id,
+        name: None,
+        host_mode: saved.host_mode,
+        autostart: saved.autostart,
+        expected_revision: None,
+        provider: saved.provider.clone(),
+        token: Some(&replacement_token),
+        ingress_port: None,
+    };
+    assert_eq!(
+        backend
+            .configure_cloudflare_tunnel_profile(&store, &request)
+            .await
+            .unwrap_err()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    assert_eq!(
+        next_cloudflare_profile_revision(&store, &saved.profile_id)
+            .unwrap_err()
+            .code,
+        "tunnel_profile_recovery_required"
+    );
+    // Resolve only the test-injected obstruction. Simulate a prior cleanup step
+    // having completed before another crash; the retry tolerates missing files.
+    std::fs::remove_file(&unknown).unwrap();
+    std::fs::remove_file(directory.join("webcodex.env")).unwrap();
+    let held = store.lock().unwrap();
+    complete_cloudflare_profile_cleanup(&store, &held, "environment", &saved).unwrap();
+    assert!(!token.exists());
+    assert!(!runtime.exists());
+    assert!(!directory.join("tokens").exists());
+    assert!(directory.join("revision.json").exists());
+    assert_eq!(
+        read_secret(&lifecycle_log).unwrap().expose(),
+        "retained-lifecycle-events"
+    );
+    assert!(
+        pending_cloudflare_profile_cleanup(&store, &saved.profile_id)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        next_cloudflare_profile_revision(&store, &saved.profile_id).unwrap(),
+        saved.revision + 1
+    );
+    assert!(
+        load_cloudflare_server_materializations(&store.root().join("server"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pending_retirement_record_remains_private_and_bounded() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_temp, store, saved, _) = saved_cloudflare_control_fixture();
+    let held = store.lock().unwrap();
+    begin_cloudflare_profile_cleanup(&store, &held, "environment", &saved).unwrap();
+    let path = profile_directory(&store, &saved.profile_id).join("revision.json");
+    let original = crate::storage::read_private(&path).unwrap();
+    assert!(original.len() < MAX_REVISION_TOMBSTONE_BYTES);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(pending_cloudflare_profile_cleanup(&store, &saved.profile_id).is_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    atomic_private_write(&path, &vec![b' '; MAX_REVISION_TOMBSTONE_BYTES + 1]).unwrap();
+    assert_eq!(
+        pending_cloudflare_profile_cleanup(&store, &saved.profile_id)
+            .err()
+            .unwrap()
+            .code,
+        "tunnel_revision"
+    );
+    atomic_private_write(&path, &original).unwrap();
+    assert!(
+        pending_cloudflare_profile_cleanup(&store, &saved.profile_id)
+            .unwrap()
+            .is_some()
+    );
 }

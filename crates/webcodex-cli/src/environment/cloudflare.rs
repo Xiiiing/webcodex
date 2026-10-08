@@ -4,6 +4,9 @@ use crate::ServerTunnelProvider;
 use serde_json::{json, Value};
 use std::time::Duration;
 
+const CONTROL_ACTION_REJECTED: &str = "The owning Server rejected the Cloudflare action; refresh its profile and runtime status before retrying";
+const INGRESS_RESTART_REQUIRED: &str = "The owning Server has not applied its Cloudflare ingress configuration; restart that Server, then refresh its profile status and retry";
+
 pub(super) fn validate_input(input: &Input) -> Result<(), String> {
     if (input.tunnel_provider.is_some()
         || input.public_origin.is_some()
@@ -239,19 +242,46 @@ async fn control(
         .send()
         .await
         .map_err(|_| "The owning Server's Cloudflare control endpoint is unavailable")?;
-    if !response.status().is_success() {
-        return Err("The owning Server rejected the Cloudflare action; refresh its profile and runtime status before retrying".into());
+    let status = response.status();
+    if !status.is_success() && status != reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        return Err(CONTROL_ACTION_REJECTED.into());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "Could not read local Cloudflare control response")?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|_| {
+        if status.is_success() {
+            "Could not read local Cloudflare control response"
+        } else {
+            CONTROL_ACTION_REJECTED
+        }
+    })? {
         if bytes.len().saturating_add(chunk.len()) > 64 * 1024 {
-            return Err("Local Cloudflare control response exceeds its bounded size".into());
+            return Err(if status.is_success() {
+                "Local Cloudflare control response exceeds its bounded size".into()
+            } else {
+                CONTROL_ACTION_REJECTED.into()
+            });
         }
         bytes.extend_from_slice(&chunk);
+    }
+    if !status.is_success() {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RejectedControlResponse {
+            error: String,
+            next_action: String,
+        }
+        // Error bodies are untrusted. Recognize only this restart contract;
+        // never project response text or credentials into a CLI error.
+        let restart_required =
+            serde_json::from_slice::<RejectedControlResponse>(&bytes).is_ok_and(|rejected| {
+                rejected.error == "cloudflare_ingress_not_applied"
+                    && rejected.next_action == "restart_server"
+            });
+        return Err(if restart_required {
+            INGRESS_RESTART_REQUIRED.into()
+        } else {
+            CONTROL_ACTION_REJECTED.into()
+        });
     }
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|_| "The owning Server returned an invalid Cloudflare response")?;
@@ -350,10 +380,16 @@ fn action_request(
 }
 
 fn oauth_request(input: &Input, id: &str, status: &Value) -> Result<Value, String> {
+    let process_generation = status
+        .get("process_generation")
+        .and_then(Value::as_i64)
+        .filter(|generation| *generation > 0)
+        .ok_or("Cloudflare status does not identify a current process generation")?;
     Ok(json!({
         "action":"configure_oauth",
         "profile_id":id,
         "server_instance_id":server_instance(status)?,
+        "process_generation":process_generation,
         "redirect_uri":input.redirect_uri,
         "scopes":input.scopes.clone().unwrap_or_default(),
         "replace":input.replace,
@@ -368,6 +404,11 @@ pub(super) async fn run_profile_action(
     expected_revision: Option<u64>,
     json_output: bool,
 ) -> Result<String, String> {
+    let environment_id = store
+        .load_environment()
+        .map_err(|error| error.to_string())?
+        .ok_or("No saved environment is available")?
+        .environment_id;
     let profile = cloudflare_tunnel_profile(store, id).map_err(|error| error.to_string())?;
     if expected_revision.is_some_and(|revision| revision != profile.revision) {
         return Err("The Cloudflare profile changed; reload it before starting".into());
@@ -381,7 +422,7 @@ pub(super) async fn run_profile_action(
             ServiceOperation::Stop
         };
         let status = backend
-            .control_tunnel(store, id, operation)
+            .control_cloudflare_tunnel(store, &environment_id, &profile, operation)
             .await
             .map_err(|error| error.to_string())?;
         serde_json::to_value(status).map_err(|_| "Could not encode standalone Cloudflare status")?

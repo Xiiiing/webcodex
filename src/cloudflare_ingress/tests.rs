@@ -1,4 +1,7 @@
 use super::*;
+use crate::models::{
+    OAuthAccessTokenRecord, OAuthAuthorizationCodeRecord, OAuthRefreshTokenRecord,
+};
 use crate::test_support::{seed_user, test_config_oauth2, test_db};
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
@@ -66,6 +69,104 @@ impl Fixture {
     }
 }
 
+fn activate_quick_fixture(
+    control: &CloudflareControl,
+    origin: &str,
+) -> (PreparedIngress, PublicIngressEntry) {
+    let standalone = control.profile("quick").unwrap().host_mode == TunnelHostMode::Standalone;
+    let prepared = control.prepare("quick", 1, standalone).unwrap();
+    let mut guard = control.attempt.lock().unwrap();
+    let attempt = guard.as_mut().unwrap();
+    let entry = control
+        .db
+        .finalize_public_ingress_origin(&attempt.entry.as_ref().unwrap().fence(), origin)
+        .unwrap()
+        .unwrap();
+    assert!(control
+        .db
+        .set_public_ingress_admission(&entry.fence(), true)
+        .unwrap());
+    let entry = control
+        .db
+        .get_public_ingress_entry(&entry.entry_id)
+        .unwrap()
+        .unwrap();
+    attempt.entry = Some(entry.clone());
+    attempt.lifecycle = "running";
+    attempt.network_ready = true;
+    (prepared, entry)
+}
+
+fn issue_access_grant_fixture(
+    control: &CloudflareControl,
+    entry: &PublicIngressEntry,
+    client_id: &str,
+) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let code = OAuthAuthorizationCodeRecord {
+        id: "current-code".into(),
+        code_hash: "current-code-hash".into(),
+        client_id: client_id.into(),
+        subject_kind: "managed_user".into(),
+        subject_id: entry.owner_user_id.clone(),
+        user_id: Some(entry.owner_user_id.clone()),
+        redirect_uri: "https://current.example/callback".into(),
+        scopes: "runtime:read".into(),
+        code_challenge: None,
+        code_challenge_method: None,
+        resource: None,
+        shared_key_hash: None,
+        created_at: now,
+        expires_at: now + 600,
+        used_at: None,
+        revoked_at: None,
+        admin_authority: false,
+    };
+    assert!(control
+        .db
+        .insert_public_ingress_oauth_authorization_code(&code, &code.code_hash, &entry.fence())
+        .unwrap());
+    let access = OAuthAccessTokenRecord {
+        id: "current-access".into(),
+        token_hash: "current-access-hash".into(),
+        client_id: client_id.into(),
+        subject_kind: code.subject_kind.clone(),
+        subject_id: code.subject_id.clone(),
+        user_id: code.user_id.clone(),
+        scopes: code.scopes.clone(),
+        resource: None,
+        shared_key_hash: None,
+        created_at: now,
+        expires_at: now + 3600,
+        revoked_at: None,
+        last_used_at: None,
+        admin_authority: false,
+    };
+    let refresh = OAuthRefreshTokenRecord {
+        id: "current-refresh".into(),
+        token_hash: "current-refresh-hash".into(),
+        client_id: client_id.into(),
+        subject_kind: code.subject_kind.clone(),
+        subject_id: code.subject_id.clone(),
+        user_id: code.user_id.clone(),
+        scopes: code.scopes.clone(),
+        resource: None,
+        shared_key_hash: None,
+        created_at: now,
+        expires_at: now + 7200,
+        revoked_at: None,
+        last_used_at: None,
+        rotated_from_id: None,
+        admin_authority: false,
+    };
+    assert!(control
+        .db
+        .exchange_oauth_authorization_code_for_tokens(&code.code_hash, now, &access, &refresh)
+        .unwrap()
+        .is_some());
+    access.token_hash
+}
+
 #[test]
 fn prepare_stop_restart_fences_profile_revision_instance_and_generation() {
     let fixture = Fixture::new();
@@ -109,7 +210,7 @@ fn prepare_stop_restart_fences_profile_revision_instance_and_generation() {
 fn oauth_handoff_is_once_and_replacement_revokes_previous_client() {
     let fixture = Fixture::new();
     let control = fixture.control;
-    control.prepare("quick", 1, false).unwrap();
+    let prepared = control.prepare("quick", 1, false).unwrap();
     let entry = control
         .db
         .get_public_ingress_entry_for_profile("quick")
@@ -125,19 +226,43 @@ fn oauth_handoff_is_once_and_replacement_revokes_previous_client() {
         .set_public_ingress_admission(&entry.fence(), true)
         .unwrap());
     let first = control
-        .provision_oauth("quick", "https://client.example/callback", vec![], false)
+        .provision_oauth(
+            "quick",
+            prepared.process_generation,
+            "https://client.example/callback",
+            vec![],
+            false,
+        )
         .unwrap();
     assert!(first["client_secret"].as_str().is_some());
     let repeated = control
-        .provision_oauth("quick", "https://client.example/callback", vec![], false)
+        .provision_oauth(
+            "quick",
+            prepared.process_generation,
+            "https://client.example/callback",
+            vec![],
+            false,
+        )
         .unwrap();
     assert!(repeated["client_secret"].is_null());
     assert_eq!(repeated["client_id"], first["client_id"]);
     assert!(control
-        .provision_oauth("quick", "https://other.example/callback", vec![], false)
+        .provision_oauth(
+            "quick",
+            prepared.process_generation,
+            "https://other.example/callback",
+            vec![],
+            false
+        )
         .is_err());
     let replacement = control
-        .provision_oauth("quick", "https://other.example/callback", vec![], true)
+        .provision_oauth(
+            "quick",
+            prepared.process_generation,
+            "https://other.example/callback",
+            vec![],
+            true,
+        )
         .unwrap();
     assert_ne!(replacement["client_id"], first["client_id"]);
     assert!(control
@@ -148,11 +273,122 @@ fn oauth_handoff_is_once_and_replacement_revokes_previous_client() {
     assert!(control
         .provision_oauth(
             "quick",
+            prepared.process_generation,
             "https://other.example/callback",
             vec!["admin".into()],
             true
         )
         .is_err());
+}
+
+async fn assert_stale_oauth_configuration_preserves_current_grants(replace_profile: bool) {
+    use salvo::test::{ResponseExt, TestClient};
+
+    let fixture = Fixture::new();
+    let control = fixture.control;
+    let profiles_path = control.root.join("tunnel.json");
+    let mut profiles: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&profiles_path).unwrap()).unwrap();
+    profiles[0]["host_mode"] = json!("standalone");
+    profiles[0]["autostart"] = json!(true);
+    private_file(&profiles_path, &serde_json::to_vec(&profiles).unwrap());
+
+    let (first, first_entry) = activate_quick_fixture(&control, "https://first.trycloudflare.com");
+    let stale_request = json!({
+        "action": "configure_oauth",
+        "profile_id": first.profile_id,
+        "server_instance_id": first.server_instance_id,
+        "process_generation": first.process_generation,
+        "redirect_uri": "https://stale.example/callback",
+        "replace": true
+    });
+    let entry = if replace_profile {
+        first_entry
+    } else {
+        control
+            .stop(
+                "quick",
+                &control.instance_id,
+                first.process_generation,
+                None,
+            )
+            .unwrap();
+        activate_quick_fixture(&control, "https://second.trycloudflare.com").1
+    };
+    let current = control
+        .provision_oauth(
+            "quick",
+            entry.process_generation,
+            "https://current.example/callback",
+            vec![],
+            false,
+        )
+        .unwrap();
+    let current_id = current["client_id"].as_str().unwrap();
+    let access_hash = issue_access_grant_fixture(&control, &entry, current_id);
+    assert!(control
+        .db
+        .oauth_access_token_matches_public_ingress(&access_hash, Some(&entry.fence()))
+        .unwrap());
+
+    if replace_profile {
+        // Standalone removal can finish before its old Server lease expires.
+        profiles[0]["configuration_id"] = json!("00000000-0000-4000-8000-000000000002");
+        profiles[0]["revision"] = json!(2);
+        profiles[0]["runtime_revision"] = json!(2);
+        private_file(&profiles_path, &serde_json::to_vec(&profiles).unwrap());
+    }
+
+    let service = Service::new(
+        Router::with_path("api/connections/cloudflare")
+            .hoop(affix_state::inject(Some(control.clone())))
+            .hoop(affix_state::inject(control.config.clone()))
+            .hoop(affix_state::inject(control.db.clone()))
+            .hoop(crate::AuthMiddleware)
+            .post(cloudflare_control_handler),
+    );
+    let mut response = TestClient::post("http://127.0.0.1:8888/api/connections/cloudflare")
+        .bearer_auth("private-bootstrap")
+        .json(&stale_request)
+        .send(&service)
+        .await;
+
+    let client_retained = control
+        .db
+        .get_oauth_client_by_client_id(current_id)
+        .unwrap()
+        .is_some();
+    let grant_retained = control
+        .db
+        .oauth_access_token_matches_public_ingress(&access_hash, Some(&entry.fence()))
+        .unwrap();
+    assert_eq!(
+        (client_retained, grant_retained),
+        (true, true),
+        "stale replacement must not revoke the current target's client or grants"
+    );
+    assert_eq!(response.status_code, Some(StatusCode::CONFLICT));
+    assert_eq!(
+        response.take_json::<serde_json::Value>().await.unwrap()["error"],
+        "cloudflare_stale_attempt"
+    );
+    assert_eq!(
+        control
+            .db
+            .get_public_ingress_entry(&entry.entry_id)
+            .unwrap(),
+        Some(entry)
+    );
+}
+
+#[tokio::test]
+async fn oauth_configuration_rejects_stale_generation_without_revoking_current_grants() {
+    assert_stale_oauth_configuration_preserves_current_grants(false).await;
+}
+
+#[tokio::test]
+async fn oauth_configuration_rejects_recreated_profile_before_old_lease_expires() {
+    assert_stale_oauth_configuration_preserves_current_grants(true).await;
 }
 
 async fn probe_response(body: Vec<u8>, prepared: &PreparedIngress) -> Result<bool, &'static str> {
@@ -317,15 +553,18 @@ async fn public_snapshot_enforces_pkce_and_origin_without_changing_private_confi
 
 #[tokio::test]
 async fn configured_listener_port_conflict_is_explicit_and_never_reallocated() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
     let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = occupied.local_addr().unwrap().port();
+    Arc::get_mut(&mut fixture.control).unwrap().ingress_port = port;
     private_file(
         &fixture.control.root.join("server/cloudflare-ingress.json"),
         serde_json::to_string(&json!({"port":port}))
             .unwrap()
             .as_bytes(),
     );
+    let (_, active_entry) =
+        activate_quick_fixture(&fixture.control, "https://active.trycloudflare.com");
     let result = CloudflareOwner::from_root(
         fixture.control.root.clone(),
         fixture.control.config.clone(),
@@ -337,6 +576,15 @@ async fn configured_listener_port_conflict_is_explicit_and_never_reallocated() {
     )
     .await;
     assert!(result.is_err());
+    assert_eq!(
+        fixture
+            .control
+            .db
+            .get_public_ingress_entry(&active_entry.entry_id)
+            .unwrap(),
+        Some(active_entry),
+        "failed listener takeover must not retire the active owner's admission or grants"
+    );
     assert_eq!(
         webcodex_environment::cloudflare_ingress_port(
             &EnvironmentStore::open(fixture.control.root.clone()).unwrap()

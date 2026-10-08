@@ -23,6 +23,7 @@ pub enum CloudflareConnectionRequest {
     ConfigureOauth {
         profile_id: String,
         server_instance_id: String,
+        process_generation: u64,
         redirect_uri: String,
         scopes: Vec<String>,
         #[serde(default)]
@@ -193,7 +194,7 @@ impl AppState {
                 // never restarts the shared Server to control that service.
                 webcodex_environment::NativeEnvironment::new()
                     .map_err(environment::desktop_error)?
-                    .control_tunnel(&store, &profile.profile_id, action)
+                    .control_cloudflare_tunnel(&store, expected_environment, &profile, action)
                     .await
                     .map_err(environment::desktop_error)?;
                 control_response(
@@ -260,10 +261,10 @@ async fn control_response(
         .send()
         .await
         .map_err(|_| unavailable())?;
-    if !response.status().is_success()
-        || response
-            .content_length()
-            .is_some_and(|length| length > 32 * 1024)
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > 32 * 1024)
     {
         return Err(unavailable());
     }
@@ -273,6 +274,27 @@ async fn control_response(
             return Err(unavailable());
         }
         bytes.extend_from_slice(&chunk);
+    }
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ControlFailure {
+            error: String,
+            next_action: String,
+        }
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            && serde_json::from_slice::<ControlFailure>(&bytes).is_ok_and(|failure| {
+                failure.error == "cloudflare_ingress_not_applied"
+                    && failure.next_action == "restart_server"
+            })
+        {
+            return Err(DesktopError::new(
+                "cloudflare_ingress_not_applied",
+                "The running Server has not loaded Cloudflare connections yet",
+                "Review the saved connection and explicitly restart the Server to apply it.",
+            ));
+        }
+        return Err(unavailable());
     }
     Ok(bytes)
 }

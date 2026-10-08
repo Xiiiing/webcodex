@@ -93,9 +93,12 @@ pub(crate) fn require_json_authority(
     Ok(())
 }
 
-/// Applied to both private and public OAuth routes, so a bound client cannot
-/// mint grants through an alternative listener or an unrelated profile.
-pub(crate) struct ClientIngressGate;
+/// Attached directly to matched OAuth routes on both listeners. Route matching
+/// owns path normalization, so URI aliases cannot skip the audience check.
+pub(crate) enum ClientIngressGate {
+    ClientId,
+    LoginReturnTo,
+}
 
 #[async_trait]
 impl Handler for ClientIngressGate {
@@ -106,17 +109,6 @@ impl Handler for ClientIngressGate {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        if !matches!(
-            req.uri().path(),
-            "/oauth/authorize"
-                | "/oauth/authorize/login"
-                | "/oauth/authorize/consent"
-                | "/oauth/token"
-                | "/oauth/revoke"
-        ) {
-            ctrl.call_next(req, depot, res).await;
-            return;
-        }
         let mut client_id = req.query::<String>("client_id");
         if req.method() == salvo::http::Method::POST {
             if let Ok(body) = req.payload().await {
@@ -128,7 +120,7 @@ impl Handler for ClientIngressGate {
                         .find(|(name, _)| name == "client_id")
                         .map(|(_, value)| value.clone())
                         .or(client_id);
-                    if req.uri().path() == "/oauth/authorize/login" {
+                    if matches!(self, Self::LoginReturnTo) {
                         if let Some((_, return_to)) =
                             pairs.iter().find(|(name, _)| name == "return_to")
                         {

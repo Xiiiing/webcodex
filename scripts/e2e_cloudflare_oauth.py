@@ -323,6 +323,7 @@ class Fixture(Smoke):
         origin = status["public_origin"]
         if client is None:
             client = self.control(profile, "configure_oauth", server_instance_id=status["server_instance_id"],
+                                  process_generation=status["process_generation"],
                                   redirect_uri=REDIRECT, scopes=SCOPES)
             check(isinstance(client.get("client_secret"), str), "new OAuth secret absent")
         verifier = secrets.token_urlsafe(48)

@@ -63,35 +63,110 @@ fn invalid(code: &str, message: &str) -> SetupDiagnostic {
     )
 }
 
+const MAX_REVISION_TOMBSTONE_BYTES: usize = 8 * 1024;
+
 #[derive(Serialize, Deserialize)]
 struct RevisionTombstone {
     last_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_cleanup: Option<CloudflareProfileCleanup>,
+}
+
+/// A retired configuration is retained only to resume its exact private cleanup.
+/// The live catalog remains the sole configuration authority; this cannot launch.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct CloudflareProfileCleanup {
+    pub environment_id: String,
+    pub profile: TunnelRecord,
+}
+
+fn cleanup_required() -> SetupDiagnostic {
+    invalid(
+        "tunnel_profile_recovery_required",
+        "Cloudflare profile removal is incomplete; retry removal with its original identity",
+    )
+}
+
+fn parse_revision_tombstone(id: &str, bytes: &[u8]) -> SetupResultValue<RevisionTombstone> {
+    if bytes.len() > MAX_REVISION_TOMBSTONE_BYTES {
+        return Err(invalid(
+            "tunnel_revision",
+            "Cloudflare profile revision history exceeds its bounded size",
+        ));
+    }
+    let saved: RevisionTombstone = serde_json::from_slice(bytes).map_err(|_| {
+        invalid(
+            "tunnel_revision",
+            "Cloudflare profile revision history is invalid",
+        )
+    })?;
+    if let Some(cleanup) = &saved.pending_cleanup {
+        validate_catalog(std::slice::from_ref(&cleanup.profile))?;
+        if cleanup.environment_id.is_empty()
+            || cleanup.environment_id.len() > 256
+            || cleanup.environment_id.chars().any(char::is_control)
+            || cleanup.profile.profile_id != id
+            || cleanup.profile.provider == TunnelProvider::Openai
+            || cleanup.profile.revision.max(1) != saved.last_revision
+        {
+            return Err(invalid(
+                "tunnel_revision",
+                "Cloudflare cleanup identity is invalid",
+            ));
+        }
+    }
+    Ok(saved)
+}
+
+fn read_revision_tombstone(
+    store: &EnvironmentStore,
+    id: &str,
+) -> SetupResultValue<Option<RevisionTombstone>> {
+    validate_id(id)?;
+    let path = profile_directory(store, id).join("revision.json");
+    crate::storage::validate_directory_ancestors(path.parent().ok_or_else(SetupDiagnostic::io)?)?;
+    if !path.try_exists().map_err(|_| SetupDiagnostic::io())? {
+        return Ok(None);
+    }
+    parse_revision_tombstone(id, &crate::storage::read_private(&path)?).map(Some)
+}
+
+fn write_revision_tombstone(
+    store: &EnvironmentStore,
+    id: &str,
+    saved: &RevisionTombstone,
+) -> SetupResultValue<()> {
+    let bytes = serde_json::to_vec(saved).map_err(|_| SetupDiagnostic::io())?;
+    parse_revision_tombstone(id, &bytes)?;
+    atomic_private_write(&profile_directory(store, id).join("revision.json"), &bytes)
+}
+
+pub(crate) fn pending_cloudflare_profile_cleanup(
+    store: &EnvironmentStore,
+    id: &str,
+) -> SetupResultValue<Option<CloudflareProfileCleanup>> {
+    Ok(read_revision_tombstone(store, id)?.and_then(|saved| saved.pending_cleanup))
+}
+
+pub(crate) fn ensure_cloudflare_profile_available(
+    store: &EnvironmentStore,
+    id: &str,
+) -> SetupResultValue<()> {
+    if pending_cloudflare_profile_cleanup(store, id)?.is_some() {
+        return Err(cleanup_required());
+    }
+    Ok(())
 }
 
 pub(crate) fn next_cloudflare_profile_revision(
     store: &EnvironmentStore,
     id: &str,
 ) -> SetupResultValue<u64> {
-    validate_id(id)?;
-    let path = profile_directory(store, id).join("revision.json");
-    crate::storage::validate_directory_ancestors(path.parent().ok_or_else(SetupDiagnostic::io)?)?;
-    if !path.try_exists().map_err(|_| SetupDiagnostic::io())? {
-        return Ok(1);
+    match read_revision_tombstone(store, id)? {
+        None => Ok(1),
+        Some(saved) if saved.pending_cleanup.is_some() => Err(cleanup_required()),
+        Some(saved) => next_revision(saved.last_revision),
     }
-    let bytes = crate::storage::read_private(&path)?;
-    if bytes.len() > 1024 {
-        return Err(invalid(
-            "tunnel_revision",
-            "Cloudflare profile revision history exceeds its bounded size",
-        ));
-    }
-    let saved: RevisionTombstone = serde_json::from_slice(&bytes).map_err(|_| {
-        invalid(
-            "tunnel_revision",
-            "Cloudflare profile revision history is invalid",
-        )
-    })?;
-    next_revision(saved.last_revision)
 }
 
 pub(crate) fn retain_cloudflare_profile_revision(
@@ -101,11 +176,161 @@ pub(crate) fn retain_cloudflare_profile_revision(
     let previous = next_cloudflare_profile_revision(store, &profile.profile_id)?.saturating_sub(1);
     let saved = RevisionTombstone {
         last_revision: previous.max(profile.revision.max(1)),
+        pending_cleanup: None,
     };
-    atomic_private_write(
-        &profile_directory(store, &profile.profile_id).join("revision.json"),
-        &serde_json::to_vec(&saved).map_err(|_| SetupDiagnostic::io())?,
-    )
+    write_revision_tombstone(store, &profile.profile_id, &saved)
+}
+
+/// Called under the setup lock only after the old lifecycle owner is stopped.
+/// Persist the cleanup intent before the caller withdraws the live catalog entry.
+pub(crate) fn begin_cloudflare_profile_cleanup(
+    store: &EnvironmentStore,
+    _lock: &EnvironmentLock,
+    environment_id: &str,
+    profile: &TunnelRecord,
+) -> SetupResultValue<()> {
+    if let Some(pending) = pending_cloudflare_profile_cleanup(store, &profile.profile_id)? {
+        return if pending.environment_id == environment_id && pending.profile == *profile {
+            Ok(())
+        } else {
+            Err(invalid(
+                "tunnel_revision_stale",
+                "A different Cloudflare configuration has an unfinished removal",
+            ))
+        };
+    }
+    retain_cloudflare_profile_revision(store, profile)?;
+    let mut saved =
+        read_revision_tombstone(store, &profile.profile_id)?.ok_or_else(cleanup_required)?;
+    saved.pending_cleanup = Some(CloudflareProfileCleanup {
+        environment_id: environment_id.to_owned(),
+        profile: profile.clone(),
+    });
+    write_revision_tombstone(store, &profile.profile_id, &saved)
+}
+
+fn cleanup_regular_file(path: &Path) -> SetupResultValue<Option<PathBuf>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !crate::storage::is_link(&metadata) && metadata.is_file() => {
+            Ok(Some(path.to_path_buf()))
+        }
+        Ok(_) => Err(invalid(
+            "cloudflare_token",
+            "Cloudflare credential cleanup found an unexpected private entry",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(SetupDiagnostic::io()),
+    }
+}
+
+/// Reentrant cleanup for a withdrawn catalog record. Unknown artifacts remain
+/// untouched, and any failure retains the exact retirement fact for a retry.
+pub(crate) fn complete_cloudflare_profile_cleanup(
+    store: &EnvironmentStore,
+    _lock: &EnvironmentLock,
+    environment_id: &str,
+    profile: &TunnelRecord,
+) -> SetupResultValue<()> {
+    let id = &profile.profile_id;
+    let mut saved = read_revision_tombstone(store, id)?.ok_or_else(cleanup_required)?;
+    let pending = saved
+        .pending_cleanup
+        .as_ref()
+        .ok_or_else(cleanup_required)?;
+    if pending.environment_id != environment_id || pending.profile != *profile {
+        return Err(invalid(
+            "tunnel_revision_stale",
+            "The Cloudflare cleanup no longer belongs to the observed configuration",
+        ));
+    }
+    if tunnel_profiles(store)?
+        .iter()
+        .any(|current| current.profile_id == *id)
+    {
+        return Err(cleanup_required());
+    }
+    let directory = profile_directory(store, id);
+    crate::storage::validate_existing_private_directory(&directory)?;
+    // Atomic writes can leave a private .setup file after a crash. Its contents
+    // are unknown, so retain the retirement instead of claiming cleanup finished.
+    let entries = std::fs::read_dir(&directory)
+        .map_err(|_| SetupDiagnostic::io())?
+        .take(7)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| SetupDiagnostic::io())?;
+    if entries.len() > 6 {
+        return Err(invalid(
+            "cloudflare_token_capacity",
+            "Cloudflare profile cleanup exceeds its bounded artifact capacity",
+        ));
+    }
+    let mut files = Vec::new();
+    for entry in entries {
+        let name = entry.file_name();
+        match name.to_str() {
+            Some("webcodex.env" | "readiness.json" | "runtime.json") => {
+                if let Some(path) = cleanup_regular_file(&entry.path())? {
+                    files.push(path);
+                }
+            }
+            Some("tokens") => {} // Validated independently with its own bound below.
+            Some("revision.json") => {
+                let _ = cleanup_regular_file(&entry.path())?;
+            }
+            Some(name) if name == service::SERVICE_LOG_NAME => {
+                // Fixed lifecycle events remain useful after removal and contain no credentials.
+                let _ = cleanup_regular_file(&entry.path())?;
+            }
+            _ => {
+                return Err(invalid(
+                    "cloudflare_token",
+                    "Cloudflare profile cleanup found an unexpected private entry",
+                ));
+            }
+        }
+    }
+    let tokens = directory.join("tokens");
+    let has_tokens = match std::fs::symlink_metadata(&tokens) {
+        Ok(_) => {
+            crate::storage::validate_existing_private_directory(&tokens)?;
+            let entries = std::fs::read_dir(&tokens)
+                .map_err(|_| SetupDiagnostic::io())?
+                .take(65)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| SetupDiagnostic::io())?;
+            if entries.len() > 64 {
+                return Err(invalid(
+                    "cloudflare_token_capacity",
+                    "Cloudflare credential cleanup exceeds its bounded capacity",
+                ));
+            }
+            for entry in entries {
+                if uuid::Uuid::parse_str(&entry.file_name().to_string_lossy()).is_err() {
+                    return Err(invalid(
+                        "cloudflare_token",
+                        "Cloudflare credential cleanup found an unexpected private entry",
+                    ));
+                }
+                if let Some(path) = cleanup_regular_file(&entry.path())? {
+                    files.push(path);
+                }
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err(SetupDiagnostic::io()),
+    };
+    // Update the existing Server materialization before removing capabilities;
+    // the retirement guard also fences an older service-owned runtime binding.
+    materialize_cloudflare_tunnel_profiles(store)?;
+    for path in files {
+        std::fs::remove_file(path).map_err(|_| SetupDiagnostic::io())?;
+    }
+    if has_tokens {
+        std::fs::remove_dir(tokens).map_err(|_| SetupDiagnostic::io())?;
+    }
+    saved.pending_cleanup = None;
+    write_revision_tombstone(store, id, &saved)
 }
 
 pub(crate) fn validate_provider(provider: &TunnelProvider) -> SetupResultValue<()> {
@@ -333,6 +558,7 @@ pub fn cloudflare_tunnel_profile(
     profile_id: &str,
 ) -> SetupResultValue<CloudflareTunnelRuntimeProfile> {
     validate_id(profile_id)?;
+    ensure_cloudflare_profile_available(store, profile_id)?;
     let profiles = tunnel_profiles(store)?;
     validate_catalog(&profiles)?;
     let profile = profiles
@@ -585,6 +811,19 @@ pub fn load_cloudflare_tunnel_materialization(
             "tunnel_profile_configuration",
             "Cloudflare runtime materialization identity is invalid",
         ));
+    }
+    let retirement_path = directory.join("revision.json");
+    if retirement_path
+        .try_exists()
+        .map_err(|_| SetupDiagnostic::io())?
+    {
+        let retirement = parse_revision_tombstone(
+            &binding.profile_id,
+            &read_runtime_private(&retirement_path)?,
+        )?;
+        if retirement.pending_cleanup.is_some() {
+            return Err(cleanup_required());
+        }
     }
     validate_control_binding(&binding.local_server_url, &binding.bootstrap_token)?;
     let token_file = match (&binding.provider, binding.token_ref) {
@@ -850,6 +1089,7 @@ impl NativeEnvironment {
         let _lock = store.lock()?;
         ensure_upgrade_idle_under_lock(store)?;
         validate_id(request.profile_id)?;
+        ensure_cloudflare_profile_available(store, request.profile_id)?;
         validate_provider(&request.provider)?;
         if request.provider == TunnelProvider::Openai {
             return Err(invalid(
@@ -974,6 +1214,8 @@ impl NativeEnvironment {
         }
         let server = service_spec(store, &environment, service::Component::Server)?;
         let server_status = service::ServiceManager::inspect(&server).map_err(service_error)?;
+        let server_running = server_status.ownership == service::Ownership::Owned
+            && server_status.running == Some(true);
         let owner_status = if request.host_mode == TunnelHostMode::Embedded {
             if standalone_status.ownership != service::Ownership::Absent {
                 return Err(invalid(
@@ -995,6 +1237,7 @@ impl NativeEnvironment {
             ));
         }
         let _ = server_control_binding(store)?;
+        let first_ingress = cloudflare_ingress_port(store)?.is_none();
         let port = desired_ingress_port(store, request.ingress_port)?;
         ensure_private_directory(&directory)?;
         let token_file = if token_changed {
@@ -1077,24 +1320,29 @@ impl NativeEnvironment {
         let applied_revision = crate::tunnel::read_tunnel_health(&directory.join("readiness.json"))
             .ok()
             .and_then(|health| health.profile_revision);
-        let server_restart_required = request.host_mode == TunnelHostMode::Embedded
-            && running
-            && (runtime_changed
-                || applied_revision != Some(profiles[index].effective_runtime_revision()));
-        let next_action = match (
-            request.host_mode,
-            running,
-            server_restart_required || runtime_changed,
-        ) {
-            (TunnelHostMode::Embedded, true, true) => TunnelConfigurationNextAction::RestartServer,
-            (TunnelHostMode::Embedded, false, _) => TunnelConfigurationNextAction::StartServer,
-            (TunnelHostMode::Standalone, true, true) => {
-                TunnelConfigurationNextAction::RestartStandalone
+        // The Server owns admission even for a standalone process. Its first
+        // dedicated listener cannot be added by starting only the Tunnel service.
+        let server_restart_required = server_running && first_ingress
+            || request.host_mode == TunnelHostMode::Embedded
+                && running
+                && (runtime_changed
+                    || applied_revision != Some(profiles[index].effective_runtime_revision()));
+        let next_action = if server_restart_required {
+            TunnelConfigurationNextAction::RestartServer
+        } else {
+            match (request.host_mode, running, runtime_changed) {
+                (TunnelHostMode::Embedded, true, true) => {
+                    TunnelConfigurationNextAction::RestartServer
+                }
+                (TunnelHostMode::Embedded, false, _) => TunnelConfigurationNextAction::StartServer,
+                (TunnelHostMode::Standalone, true, true) => {
+                    TunnelConfigurationNextAction::RestartStandalone
+                }
+                (TunnelHostMode::Standalone, false, _) => {
+                    TunnelConfigurationNextAction::StartStandalone
+                }
+                _ => TunnelConfigurationNextAction::None,
             }
-            (TunnelHostMode::Standalone, false, _) => {
-                TunnelConfigurationNextAction::StartStandalone
-            }
-            _ => TunnelConfigurationNextAction::None,
         };
         Ok(TunnelConfigurationResult {
             profile: snapshot(store, &profiles[index])?,

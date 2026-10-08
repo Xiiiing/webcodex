@@ -9,7 +9,7 @@ export type CloudflareConnectionRequest =
   | { action: "status"; profile_id: string }
   | { action: "start"; profile_id: string; server_instance_id: string; expected_revision: number }
   | { action: "stop"; profile_id: string; server_instance_id: string; process_generation: number }
-  | { action: "configure_oauth"; profile_id: string; server_instance_id: string; redirect_uri: string; scopes: string[]; replace?: boolean };
+  | { action: "configure_oauth"; profile_id: string; server_instance_id: string; process_generation: number; redirect_uri: string; scopes: string[]; replace?: boolean };
 // Only the explicit handoff response carries a secret; never add it to DesktopState.
 export interface CloudflareOAuthHandoff { client_id: string; client_secret: string | null; already_configured?: boolean }
 // Private values appear only in write-only requests, never in public snapshots.

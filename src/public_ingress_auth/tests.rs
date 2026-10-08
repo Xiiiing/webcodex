@@ -88,7 +88,6 @@ fn service(
     Service::new(
         router
             .hoop(authority)
-            .hoop(ClientIngressGate)
             .push(Router::with_path("authority").get(echo))
             .push(
                 Router::with_path("mcp")
@@ -96,15 +95,25 @@ fn service(
                     .get(echo)
                     .post(echo),
             )
-            .push(Router::with_path("oauth/token").post(crate::oauth_http::oauth_token))
+            .push(
+                Router::with_path("oauth/token")
+                    .hoop(ClientIngressGate::ClientId)
+                    .post(crate::oauth_http::oauth_token),
+            )
             .push(
                 Router::with_path("oauth/authorize")
-                    .get(crate::oauth_http::oauth_authorize)
-                    .push(Router::with_path("login").post(crate::oauth_http::oauth_authorize_login))
-                    .push(
-                        Router::with_path("consent")
-                            .post(crate::oauth_http::oauth_authorize_consent),
-                    ),
+                    .hoop(ClientIngressGate::ClientId)
+                    .get(crate::oauth_http::oauth_authorize),
+            )
+            .push(
+                Router::with_path("oauth/authorize/login")
+                    .hoop(ClientIngressGate::LoginReturnTo)
+                    .post(crate::oauth_http::oauth_authorize_login),
+            )
+            .push(
+                Router::with_path("oauth/authorize/consent")
+                    .hoop(ClientIngressGate::ClientId)
+                    .post(crate::oauth_http::oauth_authorize_consent),
             ),
     )
 }
@@ -351,6 +360,103 @@ async fn public_ingress_mcp_rejects_non_oauth_even_when_private_auth_is_open() {
             .send(&service)
             .await;
         assert_eq!(response.status_code, Some(StatusCode::UNAUTHORIZED));
+    }
+}
+
+#[tokio::test]
+async fn oauth_route_aliases_preserve_listener_audience_without_consuming_grants() {
+    let _env = AuthEnvGuard::auth_required();
+    let (_tmp, db) = test_db();
+    let user = seed_user(&db, "alias-owner");
+    let entry = public_entry(&db, &user, PublicIngressMode::Named, ORIGIN);
+    let (bound, bound_secret) = bound_client(&db, &user, &entry);
+    let (unbound, unbound_secret) = seed_oauth_client_named(&db, &user, "private alias client");
+    let public = service(db.clone(), Some(entry.clone()), true, sessions());
+    let private = service(db.clone(), None, true, sessions());
+
+    for path in [
+        "/oauth/token",
+        "/oauth/token/",
+        "/oauth//token",
+        "/oauth/%74oken",
+    ] {
+        for (
+            client,
+            secret,
+            binding,
+            denied_service,
+            denied_origin,
+            allowed_service,
+            allowed_origin,
+        ) in [
+            (
+                &bound,
+                &bound_secret,
+                Some(&entry),
+                &private,
+                "http://localhost",
+                &public,
+                ORIGIN,
+            ),
+            (
+                &unbound,
+                &unbound_secret,
+                None,
+                &public,
+                ORIGIN,
+                &private,
+                "http://localhost",
+            ),
+        ] {
+            let authorization_code = code(&db, &user, client, binding);
+            let response = post_form(
+                &format!("{denied_origin}{path}"),
+                exchange_form(client, secret, &authorization_code),
+            )
+            .send(denied_service)
+            .await;
+            let consumed = db
+                .get_oauth_authorization_code_by_hash(&hash_token(&authorization_code))
+                .unwrap()
+                .unwrap()
+                .used_at
+                .is_some();
+            assert_eq!(
+                (response.status_code, consumed),
+                (Some(StatusCode::BAD_REQUEST), false),
+                "code exchange changed audience at {denied_origin}{path}"
+            );
+
+            let tokens = exchange(
+                allowed_service,
+                &format!("{allowed_origin}/oauth/token"),
+                client,
+                secret,
+                &authorization_code,
+            )
+            .await;
+            let refresh = tokens["refresh_token"].as_str().unwrap();
+            let response = post_form(
+                &format!("{denied_origin}{path}"),
+                form(&[
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", refresh),
+                    ("client_id", &client.client_id),
+                    ("client_secret", secret),
+                ]),
+            )
+            .send(denied_service)
+            .await;
+            let retained = db
+                .get_oauth_refresh_token_by_hash(&hash_token(refresh))
+                .unwrap();
+            assert_eq!(
+                (response.status_code, retained.is_some()),
+                (Some(StatusCode::BAD_REQUEST), true),
+                "refresh changed audience at {denied_origin}{path}"
+            );
+            assert!(retained.unwrap().last_used_at.is_none());
+        }
     }
 }
 

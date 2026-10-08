@@ -875,6 +875,11 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             }
             let status = if component == service::Component::Tunnel {
                 let profile = input.profile.as_deref().unwrap_or("default");
+                let environment_id = store
+                    .load_environment()
+                    .map_err(|error| error.to_string())?
+                    .ok_or("No saved environment is available")?
+                    .environment_id;
                 let saved = tunnel_profiles(&store)
                     .map_err(|error| error.to_string())?
                     .into_iter()
@@ -905,8 +910,19 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                         )
                         .await;
                     }
+                    let observed = cloudflare_tunnel_profile(&store, profile)
+                        .map_err(|error| error.to_string())?;
+                    if saved.as_ref().is_none_or(|entry| {
+                        entry.revision != observed.revision
+                            || entry.provider != observed.provider
+                            || entry.host_mode != observed.host_mode
+                            || entry.effective_configuration_id().as_deref()
+                                != Some(observed.configuration_id.as_str())
+                    }) {
+                        return Err("The Cloudflare profile changed; reload it before controlling its service".into());
+                    }
                     core.backend
-                        .control_tunnel(&store, profile, operation)
+                        .control_cloudflare_tunnel(&store, &environment_id, &observed, operation)
                         .await
                 } else if operation == ServiceOperation::Start {
                     core.backend.configure_tunnel(&store, profile, None).await
