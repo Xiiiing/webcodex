@@ -342,6 +342,28 @@ async fn guarded_handoff_rejects_missing_owner_and_unacknowledged_followups_with
 }
 
 #[tokio::test]
+async fn same_package_verification_rejects_an_invalid_installer_target_before_candidate_access() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidate = temp.path().join("absent-candidate");
+    let runtime = temp.path().join("absent-runtime");
+    let args = vec![
+        "installer-verify-same".to_owned(),
+        "--candidate-dir".into(),
+        candidate.display().to_string(),
+        "--expected-runtime-dir".into(),
+        runtime.display().to_string(),
+        "--installer-target".into(),
+        "invalid-target".into(),
+    ];
+    assert_eq!(
+        run(&args).await.unwrap_err(),
+        "Invalid installer package target"
+    );
+    assert!(!candidate.exists());
+    assert!(!runtime.exists());
+}
+
+#[tokio::test]
 async fn path_commands_are_read_only_and_manifest_is_explicitly_metadata_only() {
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("absent-environment");

@@ -277,8 +277,12 @@ pub async fn verify_installer_authorization(
             "The installer authorization version is unsupported",
         ));
     }
-    let receipt =
-        crate::verify_prepared_installation(&authorization.receipt_path, candidate_dir).await?;
+    let receipt = crate::upgrade::verify_prepared_installation_for(
+        &authorization.receipt_path,
+        candidate_dir,
+        crate::unified_update::install::package::PackageInspection::InstallerHook,
+    )
+    .await?;
     if receipt != authorization.receipt {
         return Err(diagnostic(
             "installer_authorization_conflict",
