@@ -18,7 +18,7 @@ fn write_candidate(root: &Path) -> UpgradeCandidate {
     } else {
         "artifacts/webcodex-desktop"
     };
-    for name in COMPONENTS {
+    for &name in PackageFlavor::Full.components() {
         let relative = if name == "webcodex-desktop" {
             desktop_relative.to_string()
         } else {
