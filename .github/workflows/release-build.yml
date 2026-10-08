@@ -1012,6 +1012,7 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends python3 dpkg-dev rpm cpio binutils
               [ "$(uname -m)" = "$NATIVE_ARCHITECTURE" ]
+              python3 -m unittest scripts.tests.test_runtime_installers.RuntimeInstallerTests.test_rpm_preserves_prebuilt_payload_and_candidate_bytes
               mkdir -p runtime-native-input/artifacts/bin dist
               (cd runtime-input && sha256sum -c "$ARCHIVE_STEM-$PLATFORM.tar.gz.sha256")
               python3 -c "from pathlib import Path; from scripts.prepare_release_metadata import normalized_members, expected_members; assert normalized_members(Path(\"runtime-input/$ARCHIVE_STEM-$PLATFORM.tar.gz\")) == expected_members(\"$PLATFORM\")"

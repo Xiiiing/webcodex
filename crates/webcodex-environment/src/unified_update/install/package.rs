@@ -12,6 +12,22 @@ use std::{
     time::Duration,
 };
 
+/// Normal assessment and privileged dispatch require a configured package.
+/// Only the explicit package-hook verifier admits dpkg's in-progress states;
+/// candidate bytes, exact ownership and target checks still apply there.
+#[derive(Clone, Copy)]
+pub(crate) enum PackageInspection {
+    Installed,
+    InstallerHook,
+}
+
+#[cfg(target_os = "linux")]
+fn deb_status_matches(status: &[u8], inspection: PackageInspection) -> bool {
+    status == b"installed"
+        || matches!(inspection, PackageInspection::InstallerHook)
+            && matches!(status, b"half-installed" | b"half-configured")
+}
+
 #[cfg(target_os = "linux")]
 fn query(program: &str, arguments: &[&std::ffi::OsStr]) -> Option<Vec<u8>> {
     let output = std::process::Command::new(program)
@@ -22,6 +38,11 @@ fn query(program: &str, arguments: &[&std::ffi::OsStr]) -> Option<Vec<u8>> {
 }
 #[cfg(target_os = "linux")]
 pub(crate) fn installed_package() -> Option<InstallerTarget> {
+    installed_package_for(PackageInspection::Installed)
+}
+
+#[cfg(target_os = "linux")]
+fn installed_package_for(inspection: PackageInspection) -> Option<InstallerTarget> {
     let platform = RuntimePlatform::current()?;
     let mut found = Vec::new();
     for (name, flavor) in [
@@ -37,7 +58,7 @@ pub(crate) fn installed_package() -> Option<InstallerTarget> {
             ],
         )
         .as_deref()
-            == Some(b"installed")
+        .is_some_and(|status| deb_status_matches(status, inspection))
         {
             found.push(InstallerTarget {
                 platform,
@@ -149,7 +170,8 @@ pub(crate) fn owned_layout(target: InstallerTarget, binaries: &RuntimeBinaries) 
 pub(crate) fn verify_candidate_flavor(
     flavor: PackageFlavor,
     binaries: &RuntimeBinaries,
-) -> crate::SetupResultValue<()> {
+    inspection: PackageInspection,
+) -> crate::SetupResultValue<Option<InstallerTarget>> {
     let bad = || {
         crate::SetupDiagnostic { code: "upgrade_package_flavor".into(), message: "The candidate package flavor differs from the verified installed package; installation types cannot be converted by an update".into(), recovery: "Use the existing manual installation path for a different package flavor".into() }
     };
@@ -157,18 +179,19 @@ pub(crate) fn verify_candidate_flavor(
     {
         let managed = binaries.cli == Path::new("/usr/lib/webcodex/webcodex-runtime/webcodex");
         if !flavor.is_full() || managed {
-            let installed = installed_package().ok_or_else(bad)?;
+            let installed = installed_package_for(inspection).ok_or_else(bad)?;
             if installed.flavor != flavor || !owned_layout(installed, binaries) {
                 return Err(bad());
             }
+            return Ok(Some(installed));
         }
-        Ok(())
+        Ok(None)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = binaries;
+        let _ = (binaries, inspection);
         if flavor.is_full() {
-            Ok(())
+            Ok(None)
         } else {
             Err(bad())
         }
@@ -182,6 +205,36 @@ pub(crate) fn installed_package() -> Option<InstallerTarget> {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn owned_layout(_: InstallerTarget, _: &RuntimeBinaries) -> bool {
     false
+}
+
+/// Runtime hooks bind even same-version verification to the package manager.
+/// Legacy Full hooks omit the target; absence never authorizes Runtime.
+pub(crate) fn verify_candidate_target(
+    flavor: PackageFlavor,
+    observed: Option<InstallerTarget>,
+    expected: Option<InstallerTarget>,
+) -> crate::SetupResultValue<()> {
+    let matches = match expected {
+        None => flavor.is_full(),
+        Some(target) => {
+            target.valid()
+                && target.flavor == flavor
+                && Some(target.platform) == super::super::RuntimePlatform::current()
+                && if cfg!(target_os = "linux") {
+                    observed == Some(target)
+                } else {
+                    flavor.is_full()
+                }
+        }
+    };
+    if matches {
+        return Ok(());
+    }
+    Err(crate::SetupDiagnostic {
+        code: "installer_package_target".into(),
+        message: "The package hook does not match the installed flavor and package manager".into(),
+        recovery: "Use the installer for the existing package target".into(),
+    })
 }
 
 /// Re-read package identity at the privileged effect boundary, including the
@@ -209,6 +262,56 @@ fn installed_target_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dpkg_transitional_states_are_limited_to_package_hook_verification() {
+        for state in [b"half-installed".as_slice(), b"half-configured"] {
+            assert!(deb_status_matches(state, PackageInspection::InstallerHook));
+            assert!(!deb_status_matches(state, PackageInspection::Installed));
+        }
+        for inspection in [
+            PackageInspection::Installed,
+            PackageInspection::InstallerHook,
+        ] {
+            assert!(deb_status_matches(b"installed", inspection));
+            for state in [
+                b"not-installed".as_slice(),
+                b"config-files",
+                b"unpacked",
+                b"",
+                b"installed\n",
+            ] {
+                assert!(!deb_status_matches(state, inspection));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn same_package_runtime_hook_requires_the_exact_installed_manager() {
+        let platform = super::super::super::RuntimePlatform::current().unwrap();
+        let deb = InstallerTarget::runtime(platform, super::super::super::PackageFormat::Deb);
+        let rpm = InstallerTarget::runtime(platform, super::super::super::PackageFormat::Rpm);
+        let full = InstallerTarget::new(platform, super::super::super::PackageFormat::Deb);
+        for target in [deb, rpm] {
+            verify_candidate_target(PackageFlavor::Runtime, Some(target), Some(target)).unwrap();
+            for expected in [
+                None,
+                Some(full),
+                Some(if target == deb { rpm } else { deb }),
+            ] {
+                assert_eq!(
+                    verify_candidate_target(PackageFlavor::Runtime, Some(target), expected)
+                        .unwrap_err()
+                        .code,
+                    "installer_package_target"
+                );
+            }
+            assert!(verify_candidate_target(PackageFlavor::Runtime, None, Some(target)).is_err());
+        }
+        verify_candidate_target(PackageFlavor::Full, Some(full), None).unwrap();
+    }
+
     #[test]
     fn changed_package_flavor_format_and_unknown_ownership_fail_closed() {
         let full = InstallerTarget::ALL[4];

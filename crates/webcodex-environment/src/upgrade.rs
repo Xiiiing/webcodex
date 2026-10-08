@@ -29,7 +29,8 @@ pub use status::{
     UpgradeServiceKind, UpgradeStatus, UpgradeTarget,
 };
 
-use crate::unified_update::PackageFlavor;
+use crate::unified_update::install::package::{self, PackageInspection};
+use crate::unified_update::{InstallerTarget, PackageFlavor};
 const DATA_FORMAT: u16 = 1;
 const SNAPSHOT_LIMIT: u64 = 16 * 1024 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -398,6 +399,15 @@ pub async fn verify_prepared_installation(
     receipt_path: &Path,
     candidate_dir: &Path,
 ) -> SetupResultValue<PreparedInstallationReceipt> {
+    verify_prepared_installation_for(receipt_path, candidate_dir, PackageInspection::Installed)
+        .await
+}
+
+pub(crate) async fn verify_prepared_installation_for(
+    receipt_path: &Path,
+    candidate_dir: &Path,
+    inspection: PackageInspection,
+) -> SetupResultValue<PreparedInstallationReceipt> {
     if !receipt_path.is_absolute()
         || receipt_path.file_name().and_then(|name| name.to_str()) != Some(PREPARED_RECEIPT)
     {
@@ -470,22 +480,12 @@ pub async fn verify_prepared_installation(
     let mut prepared_candidate = journal.candidate.clone();
     prepared_candidate.provenance_verified = false;
     verify_relocated_candidate_identity(&prepared_candidate, &candidate)?;
-    crate::unified_update::install::package::verify_candidate_flavor(
+    let installed = package::verify_candidate_flavor(
         receipt.package_flavor,
         &current.request.binaries,
+        inspection,
     )?;
-    if !receipt.package_flavor.is_full() {
-        let target = receipt.installer_target.ok_or_else(|| {
-            error(
-                "upgrade_receipt",
-                "Runtime receipt has no installed package target",
-            )
-        })?;
-        crate::unified_update::install::package::verify_installed_target(
-            target,
-            &current.request.binaries,
-        )?;
-    }
+    package::verify_candidate_target(receipt.package_flavor, installed, receipt.installer_target)?;
     verify_published_provenance(&candidate).await?;
     // The user-side prepare already ran the bounded metadata probe. Elevated
     // installer verification must never execute a candidate as administrator.
@@ -1307,6 +1307,7 @@ pub fn verify_upgrade_candidate(root: &Path) -> SetupResultValue<UpgradeCandidat
 pub async fn verify_same_installed_package(
     candidate_dir: &Path,
     expected_runtime_dir: &Path,
+    expected_target: Option<InstallerTarget>,
 ) -> SetupResultValue<()> {
     let candidate = verify_upgrade_candidate(candidate_dir)?;
     verify_published_provenance(&candidate).await?;
@@ -1347,14 +1348,16 @@ pub async fn verify_same_installed_package(
             "The Windows package runtime target differs",
         ));
     }
-    crate::unified_update::install::package::verify_candidate_flavor(
+    let installed = package::verify_candidate_flavor(
         candidate.package_flavor,
         &RuntimeBinaries {
             cli: expected_runtime_dir.join("webcodex"),
             server: expected_runtime_dir.join("webcodex-server"),
             runner: expected_runtime_dir.join("webcodex-runner"),
         },
+        PackageInspection::InstallerHook,
     )?;
+    package::verify_candidate_target(candidate.package_flavor, installed, expected_target)?;
     let desktop = candidate.desktop.as_ref();
     for (name, target) in [
         (
@@ -1540,9 +1543,10 @@ impl NativeEnvironment {
                 active_tasks: 0,
             });
         };
-        crate::unified_update::install::package::verify_candidate_flavor(
+        package::verify_candidate_flavor(
             candidate.package_flavor,
             &record.request.binaries,
+            PackageInspection::Installed,
         )?;
         let mut diagnostics = Vec::new();
         for spec in configured_specs(store, &record)? {
@@ -1660,9 +1664,10 @@ impl NativeEnvironment {
             candidate.provenance_verified = true;
         }
         if let Some(record) = store.load_environment()? {
-            crate::unified_update::install::package::verify_candidate_flavor(
+            package::verify_candidate_flavor(
                 candidate.package_flavor,
                 &record.request.binaries,
+                PackageInspection::Installed,
             )?;
         }
         verify_candidate_executables(&candidate).await?;
