@@ -3,6 +3,7 @@ import { PRODUCT_LOCALES } from "./product";
 
 // English, Chinese, German, French, Japanese, Korean; names remain user text.
 export const CONNECTIONS_TOOLS_MESSAGES = {
+  cloudflareIdentityRepair: ["Repair the Environment user and Runner owner in Runtime setup before reconnecting. Keep the existing projects and recovery records.", "请在 Runtime 设置中修复 Environment 用户和 Runner 所有者后重新连接，保留现有项目和恢复记录。", "Vor dem Neuverbinden den Environment-Benutzer und Runner-Eigentümer in Runtime reparieren. Projekte und Wiederherstellungsdaten behalten.", "Réparez l’utilisateur Environment et le propriétaire du Runner dans Runtime avant de reconnecter. Conservez les projets et données de récupération.", "再接続前に Runtime 設定で Environment ユーザーと Runner 所有者を修復してください。既存のプロジェクトと復旧記録を保持してください。", "다시 연결하기 전에 Runtime 설정에서 Environment 사용자와 Runner 소유자를 복구하세요. 기존 프로젝트와 복구 기록을 유지하세요.", "請在 Runtime 設定中修復 Environment 用戶和 Runner 擁有者後重新連線，保留現有專案和復原記錄。"],
   localForwardingTarget: ["Local forwarding target", "本机转发目标", "Lokales Weiterleitungsziel", "Cible locale du transfert", "ローカル転送先", "로컬 전달 대상", "本機轉送目標"],
   oauthConfigured: ["OAuth configured", "OAuth 已配置", "OAuth konfiguriert", "OAuth configuré", "OAuth 設定済み", "OAuth 설정됨", "OAuth 已設定"],
   oauthNotConfigured: ["OAuth not configured", "OAuth 尚未配置", "OAuth nicht konfiguriert", "OAuth non configuré", "OAuth 未設定", "OAuth 설정 안 됨", "OAuth 尚未設定"],

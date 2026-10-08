@@ -57,7 +57,7 @@ function OAuthHandoff({ profile, status, onClose }: { profile: TunnelConnection;
   </WorkspaceDialog>;
 }
 
-export function CloudflareConnectionCard({ profile, canStart, busy, onEdit, onDelete }: { profile: TunnelConnection; canStart: boolean; busy: boolean; onEdit: () => void; onDelete: () => void }) {
+export function CloudflareConnectionCard({ profile, canStart, busy, onEdit, onDelete, onRepair }: { profile: TunnelConnection; canStart: boolean; busy: boolean; onEdit: () => void; onDelete: () => void; onRepair?: () => void }) {
   const c = useConnectionsTools(); const p = useProduct();
   const [status, setStatus] = useState<CloudflareConnectionStatus | null>(null);
   const [failed, setFailed] = useState(false); const [working, setWorking] = useState(false);
@@ -92,6 +92,7 @@ export function CloudflareConnectionCard({ profile, canStart, busy, onEdit, onDe
   const disabled = busy || working;
   const unselectedService = profile.host_mode === "standalone" && !profile.autostart;
   const origin = status?.public_origin;
+  const identityRepair = status?.reason_code === "cloudflare_identity_repair_required" || status?.reason_code === "cloudflare_owner_repair_required";
   return <article className="connection-profile" aria-labelledby={`connection-${profile.id}`} data-tunnel-profile-id={profile.id}>
     <header className="workspace-section-heading"><div><h2 id={`connection-${profile.id}`}>{profile.name}</h2><span className="workspace-observation">{quick ? c("cloudflareQuick") : c("cloudflareNamed")} · {profile.host_mode === "embedded" ? c("serverOwned") : c("separateService")}</span></div><span role="status" className="connection-state">{status?.lifecycle === "running" ? p("running") : status?.lifecycle === "starting" ? p("starting") : status?.lifecycle === "stopped" ? p("stopped") : status?.lifecycle === "disconnected" ? c("cloudflareDisconnected") : status?.lifecycle === "error" ? c("connectionUnavailable") : c("awaitingStatus")}</span></header>
     {origin && <div className="connection-id"><span>MCP</span><code>{origin}/mcp</code><button type="button" className="text-button" onClick={() => { void writeText(`${origin}/mcp`).then(() => setCopied(true)).catch(() => setFailed(true)); }}>{copied ? p("copied") : c("copyMcpAddress")}</button></div>}
@@ -102,6 +103,8 @@ export function CloudflareConnectionCard({ profile, canStart, busy, onEdit, onDe
     <p>{status?.observed_authorization ? c("oauthObserved") : c("oauthNotObserved")}</p>
     {profile.server_restart_required && <p role="status">{c("profileRestartHelp")}</p>}
     {failed && <p role="alert">{c("operationFailed")}</p>}
+    {identityRepair && <p role="alert">{c("cloudflareIdentityRepair")}</p>}
+    {(failed || identityRepair) && onRepair && <button type="button" className="secondary-button" disabled={disabled} onClick={onRepair}>{c("openRuntimeSetup")}</button>}
     <div className="connection-actions">
       <button type="button" className="secondary-button" disabled={disabled} onClick={onEdit}>{p("edit")}</button>
       <button type="button" className="primary-button" disabled={disabled || !status || !canStart || unselectedService || profile.server_restart_required || status.configured_revision !== profile.revision || (!quick && !profile.credential_present)} onClick={() => void run(active ? "restart" : "start")}>{active ? c("reconnect") : p("start")}</button>

@@ -6,7 +6,7 @@ use webcodex_environment::*;
 mod cloudflare;
 mod update;
 
-const USAGE: &str = "webcodex environment <COMMAND>\\n\\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\\n          [--scope user|system]\\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\\ninvite\\nadd-project PATH [--code-stdin] [--new-pairing-code]\\nremove-project PROJECT_ID\\nstatus|doctor\\npaths|backup-manifest (read-only metadata; no files or restore)\\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\\nrepair-credential runner\\nrepair-user-credential [--token-file PATH]\\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\\nconfigure-tunnel [PROFILE] [--provider openai|cloudflare_named|cloudflare_quick]\\n                 [--host embedded|standalone] [--name NAME] [--autostart true|false]\\n                 [--expected-revision N] [--credentials-file PATH | --token-file PATH]\\n                 [--public-origin HTTPS_ORIGIN --tunnel-id ID] [--ingress-port PORT]\\ncloudflare-status|cloudflare-start|cloudflare-stop PROFILE\\ncloudflare-oauth PROFILE --redirect-uri URL [--scopes JSON_ARRAY] [--replace]\\ntunnel-status [PROFILE]\\ntunnel-host PROFILE --host embedded|standalone\\nremove-tunnel [PROFILE] [--expected-revision N]\\nupdate status|check|download|apply|resume|rollback (use update --help)\\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\\nupgrade-finish|upgrade-rollback\\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\\ninstaller-verify --candidate-dir PATH\\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH\\ninstaller-classify --expected-runtime-dir PATH (Windows)\\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\\ninstaller-finish|installer-cancel\\n\\nPublic environment commands accept --json and --environment-dir PATH.\\nInstaller finalization uses only the fixed owner authorization.\\nAdvanced: --bin-dir PATH (configure only).\\n--runner enables local work without requiring an initial project.\\nNew environments default to user services; saved environments retain their manager.\\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\\nSame-machine creation issues separate local credentials automatically, without pairing input.\\nViewer-only uses a user credential; pairing codes are only for Runner machines.\\nOpenAI credentials use hidden input or protected JSON with tunnel_id and api_key.\\nNamed Cloudflare uses protected JSON with tunnel_id, public_origin and token, or --token-file plus identity/origin options. Quick Tunnel takes no credentials or saved origin.\\nNew Cloudflare profiles default to embedded Server ownership; OpenAI retains its standalone default.\\nExisting Cloudflare edits require --expected-revision. Separate Cloudflare services must be selected for startup before installation; stop and uninstall before deselecting them.\\nCloudflare OAuth configuration returns a newly issued client secret once; repeat configuration retains the existing secret. Use --replace explicitly to recover a lost secret or change the callback; replacement revokes the previous client authorization.\\n";
+const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--provider openai|cloudflare_named|cloudflare_quick]\n                 [--host embedded|standalone] [--name NAME] [--autostart true|false]\n                 [--expected-revision N] [--credentials-file PATH | --token-file PATH]\n                 [--public-origin HTTPS_ORIGIN --tunnel-id ID] [--ingress-port PORT]\ncloudflare-status|cloudflare-start|cloudflare-stop PROFILE\ncloudflare-oauth PROFILE --redirect-uri URL [--scopes JSON_ARRAY] [--replace]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE] [--expected-revision N]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH [--installer-target TARGET]\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure only).\n--runner enables local work without requiring an initial project.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nOpenAI credentials use hidden input or protected JSON with tunnel_id and api_key.\nNamed Cloudflare uses protected JSON with tunnel_id, public_origin and token, or --token-file plus identity/origin options. Quick Tunnel takes no credentials or saved origin.\nNew Cloudflare profiles default to embedded Server ownership; OpenAI retains its standalone default.\nExisting Cloudflare edits require --expected-revision. Separate Cloudflare services must be selected for startup before installation; stop and uninstall before deselecting them.\nCloudflare OAuth configuration returns a newly issued client secret once; repeat configuration retains the existing secret. Use --replace explicitly to recover a lost secret or change the callback; replacement revokes the previous client authorization.\n";
 #[derive(Default)]
 struct Input {
     command: String,
@@ -235,7 +235,9 @@ fn configure_tunnel_host_mode(
 }
 
 pub(crate) async fn run(args: &[String]) -> Result<String, String> {
-    run_inner(args).await.map_err(|error| {
+    // Setup and update branches carry large domain futures. Keep the public
+    // adapter's future small on the default executor/test thread stack.
+    Box::pin(run_inner(args)).await.map_err(|error| {
         if args.iter().any(|arg| arg == "--json")
             && serde_json::from_str::<serde_json::Value>(&error).is_err()
         {
@@ -466,7 +468,15 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 .as_deref()
                 .ok_or("Specify --expected-runtime-dir PATH")?,
         )?;
-        verify_same_installed_package(&candidate, &runtime)
+        let package_target = input
+            .installer_target
+            .as_deref()
+            .map(|value| {
+                webcodex_environment::unified_update::InstallerTarget::parse(value)
+                    .ok_or("Invalid installer package target")
+            })
+            .transpose()?;
+        verify_same_installed_package(&candidate, &runtime, package_target)
             .await
             .map_err(|error| error.to_string())?;
         return Ok("{\"ok\":true,\"same\":true}".into());
@@ -487,6 +497,13 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 .as_deref()
                 .ok_or("Specify --candidate-dir PATH")?,
         )?;
+        let package_target = match input.installer_target.as_deref() {
+            Some(value) => Some(
+                webcodex_environment::unified_update::InstallerTarget::parse(value)
+                    .ok_or("Invalid installer package target")?,
+            ),
+            None => None,
+        };
         let receipt = if input.command == "installer-authorize" {
             let receipt = absolute(
                 input
@@ -494,7 +511,7 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                     .as_deref()
                     .ok_or("Specify the original user's --upgrade-receipt PATH")?,
             )?;
-            authorize_prepared_installation(&receipt, &candidate).await
+            authorize_prepared_installation_for_target(&receipt, &candidate, package_target).await
         } else if let Some(receipt) = input.upgrade_receipt.as_deref() {
             verify_prepared_installation(&absolute(receipt)?, &candidate).await
         } else if cfg!(unix)
@@ -522,6 +539,10 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                     "Guarded installer receipt does not match the selected operation".into(),
                 );
             }
+        }
+        if input.command == "installer-verify" {
+            verify_installer_package_target(&receipt, package_target)
+                .map_err(|error| error.to_string())?;
         }
         if let Some(directory) = input.expected_runtime_dir.as_deref() {
             verify_installer_targets(&receipt, &absolute(directory)?)

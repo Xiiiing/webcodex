@@ -62,6 +62,15 @@ describe("Cloudflare connection configuration",()=>{
 });
 
 describe("Cloudflare private native controls and OAuth handoff",()=>{
+  it("routes an incorrect Runner owner to explicit Runtime repair",async()=>{
+    const repair=vi.fn();
+    api.cloudflareConnection.mockResolvedValue({...status,lifecycle:"error",public_origin:null,reason_code:"cloudflare_owner_repair_required"});
+    render(wrap(<CloudflareConnectionCard profile={connectionFixture({id:"cf",revision:4,provider:{kind:"cloudflare_quick"}})} canStart busy={false} onEdit={vi.fn()} onDelete={vi.fn()} onRepair={repair} />));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Repair the Environment user and Runner owner");
+    fireEvent.click(screen.getByRole("button",{name:"Open Runtime setup"}));
+    expect(repair).toHaveBeenCalledOnce();
+    expect(api.cloudflareConnection.mock.calls.every(([request])=>request.action==="status")).toBe(true);
+  });
   function mount() {return render(wrap(<CloudflareConnectionCard profile={connectionFixture({id:"cf",revision:4,provider:{kind:"cloudflare_quick"},credential_present:false,host_mode:"embedded"})} canStart busy={false} onEdit={vi.fn()} onDelete={vi.fn()} />));}
   it("copies the current MCP origin and keeps observed authorization separate from process readiness",async()=>{
     mount();
