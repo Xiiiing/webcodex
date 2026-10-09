@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, queryHelpers, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../i18n/locale";
 import { DesktopMantineProvider } from "../components/DesktopMantineProvider";
@@ -136,17 +136,25 @@ describe("Desktop Coding Agents", () => {
     api.saveCodingAgent.mockResolvedValue(initial);
     render(<Harness initial={initial} />);
     fireEvent.click(screen.getByRole("button", { name: "Edit Pi Agent" }));
-    const dialog = within(screen.getByRole("dialog"));
-    fireEvent.click(dialog.getByLabelText("Add Missing PATH/HOME Mappings"));
-    expect(dialog.getByLabelText("Child Environment Variable 64")).toHaveValue("PATH");
-    expect(dialog.queryByLabelText("Child Environment Variable 65")).not.toBeInTheDocument();
-    expect(dialog.getByLabelText("Add Missing PATH/HOME Mappings")).toBeDisabled();
-    expect(dialog.getByLabelText("Add Environment Mapping")).toBeDisabled();
-    fireEvent.click(dialog.getByLabelText("Remove Environment Mapping 1"));
-    fireEvent.click(dialog.getByLabelText("Add Missing PATH/HOME Mappings"));
-    expect(dialog.getByLabelText("Child Environment Variable 65")).toHaveValue("HOME");
-    expect(dialog.getByLabelText("Add Missing PATH/HOME Mappings")).toBeDisabled();
-    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    const dialog = screen.getByRole("dialog");
+    // getByLabelText rebuilds jsdom's document-wide label associations after each
+    // row mutation. Query the existing aria-labels directly for this large form.
+    const queryControl = (label: string) => queryHelpers.queryByAttribute("aria-label", dialog, label);
+    const control = (label: string) => {
+      const element = queryControl(label);
+      if (!element) throw queryHelpers.getElementError(`Missing control: ${label}`, dialog);
+      return element;
+    };
+    fireEvent.click(control("Add Missing PATH/HOME Mappings"));
+    expect(control("Child Environment Variable 64")).toHaveValue("PATH");
+    expect(queryControl("Child Environment Variable 65")).not.toBeInTheDocument();
+    expect(control("Add Missing PATH/HOME Mappings")).toBeDisabled();
+    expect(control("Add Environment Mapping")).toBeDisabled();
+    fireEvent.click(control("Remove Environment Mapping 1"));
+    fireEvent.click(control("Add Missing PATH/HOME Mappings"));
+    expect(control("Child Environment Variable 65")).toHaveValue("HOME");
+    expect(control("Add Missing PATH/HOME Mappings")).toBeDisabled();
+    fireEvent.click(control("Save"));
     const { VAR_0: _removed, ...remaining } = env;
     await waitFor(() => expect(api.saveCodingAgent).toHaveBeenCalledWith(expect.objectContaining({ profile: { ...profile, env_from_env: { ...remaining, PATH: "PATH", HOME: "HOME" } } })));
   });
