@@ -38,7 +38,7 @@ impl Database {
         principal: Option<(&str, &str)>,
         limit: usize,
     ) -> anyhow::Result<Vec<WindowActivitySummaryRecord>> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        let conn = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
         let (principal_sql, kind, id) = principal_predicate(principal);
         let sql = format!(
             "SELECT e.client_window_key,
@@ -84,7 +84,7 @@ impl Database {
         &self,
         principal: Option<(&str, &str)>,
     ) -> anyhow::Result<usize> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        let conn = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
         let count = match principal {
             Some((kind, id)) => conn.query_row(
                 "SELECT COUNT(DISTINCT client_window_key)
@@ -113,7 +113,7 @@ impl Database {
         window_key: &str,
         principal: Option<(&str, &str)>,
     ) -> anyhow::Result<Option<WindowActivitySummaryRecord>> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        let conn = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
         let row = match principal {
             Some((kind, id)) => conn
                 .query_row(
@@ -163,7 +163,11 @@ impl Database {
         principal: Option<(&str, &str)>,
         limit: usize,
     ) -> anyhow::Result<Vec<WindowActivityEventRecord>> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        #[cfg(any(test, feature = "root-test-support"))]
+        self.window_history_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut reader = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
+        let conn = reader.transaction()?;
         let (principal_sql, kind, id) = principal_predicate(principal);
         let sql = format!(
             "SELECT e.event_id, e.client_window_key, e.client_window_source,
@@ -173,7 +177,16 @@ impl Database {
                     e.principal_correlation_kind, e.principal_correlation_id,
                     e.request_observed_at_ms, e.response_handed_at_ms,
                     e.window_transition_kind, e.response_streaming,
-                    e.window_continuity_eligible, e.http_status, e.ids_json
+                    e.window_continuity_eligible, e.http_status, e.ids_json,
+                    CASE WHEN json_valid(e.summary_json) THEN
+                      CASE json_extract(e.summary_json, '$.failure_expectation_result')
+                        WHEN 'matched_expected_failure' THEN 'matched_expected_failure'
+                        WHEN 'matched_expected_result' THEN 'matched_expected_result'
+                        WHEN 'unexpected_failure' THEN 'unexpected_failure'
+                        WHEN 'expectation_mismatch' THEN 'expectation_mismatch'
+                        WHEN 'unexpected_success' THEN 'unexpected_success'
+                      END
+                    END
              FROM action_events e
              WHERE e.client_window_key = ?1
                AND e.window_started_at_ms IS NOT NULL
@@ -216,7 +229,16 @@ impl Database {
                     e.principal_correlation_kind, e.principal_correlation_id,
                     e.request_observed_at_ms, e.response_handed_at_ms,
                     e.window_transition_kind, e.response_streaming,
-                    e.window_continuity_eligible, e.http_status, e.ids_json
+                    e.window_continuity_eligible, e.http_status, e.ids_json,
+                    CASE WHEN json_valid(e.summary_json) THEN
+                      CASE json_extract(e.summary_json, '$.failure_expectation_result')
+                        WHEN 'matched_expected_failure' THEN 'matched_expected_failure'
+                        WHEN 'matched_expected_result' THEN 'matched_expected_result'
+                        WHEN 'unexpected_failure' THEN 'unexpected_failure'
+                        WHEN 'expectation_mismatch' THEN 'expectation_mismatch'
+                        WHEN 'unexpected_success' THEN 'unexpected_success'
+                      END
+                    END
              FROM action_events e
              WHERE e.client_window_key = ?1
                AND e.principal_correlation_kind = ?2
@@ -253,7 +275,16 @@ impl Database {
                     e.principal_correlation_kind, e.principal_correlation_id,
                     e.request_observed_at_ms, e.response_handed_at_ms,
                     e.window_transition_kind, e.response_streaming,
-                    e.window_continuity_eligible, e.http_status, e.ids_json
+                    e.window_continuity_eligible, e.http_status, e.ids_json,
+                    CASE WHEN json_valid(e.summary_json) THEN
+                      CASE json_extract(e.summary_json, '$.failure_expectation_result')
+                        WHEN 'matched_expected_failure' THEN 'matched_expected_failure'
+                        WHEN 'matched_expected_result' THEN 'matched_expected_result'
+                        WHEN 'unexpected_failure' THEN 'unexpected_failure'
+                        WHEN 'expectation_mismatch' THEN 'expectation_mismatch'
+                        WHEN 'unexpected_success' THEN 'unexpected_success'
+                      END
+                    END
              FROM action_events e";
         let mut records = match principal {
             Some((kind, id)) => {
@@ -301,7 +332,11 @@ impl Database {
         principal: Option<(&str, &str)>,
         limit: usize,
     ) -> anyhow::Result<Vec<WindowActivityEventRecord>> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        #[cfg(any(test, feature = "root-test-support"))]
+        self.window_history_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut reader = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
+        let conn = reader.transaction()?;
         let (kind, id) = principal
             .map(|(kind, id)| (Some(kind), Some(id)))
             .unwrap_or((None, None));
@@ -330,7 +365,16 @@ impl Database {
                     e.principal_correlation_kind, e.principal_correlation_id,
                     e.request_observed_at_ms, e.response_handed_at_ms,
                     e.window_transition_kind, e.response_streaming, e.window_continuity_eligible, e.http_status,
-                    e.ids_json
+                    e.ids_json,
+                    CASE WHEN json_valid(e.summary_json) THEN
+                      CASE json_extract(e.summary_json, '$.failure_expectation_result')
+                        WHEN 'matched_expected_failure' THEN 'matched_expected_failure'
+                        WHEN 'matched_expected_result' THEN 'matched_expected_result'
+                        WHEN 'unexpected_failure' THEN 'unexpected_failure'
+                        WHEN 'expectation_mismatch' THEN 'expectation_mismatch'
+                        WHEN 'unexpected_success' THEN 'unexpected_success'
+                      END
+                    END
              FROM action_events e JOIN selected s ON s.event_id = e.event_id
              ORDER BY e.window_ended_at_ms DESC, e.event_id DESC",
         )?;
@@ -348,15 +392,18 @@ impl Database {
     }
 
     /// Variant used only by feature-gated Code Mode Runtime Console dogfood.
-    /// The ordinary Window query above intentionally keeps its historical SQL
-    /// and does not read ActionAudit summary JSON.
+    /// The ordinary Window query extracts only the bounded expectation classification.
     pub fn list_window_activity_events_with_code_mode_composition(
         &self,
         window_key: &str,
         principal: Option<(&str, &str)>,
         limit: usize,
     ) -> anyhow::Result<Vec<WindowActivityEventRecord>> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        #[cfg(any(test, feature = "root-test-support"))]
+        self.window_history_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut reader = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
+        let conn = reader.transaction()?;
         let (principal_sql, kind, id) = principal_predicate(principal);
         let sql = format!(
             "SELECT e.event_id, e.client_window_key, e.client_window_source,
@@ -366,7 +413,16 @@ impl Database {
                     e.principal_correlation_kind, e.principal_correlation_id,
                     e.request_observed_at_ms, e.response_handed_at_ms,
                     e.window_transition_kind, e.response_streaming,
-                    e.window_continuity_eligible, e.http_status, e.ids_json, e.summary_json
+                    e.window_continuity_eligible, e.http_status, e.ids_json,
+                    CASE WHEN json_valid(e.summary_json) THEN
+                      CASE json_extract(e.summary_json, '$.failure_expectation_result')
+                        WHEN 'matched_expected_failure' THEN 'matched_expected_failure'
+                        WHEN 'matched_expected_result' THEN 'matched_expected_result'
+                        WHEN 'unexpected_failure' THEN 'unexpected_failure'
+                        WHEN 'expectation_mismatch' THEN 'expectation_mismatch'
+                        WHEN 'unexpected_success' THEN 'unexpected_success'
+                      END
+                    END, e.summary_json
              FROM action_events e
              WHERE e.client_window_key = ?1
                AND e.window_started_at_ms IS NOT NULL
@@ -384,11 +440,11 @@ impl Database {
                 drop(stmt);
                 let mut stmt = conn.prepare(&sql)?;
                 let records =
-                    collect_window_events(&conn, &mut stmt, params![window_key, limit], Some(22))?;
+                    collect_window_events(&conn, &mut stmt, params![window_key, limit], Some(23))?;
                 return Ok(records);
             }
         };
-        collect_window_event_rows(&conn, &mut rows, Some(22))
+        collect_window_event_rows(&conn, &mut rows, Some(23))
     }
 
     /// Latest authoritative Window/Session relation for diagnostic continuity.
@@ -434,7 +490,10 @@ impl Database {
         principal: Option<(&str, &str)>,
         limit: usize,
     ) -> anyhow::Result<Vec<WindowWorkflowSessionSummaryRecord>> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        #[cfg(any(test, feature = "root-test-support"))]
+        self.window_history_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let conn = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
         let (principal_sql, kind, id) = principal_predicate(principal);
         let sql = format!(
             "SELECT l.workflow_session_id, MAX(l.project), MIN(l.linked_at_ms),
@@ -468,7 +527,7 @@ impl Database {
         principal: Option<(&str, &str)>,
         limit: usize,
     ) -> anyhow::Result<Vec<WindowSessionLinkSummaryRecord>> {
-        let conn = self.lock_connection(crate::StoreDomain::WindowActivity);
+        let conn = self.lock_history_connection(crate::StoreDomain::WindowActivity)?;
         let limit = bounded_limit(limit, MAX_WINDOW_LINK_LIMIT);
         match principal {
             Some((kind, id)) => {
@@ -653,6 +712,7 @@ fn collect_window_event_rows(
             operation: row.get(8)?,
             project: row.get(9)?,
             status: row.get(10)?,
+            failure_expectation_result: row.get(22)?,
             meaningful: row.get(11)?,
             async_job_id,
             observed_job_ids,
@@ -678,8 +738,9 @@ fn collect_window_event_rows(
             },
         });
     }
-    // Fetch links for the exact bounded page in one query while holding the same
-    // connection lock. Per-event queries made each Window list refresh perform
+    // Fetch links for the exact bounded page in one query. Historical callers
+    // hold an explicit read transaction: a reader mutex alone cannot preserve
+    // this page across concurrent Audit writes. Per-event queries made each refresh perform
     // thousands of statement preparations before it could return any rows.
     if !out.is_empty() {
         let ids = out
@@ -763,7 +824,10 @@ fn collect_session_window_rows(
 
 #[cfg(test)]
 mod tests {
+    mod inventory;
+    mod peer_query;
     mod queries;
+    mod read_lane;
 
     use super::*;
     use crate::models::{ActionEventRecord, ActionEventWorkflowLinkRecord, ActionSessionRecord};
@@ -883,6 +947,43 @@ mod tests {
         );
         let projected = serde_json::to_value(&rows[0]).unwrap();
         assert!(projected.get("business_session_id").is_none());
+    }
+
+    #[test]
+    fn window_activity_expectation_projection_is_bounded_and_legacy_safe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::open(&tmp.path().join("expectations.db")).unwrap();
+        seed_session(&db);
+        for (index, (summary, expected)) in [
+            (
+                r#"{"failure_expectation_result":"matched_expected_failure"}"#,
+                Some("matched_expected_failure"),
+            ),
+            (
+                r#"{"failure_expectation_result":"unexpected_success"}"#,
+                Some("unexpected_success"),
+            ),
+            (r#"{"failure_expectation_result":"secret free text"}"#, None),
+            ("{}", None),
+            ("malformed", None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let window = format!("expectation-{index}");
+            let mut item = event(&window, &window, "alice", "agent:r:p", 1000);
+            item.summary_json = summary.to_string();
+            append(&db, item, &[]);
+            let rows = db
+                .list_window_activity_events(&window, Some(("username", "alice")), 10)
+                .unwrap();
+            assert_eq!(rows[0].failure_expectation_result.as_deref(), expected);
+            assert_eq!(rows[0].status, "success");
+            let rows = db
+                .list_window_activity_events_with_code_mode_composition(&window, None, 10)
+                .unwrap();
+            assert_eq!(rows[0].failure_expectation_result.as_deref(), expected);
+        }
     }
 
     #[test]

@@ -3,6 +3,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// Shared registration/configuration bounds for optional Runner metadata.
+const MAX_RUNNER_FIELD_LEN: usize = 200;
+pub fn validate_optional_runner_field(value: &Option<String>, field: &str) -> Result<(), String> {
+    if let Some(value) = value {
+        if value.chars().count() > MAX_RUNNER_FIELD_LEN {
+            return Err(format!(
+                "{} is too long; maximum is {} characters",
+                field, MAX_RUNNER_FIELD_LEN
+            ));
+        }
+        if value.contains('\0') {
+            return Err(format!("{} cannot contain NUL bytes", field));
+        }
+    }
+    Ok(())
+}
+
 mod job;
 mod transport;
 
@@ -11,20 +28,21 @@ mod tests;
 
 pub use job::{
     normalize_cargo_packages, normalize_cargo_value, normalize_go_packages,
-    normalize_go_test_filter, normalize_go_test_packages, normalize_rust_test_filter,
-    valid_rust_test_filter, RunnerJobLogRequest, RunnerJobLogResponse, RunnerJobResult,
-    RunnerJobStatusRequest, RunnerJobStatusResponse, RunnerJobStopRequest, RunnerJobStopResponse,
-    RunnerJobUpdateRequest, RunnerJobUpdateResponse, RunnerJobsListRequest, RunnerJobsListResponse,
-    RunnerShellJobResult, ShellJobActivity, ShellJobActivityPhase, ShellJobActivitySource,
-    ShellJobActivityState, ShellJobCodexMetadata, ShellJobContext, ShellJobInfo, ShellJobInventory,
-    ShellJobLogSnapshot, ShellJobOpRequest, ShellJobOpResponse, ShellJobSnapshot,
-    ShellJobStreamSnapshot, ShellJobStructuredExecutionMetadata, ShellJobTestCountEvidence,
-    ShellJobValidationMetadata, ShellJobValidationProgress, ShellJobValidationStep,
-    CARGO_PACKAGE_MAX_ITEMS, CARGO_TEST_MIN_TESTS_MAX, CARGO_VALUE_MAX_BYTES,
-    GO_TEST_PACKAGE_MAX_BYTES, GO_TEST_PACKAGE_MAX_ITEMS, JOB_INVENTORY_MAX_ACTIVE_JOBS,
-    JOB_INVENTORY_MAX_JOBS, JOB_INVENTORY_MAX_SERIALIZED_BYTES, JOB_INVENTORY_MAX_TERMINAL_JOBS,
-    JOB_SNAPSHOT_STREAM_MAX_BYTES, JOB_TERMINAL_RETENTION_SECS, RUNNER_JOB_CONCURRENCY_MAX,
-    RUNNER_JOB_CONCURRENCY_MIN, RUST_TEST_FILTER_MAX_BYTES, VALIDATION_ASSERTION_NAME_MAX_CHARS,
+    normalize_go_test_filter, normalize_go_test_packages, normalize_pytest_filter,
+    normalize_rust_test_filter, valid_rust_test_filter, RunnerJobLogRequest, RunnerJobLogResponse,
+    RunnerJobResult, RunnerJobStatusRequest, RunnerJobStatusResponse, RunnerJobStopRequest,
+    RunnerJobStopResponse, RunnerJobUpdateRequest, RunnerJobUpdateResponse, RunnerJobsListRequest,
+    RunnerJobsListResponse, RunnerShellJobResult, ShellJobActivity, ShellJobActivityPhase,
+    ShellJobActivitySource, ShellJobActivityState, ShellJobCodexMetadata, ShellJobContext,
+    ShellJobInfo, ShellJobInventory, ShellJobLogSnapshot, ShellJobOpRequest, ShellJobOpResponse,
+    ShellJobSnapshot, ShellJobStreamSnapshot, ShellJobStructuredExecutionMetadata,
+    ShellJobTestCountEvidence, ShellJobValidationMetadata, ShellJobValidationProgress,
+    ShellJobValidationStep, CARGO_PACKAGE_MAX_ITEMS, CARGO_TEST_MIN_TESTS_MAX,
+    CARGO_VALUE_MAX_BYTES, GO_TEST_PACKAGE_MAX_BYTES, GO_TEST_PACKAGE_MAX_ITEMS,
+    JOB_INVENTORY_MAX_ACTIVE_JOBS, JOB_INVENTORY_MAX_JOBS, JOB_INVENTORY_MAX_SERIALIZED_BYTES,
+    JOB_INVENTORY_MAX_TERMINAL_JOBS, JOB_SNAPSHOT_STREAM_MAX_BYTES, JOB_TERMINAL_RETENTION_SECS,
+    RUNNER_JOB_CONCURRENCY_MAX, RUNNER_JOB_CONCURRENCY_MIN, RUST_TEST_FILTER_MAX_BYTES,
+    VALIDATION_ASSERTION_NAME_MAX_CHARS,
 };
 
 pub use transport::{
@@ -290,6 +308,12 @@ runner_capabilities! {
     v2_baseline = true {
         #[serde(default)]
         pub file_read: bool = false;
+    }
+    /// Native directory pagination; missing on older Runners means legacy full listing.
+    FileListPage => RUNNER_CAPABILITY_FILE_LIST_PAGE("file_list_page"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub file_list_page: bool = false;
     }
     FileWrite => RUNNER_CAPABILITY_FILE_WRITE("file_write"),
     v2_baseline = true {
@@ -563,12 +587,34 @@ runner_capabilities! {
         #[serde(default, skip_serializing_if = "is_false")]
         pub project_validation_package_scope_v1: bool = false;
     }
+    /// Portable all-packages intent shared by project_build/project_validate.
+    /// Missing on older Runners is false and is never inferred from package scope.
+    ProjectAllPackages => RUNNER_CAPABILITY_PROJECT_ALL_PACKAGES("project_all_packages_v1"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub project_all_packages_v1: bool = false;
+    }
     /// Additive test filtering and evidence policy on project_validate. Never
     /// inferred from generic validation or existing package-scope support.
     ProjectValidationTestOptions => RUNNER_CAPABILITY_PROJECT_VALIDATION_TEST_OPTIONS("project_validation_test_options_v1"),
     v2_baseline = false {
         #[serde(default, skip_serializing_if = "is_false")]
         pub project_validation_test_options_v1: bool = false;
+    }
+    /// Python/pytest project validation, including its bounded argv, native
+    /// interpreter preflight and durable evidence policy. Tool installation is
+    /// unrelated to this protocol capability and is never performed automatically.
+    ProjectValidationPythonPytest => RUNNER_CAPABILITY_PROJECT_VALIDATION_PYTHON_PYTEST("project_validation_python_pytest_v1"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub project_validation_python_pytest_v1: bool = false;
+    }
+    /// Read-only project Ruff check/format with pinned local configuration,
+    /// exact Python preflight and independent evidence identities.
+    ProjectValidationPythonRuff => RUNNER_CAPABILITY_PROJECT_VALIDATION_PYTHON_RUFF("project_validation_python_ruff_v1"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub project_validation_python_ruff_v1: bool = false;
     }
     /// The Runner understands the first-class model-facing `go_test` tool identity
     /// and its durable `ShellJobValidationMetadata` contract. This is deliberately
@@ -788,6 +834,19 @@ runner_capabilities! {
         #[serde(default, skip_serializing_if = "is_false")]
         pub browser_element_action_admission: bool = false;
     }
+    /// Bounded semantic filtering before snapshot pagination.
+    BrowserSemanticQuery => RUNNER_CAPABILITY_BROWSER_SEMANTIC_QUERY("browser_semantic_query"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub browser_semantic_query: bool = false;
+    }
+    /// Bounded custom choice/path and date operations with composite-effect readback.
+    /// Older Runners must reject these operations before any batch effect.
+    BrowserComplexControls => RUNNER_CAPABILITY_BROWSER_COMPLEX_CONTROLS("browser_complex_controls"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub browser_complex_controls: bool = false;
+    }
     /// Bounded same-snapshot Browser batches with fail-stop partial-effect receipts.
     BrowserBatch => RUNNER_CAPABILITY_BROWSER_BATCH("browser_batch"),
     v2_baseline = false {
@@ -801,6 +860,24 @@ runner_capabilities! {
         /// Runner-owned launch of ephemeral Chromium-family runtimes.
         #[serde(default, skip_serializing_if = "is_false")]
         pub browser_launch: bool = false;
+    }
+    BrowserExtensionBridge => RUNNER_CAPABILITY_BROWSER_EXTENSION_BRIDGE("browser_extension_bridge"),
+    v2_baseline = false {
+        /// Live Runner-owned authenticated Native Messaging bridge, not raw CDP attach.
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub browser_extension_bridge: bool = false;
+    }
+    BrowserManagedProfile => RUNNER_CAPABILITY_BROWSER_MANAGED_PROFILE("browser_managed_profile"),
+    v2_baseline = false {
+        /// Explicit, named, private persistent Browser profiles; not inferred from launch.
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub browser_managed_profile: bool = false;
+    }
+    BrowserSurfaceHandoff => RUNNER_CAPABILITY_BROWSER_SURFACE_HANDOFF("browser_surface_handoff"),
+    v2_baseline = false {
+        /// Exact live Browser process to native Computer surface correlation.
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub browser_surface_handoff: bool = false;
     }
     ComputerObserve => RUNNER_CAPABILITY_COMPUTER_OBSERVE("computer_observe"),
     v2_baseline = false {
@@ -2729,6 +2806,7 @@ mod envelope_tests {
                 bash_login_shell: false,
                 file_read: true,
                 file_write: false,
+                file_list_page: false,
                 artifact_export_chunk_read: false,
                 artifact_export_streaming_metadata: false,
                 structured_file_delete: false,
@@ -2758,7 +2836,10 @@ mod envelope_tests {
                 project_dependency_policy_v1: false,
                 project_go_single_module_v1: false,
                 project_validation_package_scope_v1: false,
+                project_all_packages_v1: false,
                 project_validation_test_options_v1: false,
+                project_validation_python_pytest_v1: false,
+                project_validation_python_ruff_v1: false,
                 structured_go_test_tool: true,
                 structured_go_test_packages: true,
                 structured_process_argv: true,
@@ -2782,7 +2863,12 @@ mod envelope_tests {
                 browser_control: false,
                 browser_element_action_admission: false,
                 browser_batch: false,
+                browser_semantic_query: false,
+                browser_complex_controls: false,
                 browser_launch: false,
+                browser_extension_bridge: false,
+                browser_managed_profile: false,
+                browser_surface_handoff: false,
                 computer_observe: false,
                 computer_application_discovery: false,
                 computer_application_launch: false,
@@ -2946,6 +3032,15 @@ mod envelope_tests {
         assert!(legacy.browser_control);
         assert!(!legacy.browser_element_action_admission);
         assert!(!legacy.browser_batch);
+        assert!(!legacy.browser_semantic_query);
+        assert!(!serde_json::to_value(&legacy)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("browser_semantic_query"));
+        let query: RunnerCapabilities =
+            serde_json::from_str(r#"{"browser_semantic_query":true}"#).unwrap();
+        assert!(query.browser_semantic_query);
         assert!(legacy.browser_launch);
 
         let present: RunnerCapabilities =

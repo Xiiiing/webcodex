@@ -31,6 +31,8 @@ normal = [
     "webcodex-code-mode",
     "webcodex-core",
     "webcodex-environment",
+    "webcodex-openai-tunnel",
+    "webcodex-process",
     "webcodex-runner-config",
     "webcodex-runner-registry",
     "webcodex-store",
@@ -73,7 +75,7 @@ test_support = []
 [packages.webcodex-browser]
 layer = "domain"
 role = "First-class bounded CDP browser runtime built on process lifecycle primitives."
-normal = ["webcodex-process"]
+normal = ["webcodex-core", "webcodex-process", "webcodex-runner-config"]
 dev = []
 build = []
 test_support = []
@@ -122,6 +124,7 @@ layer = "runtime"
 role = "Shared environment setup, recovery, and persistent service lifecycle."
 normal = [
     "webcodex-core",
+    "webcodex-process",
     "webcodex-runner-config",
 ]
 dev = []
@@ -252,6 +255,14 @@ test_support = []
 layer = "domain"
 role = "Registered project/workspace path and metadata contracts."
 normal = ["webcodex-core"]
+dev = []
+build = []
+test_support = []
+
+[packages.webcodex-openai-tunnel]
+layer = "leaf"
+role = "Standalone Secure MCP Tunnel client with bounded execution and immutable authority."
+normal = []
 dev = []
 build = []
 test_support = []

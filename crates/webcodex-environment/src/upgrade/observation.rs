@@ -14,6 +14,8 @@ pub enum UpgradeOutcome {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UpgradeObservation {
+    #[serde(default, skip_serializing_if = "PackageFlavor::is_full")]
+    pub package_flavor: PackageFlavor,
     pub environment_id: String,
     pub operation_id: String,
     pub version: String,
@@ -35,6 +37,14 @@ pub fn upgrade_observation(
     store: &EnvironmentStore,
 ) -> SetupResultValue<Option<UpgradeObservation>> {
     let _lock = store.lock()?;
+    upgrade_observation_under_lock(store)
+}
+
+/// Internal readers that hold the existing setup fence can recheck identity
+/// without creating a lock or attempting to acquire it recursively.
+pub(crate) fn upgrade_observation_under_lock(
+    store: &EnvironmentStore,
+) -> SetupResultValue<Option<UpgradeObservation>> {
     let Some(journal): Option<UpgradeJournal> = store.read_json("upgrade.json")? else {
         return Ok(None);
     };
@@ -44,7 +54,7 @@ pub fn upgrade_observation(
             "The upgrade's original environment is unavailable",
         )
     })?;
-    if journal.schema_version != 1
+    if journal.schema_version != journal.candidate.package_flavor.source_schema()
         || journal.record.environment_id != record.environment_id
         || journal.record.request.account != record.request.account
         || record.request.account.identity != crate::current_account()?.identity
@@ -59,6 +69,7 @@ pub fn upgrade_observation(
         ));
     }
     Ok(Some(UpgradeObservation {
+        package_flavor: journal.candidate.package_flavor,
         environment_id: record.environment_id,
         operation_id: journal.operation_id,
         version: journal.candidate.version,

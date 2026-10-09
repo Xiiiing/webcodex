@@ -15,13 +15,13 @@ use super::structured_execution::{
     StructuredExecutionBudget, StructuredJobHandoffFailure, STRUCTURED_EXECUTION_SYNC_WAIT_SECS,
 };
 use super::tool_result::ToolResult;
-#[cfg(test)]
-use super::validation_profile::ValidationCommandOptions;
 use super::validation_profile::{
-    requires_multi_package_cargo_check, runtime_profile, validation_adapter_for_tool,
-    CargoReadOnlyValidationOperation, ReadOnlyValidationOperation, ValidationAdapter,
+    requires_multi_package_cargo_check, runtime_profile, validation_evidence_profile_for_recipe,
+    CargoReadOnlyValidationOperation, ReadOnlyValidationOperation, ValidationEvidenceProfile,
     ValidationFailureEvidence,
 };
+#[cfg(test)]
+use super::validation_profile::{validation_adapter_for_tool, ValidationCommandOptions};
 use super::ToolRuntime;
 use crate::auth::AuthContext;
 use crate::runner_http::{RunnerFeature, ShellJobStartMetadata};
@@ -63,7 +63,7 @@ pub(super) fn terminal_test_count_assertion_failure_message(
 }
 
 pub(super) fn cargo_fmt_check_is_stable_diff(
-    adapter: &'static dyn ValidationAdapter,
+    adapter: &'static dyn ValidationEvidenceProfile,
     output: &ProjectCommandOutput,
 ) -> bool {
     if output.execution_state != ShellCommandExecutionState::Completed
@@ -166,6 +166,13 @@ struct ValidationBudget {
     sync_wait_secs: u64,
 }
 
+/// Project validation has no public sync-wait input. Start from the canonical
+/// structured-execution grace and allow only trusted return policy to shorten it.
+fn project_validation_trusted_sync_wait(structured_handoff_max_secs: Option<u64>) -> Option<u64> {
+    structured_handoff_max_secs
+        .map(|max_handoff_secs| STRUCTURED_EXECUTION_SYNC_WAIT_SECS.min(max_handoff_secs))
+}
+
 /// Resolve a read-only structured validation budget.
 ///
 /// `timeout_secs` is the total runtime budget of the command, not the tool
@@ -262,6 +269,58 @@ mod validation_budget_tests {
 
         assert!(resolve_validation_budget("cargo_check", Some(0), None, 600).is_err());
         assert!(resolve_validation_budget("cargo_check", Some(600), Some(0), 600).is_err());
+
+        let project_default = resolve_validation_budget(
+            "project_validate",
+            Some(600),
+            project_validation_trusted_sync_wait(None),
+            600,
+        )
+        .unwrap();
+        assert_eq!(
+            project_default.sync_wait_secs,
+            STRUCTURED_EXECUTION_SYNC_WAIT_SECS
+        );
+
+        let project_loose_cap = resolve_validation_budget(
+            "project_validate",
+            Some(600),
+            project_validation_trusted_sync_wait(Some(55)),
+            600,
+        )
+        .unwrap();
+        assert_eq!(
+            project_loose_cap.sync_wait_secs,
+            STRUCTURED_EXECUTION_SYNC_WAIT_SECS
+        );
+
+        let project_strict_cap = resolve_validation_budget(
+            "project_validate",
+            Some(600),
+            project_validation_trusted_sync_wait(Some(4)),
+            600,
+        )
+        .unwrap();
+        assert_eq!(project_strict_cap.effective_timeout_secs, 600);
+        assert_eq!(project_strict_cap.sync_wait_secs, 4);
+
+        let project_short_timeout = resolve_validation_budget(
+            "project_validate",
+            Some(3),
+            project_validation_trusted_sync_wait(Some(5)),
+            600,
+        )
+        .unwrap();
+        assert_eq!(project_short_timeout.effective_timeout_secs, 3);
+        assert_eq!(project_short_timeout.sync_wait_secs, 3);
+
+        assert!(resolve_validation_budget(
+            "project_validate",
+            Some(600),
+            project_validation_trusted_sync_wait(Some(0)),
+            600,
+        )
+        .is_err());
     }
 }
 
@@ -386,6 +445,7 @@ impl ToolRuntime {
         dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
         test: Option<webcodex_core::project_validation::ProjectValidationTestOptions>,
         timeout_secs: Option<u64>,
+        structured_handoff_max_secs: Option<u64>,
         ssh_resource: Option<&str>,
         auth: Option<&AuthContext>,
     ) -> ToolResult {
@@ -396,7 +456,7 @@ impl ToolRuntime {
         let budget = match resolve_validation_budget(
             "project_validate",
             timeout_secs,
-            None,
+            project_validation_trusted_sync_wait(structured_handoff_max_secs),
             if action == ProjectValidationAction::Test {
                 DEFAULT_CARGO_TEST_TIMEOUT_SECS
             } else {
@@ -457,21 +517,37 @@ impl ToolRuntime {
         let plan = match serde_json::from_str::<ProjectValidationPlanningResult>(response.stdout.as_deref().unwrap_or("")) {
             Ok(ProjectValidationPlanningResult::Ready { plan }) => plan,
             Ok(ProjectValidationPlanningResult::Unavailable { code, detected_backend }) => return ToolResult::err_with_output(
-                "Project validation unavailable; select a supported Rust/Go recipe or a supported action, then retry.",
+                "Project validation unavailable; use a supported Rust/Go action or Python pytest/Ruff with existing tooling and supported project configuration.",
                 json!({"execution_source":"project_validate", "execution_state":"not_started", "command_started":false, "command_completed":false, "failure_kind":code, "detected_backend":detected_backend})),
             Err(_) => return ToolResult::err("invalid Runner validation plan; upgrade Server and Runner together"),
         };
-        if !plan.provenance.is_valid()
-            || plan.provenance.request != request
-            || !plan.step.is_canonical()
-        {
+        let project_workspace = plan.provenance.backend == "rust"
+            && request.scope.as_ref().is_some_and(
+                webcodex_core::project_validation::ProjectValidationScope::selects_all_packages,
+            );
+        let canonical_step = if project_workspace {
+            plan.step.is_project_workspace_cargo()
+        } else {
+            plan.step.is_canonical()
+        };
+        if !plan.provenance.is_valid() || plan.provenance.request != request || !canonical_step {
             return ToolResult::err("invalid Runner project validation plan");
         }
-        let Some(adapter) = validation_adapter_for_tool(&plan.adapter) else {
+        let semantic_action = match action {
+            ProjectValidationAction::FormatCheck => webcodex_validation::SemanticCheck::Format,
+            ProjectValidationAction::Check => webcodex_validation::SemanticCheck::Check,
+            ProjectValidationAction::Test => webcodex_validation::SemanticCheck::Test,
+        };
+        let Some(adapter) =
+            validation_evidence_profile_for_recipe(&plan.provenance.backend, semantic_action)
+        else {
             return ToolResult::err(
                 "validation adapter unavailable; upgrade Server and Runner together",
             );
         };
+        if adapter.tool_identity() != plan.adapter || adapter.validation_kind() != action.kind() {
+            return ToolResult::err("invalid Runner project validation evidence profile");
+        }
         let source_fence = self.validation_sources.capture(&resolved.resolved_id);
         let provenance = plan.provenance;
         let relative_root = provenance.recipe_root.clone();
@@ -538,7 +614,7 @@ impl ToolRuntime {
                 ))
             }
         };
-        let adapter = operation.adapter();
+        let adapter = operation.evidence_profile();
         let no_run = validation_no_run(&operation);
         let validation_target_id = operation.validation_target_id(cwd.as_deref());
         let plan = match operation.build_readonly_plan() {
@@ -694,7 +770,7 @@ impl ToolRuntime {
         config: &crate::projects::ProjectConfig,
         cwd: Option<&str>,
         command: &str,
-        adapter: &'static dyn ValidationAdapter,
+        adapter: &'static dyn ValidationEvidenceProfile,
         step: ShellJobValidationStep,
         purpose: ExecutionPurpose,
         timeout_secs: u64,
@@ -721,9 +797,10 @@ impl ToolRuntime {
         let resolved_cwd = super::helpers::project_relative_runner_cwd(config, &effective_cwd)
             .unwrap_or_else(|_| ".".to_string());
         let actual_shell = "configured";
-        // The adapter owns the canonical read-only execution plan. The same
-        // structured step that produced the compatibility command text is
-        // carried into the Job, so sync and promoted paths cannot drift.
+        // The supplied structured step is the execution authority here. Direct
+        // specialist callers build it through their adapter; project_validate
+        // receives it from the Runner-resolved recipe. Carry that exact step into
+        // the Job so sync and promoted paths cannot drift.
         let dispatched_command = match serde_json::to_string(std::slice::from_ref(&step)) {
             Ok(command) => command,
             Err(_) => {
@@ -832,7 +909,7 @@ impl ToolRuntime {
         &self,
         job_id: String,
         sync_wait_secs: u64,
-        adapter: &'static dyn ValidationAdapter,
+        adapter: &'static dyn ValidationEvidenceProfile,
         handoff: ValidationHandoff,
     ) -> ToolResult {
         let mut guard = ValidationCleanupGuard::new(
@@ -984,7 +1061,7 @@ impl ToolRuntime {
     async fn recover_validation_handoff(
         &self,
         job_id: String,
-        adapter: &'static dyn ValidationAdapter,
+        adapter: &'static dyn ValidationEvidenceProfile,
         handoff: ValidationHandoff,
         guard: &mut ValidationCleanupGuard,
     ) -> ToolResult {
@@ -1012,7 +1089,7 @@ impl ToolRuntime {
     async fn validation_terminal_result(
         &self,
         job_id: String,
-        adapter: &'static dyn ValidationAdapter,
+        adapter: &'static dyn ValidationEvidenceProfile,
         job_status: &str,
         handoff: ValidationHandoff,
     ) -> ToolResult {
@@ -1165,7 +1242,7 @@ impl ToolRuntime {
         command: &str,
         cwd: Option<&str>,
         config: &crate::projects::ProjectConfig,
-        adapter: &'static dyn ValidationAdapter,
+        adapter: &'static dyn ValidationEvidenceProfile,
         output: ProjectCommandOutput,
         timeout_secs: u64,
         sync_wait_secs: u64,

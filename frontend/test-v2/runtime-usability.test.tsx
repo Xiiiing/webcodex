@@ -8,6 +8,23 @@ import type { RuntimeV2Client } from "../src/runtime-v2/api/client.js";
 import { runtimeOverview, windowDetail } from "./fixtures.js";
 
 describe("Runtime usability", () => {
+  it("defaults to newest first without reversing Session continuation membership", () => {
+    const base = { ended_at_ms: 10, duration_ms: 1, method: "tools/call", status: "ok", meaningful: true };
+    const detail = windowDetail({ activity: [
+      { ...base, started_at_ms: 1, server_trace_id: "a", tool_name: "session-a", workflow_sessions: [{ workflow_session_id: "session-a", relation: "recording" }] },
+      { ...base, started_at_ms: 2, server_trace_id: "b", tool_name: "continuation-a", workflow_sessions: [] },
+      { ...base, started_at_ms: 3, server_trace_id: "c", tool_name: "session-b", workflow_sessions: [{ workflow_session_id: "session-b", relation: "recording" }] },
+      { ...base, started_at_ms: 4, server_trace_id: "d", tool_name: "continuation-b", workflow_sessions: [] },
+    ], active_requests: [] });
+    const original = JSON.stringify(detail);
+    render(<WindowActivityFeed detail={detail} projects={[]} language="en" selectedSessionId="session-a" />);
+    const tools = () => screen.getAllByTestId("window-workflow-step").map(row => row.querySelector("header strong")?.textContent);
+    expect(tools()).toEqual(["continuation-a", "session-a"]);
+    fireEvent.click(screen.getByRole("radio", { name: "Oldest first" }));
+    expect(tools()).toEqual(["session-a", "continuation-a"]);
+    expect(JSON.stringify(detail)).toBe(original);
+  });
+
   it("copies the full identity and explains clipboard failures", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -62,5 +79,28 @@ describe("Runtime usability", () => {
     expect(screen.getByText("Shared key authentication")).toBeTruthy();
     expect(screen.getByText("60 seconds")).toBeTruthy();
     expect(screen.getByText("Disabled")).toBeTruthy();
+  });
+});
+
+it("keeps execution facts separate from expectation matches", () => {
+  const cases = [
+    ["failed", "matched_expected_failure", "Failed · Expected result", "good"],
+    ["failed", "matched_expected_result", "Failed · Expected result", "good"],
+    ["success", "unexpected_success", "Succeeded · Expectation not met", "warn"],
+    ["failed", "expectation_mismatch", "Failed · Expectation not met", "warn"],
+    ["failed", undefined, "Failed", "warn"],
+    ["success", undefined, "Succeeded", "good"],
+  ];
+  const detail = windowDetail({ active_requests: [], activity: cases.map(([status, expectation], index) => ({
+    status: status!, failure_expectation_result: expectation, started_at_ms: index + 1,
+    ended_at_ms: index + 2, duration_ms: 1, method: "tools/call", meaningful: true,
+    workflow_sessions: [],
+  })) });
+  const { container } = render(<WindowActivityFeed detail={detail} projects={[]} language="en" />);
+  const pills = [...container.querySelectorAll(".window-call-card .status-pill")].reverse();
+  expect(pills).toHaveLength(cases.length);
+  cases.forEach(([, , label, tone], index) => {
+    expect(pills[index].textContent).toBe(label);
+    expect(pills[index].classList.contains(tone!)).toBe(true);
   });
 });

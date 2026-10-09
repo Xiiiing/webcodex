@@ -93,18 +93,7 @@ fn validate_context(
         return Err("job inventory purpose is invalid".to_string());
     }
     if context.shell.as_deref().is_some_and(|shell| {
-        !matches!(
-            shell,
-            "sh" | "bash"
-                | "bash_login"
-                | "powershell"
-                | "javascript"
-                | "typescript"
-                | "direct_argv"
-                | "configured"
-                | "custom"
-                | "remote"
-        )
+        !webcodex_core::runner_protocol::ShellJobContext::is_valid_shell(shell)
     }) {
         return Err("job inventory shell is invalid".to_string());
     }
@@ -408,11 +397,11 @@ fn validate_snapshot(
                     );
                 }
                 if let Some(validation) = snapshot.context.validation.as_ref() {
-                    if validation
-                        .steps
-                        .get(progress.completed)
-                        .is_none_or(|step| step.program != "cargo" || !step.is_canonical())
-                    {
+                    if validation.steps.get(progress.completed).is_none_or(|step| {
+                        step.program != "cargo"
+                            || !(step.is_canonical()
+                                || (validation.is_valid() && step.is_project_workspace_cargo()))
+                    }) {
                         return Err(
                             "job inventory Cargo activity is inconsistent with validation metadata"
                                 .to_string(),

@@ -82,9 +82,17 @@ pub(super) fn is_valid_logical_invocation_role(value: &str) -> bool {
 /// recorder/business duplicates are collapsed only inside the supplied Session
 /// slice; legacy events without complete correlation remain independent facts.
 pub fn canonical_tool_call_finished_events(events: &[SessionEvent]) -> Vec<&SessionEvent> {
+    canonical_tool_call_finished_event_refs(events.iter())
+}
+
+// The store owns Arc-backed deques. Borrow their events instead of cloning the
+// entire retained ledger solely to satisfy the slice-shaped public API.
+pub(super) fn canonical_tool_call_finished_event_refs<'a>(
+    events: impl IntoIterator<Item = &'a SessionEvent>,
+) -> Vec<&'a SessionEvent> {
     let mut selected = Vec::<(usize, &SessionEvent)>::new();
     let mut correlated = HashMap::<&str, Vec<(usize, &SessionEvent)>>::new();
-    for (event_index, event) in events.iter().enumerate() {
+    for (event_index, event) in events.into_iter().enumerate() {
         if event.kind != "tool_call_finished" {
             continue;
         }
@@ -381,6 +389,24 @@ pub fn public_result_expectation_satisfied(
         TOOL_EXPECTATION_RESULT_NONE => None,
         _ => Some(false),
     }
+}
+
+/// Display-only result from the durable ledger's matcher; pending results stay absent.
+pub fn tool_result_expectation_classification(
+    success: bool,
+    expectation: &ToolCallExpectation,
+    output: &Value,
+    error: Option<&str>,
+) -> Option<&'static str> {
+    if !expectation.expected_failure
+        && expectation.result_expectation.is_none()
+        && expectation.accepted_exit_codes.is_empty()
+    {
+        return None;
+    }
+    let kind = actual_failure_kind_for_tool_result(output, error, None);
+    let result = classify_failure_expectation(success, expectation, kind.as_deref(), output);
+    (result != TOOL_EXPECTATION_RESULT_NONE).then_some(result)
 }
 
 pub(super) fn classify_failure_expectation(
@@ -1095,6 +1121,30 @@ mod handoff_evidence_tests {
     use super::*;
 
     #[test]
+    fn project_validation_ruff_evidence_survives_summary_and_resanitization() {
+        for (adapter, action) in [
+            ("python:ruff:check", "check"),
+            ("python:ruff:format", "format_check"),
+        ] {
+            let output = json!({
+                "adapter": adapter, "action": action, "backend": "python",
+                "validation_target_id": "target:0123456789abcdef01234567",
+                "stdout_tail": "", "stderr_tail": "", "unretained": "payload",
+            });
+            let summary =
+                validation_output_summary_for_tool_result("project_validate", &output).unwrap();
+            let retained =
+                sanitize_persisted_validation_output_summary("project_validate", &summary).unwrap();
+            for value in [&summary, &retained] {
+                for field in ["adapter", "action", "backend", "validation_target_id"] {
+                    assert_eq!(value[field], output[field]);
+                }
+                assert!(value.get("unretained").is_none());
+            }
+        }
+    }
+
+    #[test]
     fn sparse_job_handoff_unknown_retains_incomplete_evidence_without_payload() {
         for tool in ["run_shell", "cargo_check", "cargo_test"] {
             let output = json!({"execution_state": "outcome_unknown", "command_started": true,
@@ -1362,6 +1412,67 @@ mod result_expectation_tests {
     }
 
     #[test]
+    fn display_expectation_uses_terminal_facts_without_overriding_failures() {
+        let expectation = ToolCallExpectation {
+            result_expectation: Some("failure".into()),
+            ..Default::default()
+        };
+        let completed =
+            json!({"execution_state":"completed", "exit_code":1, "failure_kind":"process_exit"});
+        assert_eq!(
+            tool_result_expectation_classification(false, &expectation, &completed, None),
+            Some("matched_expected_failure")
+        );
+        assert_eq!(
+            tool_result_expectation_classification(true, &expectation, &completed, None),
+            Some("unexpected_success")
+        );
+        assert_eq!(
+            tool_result_expectation_classification(
+                false,
+                &expectation,
+                &json!({"execution_state":"timed_out"}),
+                None
+            ),
+            Some("unexpected_failure")
+        );
+        assert_eq!(
+            tool_result_expectation_classification(
+                true,
+                &expectation,
+                &json!({"execution_state":"running", "job_id":"job"}),
+                None
+            ),
+            None
+        );
+        assert_eq!(
+            tool_result_expectation_classification(
+                false,
+                &ToolCallExpectation::default(),
+                &completed,
+                None
+            ),
+            None
+        );
+        let accepted = ToolCallExpectation {
+            accepted_exit_codes: vec![1],
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_result_expectation_classification(false, &accepted, &completed, None),
+            Some("matched_expected_result")
+        );
+        let rejected = ToolCallExpectation {
+            accepted_exit_codes: vec![0],
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_result_expectation_classification(false, &rejected, &completed, None),
+            Some("expectation_mismatch")
+        );
+    }
+
+    #[test]
     fn public_result_expectation_projection_reuses_canonical_classifier() {
         let accepted = ToolCallExpectation {
             accepted_exit_codes: vec![0, 1],
@@ -1546,10 +1657,13 @@ fn copy_project_validation_evidence(summary: &mut Value, output: &Value) {
                 "cargo_test",
                 "go_vet",
                 "go_test",
+                "python:pytest:test",
+                "python:ruff:check",
+                "python:ruff:format",
             ][..],
         ),
         ("action", &["format_check", "check", "test"][..]),
-        ("backend", &["rust", "go"][..]),
+        ("backend", &["rust", "go", "python"][..]),
     ] {
         if let Some(value) = output
             .get(field)

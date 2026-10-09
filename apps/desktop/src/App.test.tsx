@@ -8,6 +8,10 @@ const workspace = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: workspace.invoke, isTauri: () => false }));
 
 const api = vi.hoisted(() => ({
+  shellRestoreOnly: vi.fn(),
+  shellBootstrapComplete: vi.fn(),
+  readDesktopNavigation: vi.fn(),
+  acknowledgeDesktopNavigation: vi.fn(),
   getState: vi.fn(),
   computerPermissions: vi.fn(),
   requestComputerPermission: vi.fn(),
@@ -233,6 +237,10 @@ async function editTunnel() {
 
 beforeEach(() => {
     vi.resetAllMocks();
+    api.shellRestoreOnly.mockResolvedValue(false);
+    api.shellBootstrapComplete.mockResolvedValue(undefined);
+    api.readDesktopNavigation.mockResolvedValue(null);
+    api.acknowledgeDesktopNavigation.mockResolvedValue(undefined);
     window.localStorage.removeItem("webcodex.desktop.appearance.v1");
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-appearance");
@@ -276,12 +284,56 @@ beforeEach(() => {
     api.saveTunnelProfile.mockResolvedValue(readyState);
   });
 
-  it("offers explicit local and remote setup without requiring a project", async () => {
-    api.getState.mockResolvedValue(firstRunState);
+  it.each([false, true])("recreated UI restores state and pending page without resuming (runtime autostart=%s)", async (runtimeAutostart) => {
+    api.shellRestoreOnly.mockResolvedValue(true);
+    api.getState.mockResolvedValue({
+      ...readyState,
+      runtime_autostart: runtimeAutostart,
+      // Exercise the original connection-autostart eligibility, not a profile
+      // already marked started by the default fixture.
+      connections: connectionSnapshot(connectionFixture({
+        lifecycle: "stopped", ready: false, pid: null, health: "unknown",
+        process_started: false, process_ready: false, tunnel_ready: false,
+      })),
+    });
+    api.readDesktopNavigation.mockResolvedValueOnce({ sequence: 8, target: "settings" });
     renderApp();
-    fireEvent.click(await screen.findByRole("button", { name: /在此电脑使用 WebCodex/ }));
+    await waitFor(() => expect(api.acknowledgeDesktopNavigation).toHaveBeenCalledWith(8));
+    expect(await screen.findByRole("heading", { level: 1, name: "Desktop 设置" })).toBeInTheDocument();
+    await waitFor(() => expect(api.shellRestoreOnly).toHaveBeenCalled());
+    expect(api.resumeSavedRuntime).not.toHaveBeenCalled();
+    expect(api.resumeSavedConnections).not.toHaveBeenCalled();
+  });
+
+  it("does not enable lightweight until one-time Runtime autostart settles", async () => {
+    const resumed = deferred<DesktopState>();
+    api.getState.mockResolvedValue({ ...readyState, runtime_autostart: true });
+    api.resumeSavedRuntime.mockReturnValueOnce(resumed.promise);
+    renderApp();
+    await waitFor(() => expect(api.resumeSavedRuntime).toHaveBeenCalledTimes(1));
+    expect(api.shellBootstrapComplete).not.toHaveBeenCalled();
+    resumed.resolve(readyState);
+    await waitFor(() => expect(api.shellBootstrapComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it("recreated persistent Environment skips eager refresh and only observes existing state", async () => {
+    api.shellRestoreOnly.mockResolvedValue(true);
+    api.getState.mockResolvedValue({ ...readyState, persistent_environment: "env-a" });
+    renderApp();
+    await screen.findByRole("heading", { level: 1, name: "工作概览" });
+    await waitFor(() => expect(api.shellRestoreOnly).toHaveBeenCalledTimes(1));
+    expect(api.refresh).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.shellBootstrapComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it("offers explicit persistent local and remote setup from Runtime settings", async () => {
+    api.getState.mockResolvedValue(projectlessReadyState);
+    renderApp();
+    await screen.findByRole("heading", { level: 1, name: "工作概览" });
+    await changeServerConnection();
+    fireEvent.click(await screen.findByRole("button", { name: /创建主节点/ }));
     expect(screen.getByRole("checkbox", { name: "允许 AI 在此电脑上工作" })).toBeChecked();
-    expect(screen.queryByRole("button", { name: "选择文件夹" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择文件夹" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "配置 WebCodex" }));
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith({
       mode: "create", serverUrl: null, projectPath: null, runner: true, serviceScope:"user",
@@ -290,12 +342,14 @@ beforeEach(() => {
   });
 
   it("joins as a viewer with an existing user credential and no pairing", async () => {
-    api.getState.mockResolvedValue(firstRunState); renderApp();
-    fireEvent.click(await screen.findByRole("button", { name: /连接现有 Server/ }));
+    api.getState.mockResolvedValue(projectlessReadyState); renderApp();
+    await screen.findByRole("heading", { level: 1, name: "工作概览" });
+    await changeServerConnection();
+    fireEvent.click(await screen.findByRole("button", { name: /加入主节点/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "允许 AI 在此电脑上工作" }));
     fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "https://server.example" } });
     fireEvent.change(screen.getByLabelText("用户 API 凭据"), { target: { value: "wc_user_secret" } });
-    expect(screen.queryByLabelText("一次性登录码")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("一次性配对码")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "连接电脑" }));
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith({
       mode: "join", serverUrl: "https://server.example", projectPath: null, runner: false, serviceScope:"user",
@@ -304,12 +358,14 @@ beforeEach(() => {
   });
 
   it("clears a submitted one-time code after a failed projectless Runner join", async () => {
-    api.getState.mockResolvedValue(firstRunState);
+    api.getState.mockResolvedValue(projectlessReadyState);
     api.configureEnvironment.mockRejectedValueOnce({ code: "pairing_code_invalid", message: "Pairing failed", next_action: "Use a new code." });
     renderApp();
-    fireEvent.click(await screen.findByRole("button", { name: /连接现有 Server/ }));
+    await screen.findByRole("heading", { level: 1, name: "工作概览" });
+    await changeServerConnection();
+    fireEvent.click(await screen.findByRole("button", { name: /加入主节点/ }));
     fireEvent.change(screen.getByLabelText("Server URL"), { target: { value: "https://server.example" } });
-    const code = screen.getByLabelText("一次性登录码");
+    const code = screen.getByLabelText("一次性配对码");
     fireEvent.change(code, { target: { value: "wc_pair_once" } });
     fireEvent.click(screen.getByRole("button", { name: "连接电脑" }));
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith({
@@ -415,6 +471,22 @@ beforeEach(() => {
       view.unmount();
       vi.useRealTimers();
     }
+  });
+
+  it("treats a Refresh collision with an already running Desktop operation as state observation", async () => {
+    api.getState
+      .mockResolvedValueOnce(readyState)
+      .mockResolvedValueOnce(localSetupOperationState());
+    api.refresh.mockRejectedValueOnce({
+      code: "desktop_operation_busy",
+      message: "Another Desktop operation is still running",
+      next_action: "Wait for the current operation to finish.",
+    });
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(api.getState).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("status", { name: "当前 Desktop 操作" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps a user stop consistent after refresh and offers Start", async () => {
@@ -626,11 +698,11 @@ beforeEach(() => {
     renderApp();
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
     await changeServerConnection();
-    fireEvent.click(screen.getByRole("button", { name: /连接现有 Server/ }));
+    fireEvent.click(screen.getByRole("button", { name: /加入主节点/ }));
     expect(screen.getByText("将复用现有连接")).toBeInTheDocument();
-    expect(screen.queryByLabelText("一次性登录码")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("一次性配对码")).not.toBeInTheDocument();
 
-    expect(screen.queryByRole("button", { name: "选择文件夹" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择文件夹" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "连接电脑" }));
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({
       mode: "join", serverUrl, projectPath: null, runner: true, pairingCode: null,
@@ -640,23 +712,27 @@ beforeEach(() => {
   it("does not start a duplicate Tunnel when local setup runs while one is already active", async () => {
     const tunneledState: DesktopState = {
       ...readyState,
+      persistent_environment: "saved-environment",
       topology: { ...readyState.topology!, exposure: { kind: "open_ai_tunnel" } },
       connections: connectionSnapshot(connectionFixture()),
       preferred_connection: "open_ai_tunnel",
     };
     api.getState.mockResolvedValue(tunneledState);
+    api.refresh.mockResolvedValue(tunneledState);
     api.observeChatgptActivity.mockResolvedValue(tunneledState);
     api.configureEnvironment.mockResolvedValue(tunneledState);
 
     renderApp();
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
     await changeServerConnection();
-    fireEvent.click(screen.getByRole("button", { name: /在此电脑使用 WebCodex/ }));
+    fireEvent.click(screen.getByRole("button", { name: /创建主节点/ }));
     expect(screen.queryByRole("checkbox", { name: "配置完成后连接 ChatGPT" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "配置 WebCodex" }));
 
     await waitFor(() => expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({ mode: "create", runner: true })));
     expect(api.startRegularTunnel).not.toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { level: 1, name: "完成 ChatGPT 连接" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name:"打开概览"}));
     expect(await screen.findByRole("heading", { level: 1, name: "工作概览" })).toBeInTheDocument();
   });
 
@@ -678,7 +754,7 @@ beforeEach(() => {
     api.getState.mockResolvedValue(observed); api.observeChatgptActivity.mockResolvedValue(observed); renderApp();
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
     expect(screen.getByText(/最近 ChatGPT 活动/)).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("ChatGPT 隧道1 个隧道 · 0 个本地就绪");
+    expect(screen.getByRole("status")).toHaveTextContent("Desktop 中的 Tunnel 连接Desktop 中 1 个隧道 · 0 个本地就绪");
     fireEvent.click(screen.getByRole("button", { name: "连接" }));
     expect(screen.getByText(/最近 ChatGPT 活动/)).toBeInTheDocument();
     expect(screen.queryByText(/ChatGPT 未连接|等待 ChatGPT|已验证 ChatGPT 使用/)).not.toBeInTheDocument();
@@ -688,7 +764,7 @@ beforeEach(() => {
     api.getState.mockResolvedValue(readyState); renderApp();
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
     expect(screen.getByText("尚未观察到 ChatGPT 活动")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Server 连接运行中本机任务服务运行中ChatGPT 隧道1 个隧道 · 0 个本地就绪");
+    expect(screen.getByRole("status")).toHaveTextContent("Server 连接运行中本机任务服务运行中Desktop 中的 Tunnel 连接Desktop 中 1 个隧道 · 0 个本地就绪");
     expect(screen.queryByText(/ChatGPT 未连接|等待 ChatGPT|不代表 ChatGPT/)).not.toBeInTheDocument();
   });
 
@@ -763,11 +839,13 @@ beforeEach(() => {
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
     await waitFor(() => expect(tauriEvents.handler).not.toBeNull());
 
+    api.readDesktopNavigation.mockResolvedValueOnce({ sequence: 1, target: "settings" });
     act(() => {
       tauriEvents.handler?.({ payload: "settings" });
     });
     expect(await screen.findByRole("heading", { level: 1, name: "Desktop 设置" })).toBeInTheDocument();
 
+    api.readDesktopNavigation.mockResolvedValueOnce({ sequence: 2, target: "activity" });
     act(() => {
       tauriEvents.handler?.({ payload: "activity" });
     });
@@ -796,14 +874,34 @@ beforeEach(() => {
     await waitFor(() => expect(launchAtLogin).toBeChecked());
   });
 
-  it("does not install persistent services before a fresh Desktop chooses local or remote setup", async () => {
+  it("shows Create and Join on fresh launch without setup or service effects", async () => {
     api.getState.mockResolvedValue(firstRunState); renderApp();
-    expect(await screen.findByRole("button", { name: /在此电脑使用 WebCodex/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /连接现有 Server/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", {name:/创建主节点/})).toBeInTheDocument();
+    expect(screen.getByRole("button", {name:/加入主节点/})).toBeInTheDocument();
     expect(api.configureLocal).not.toHaveBeenCalled();
     expect(api.configureEnvironment).not.toHaveBeenCalled();
     expect(api.resumeSavedRuntime).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "选择文件夹" })).not.toBeInTheDocument();
+    expect(api.resumeSavedConnections).not.toHaveBeenCalled();
+    expect(api.startRegularTunnel).not.toHaveBeenCalled();
+    expect(api.startQuickShare).not.toHaveBeenCalled();
+  });
+
+  it.each(["create", "join"] as const)("continues fresh %s setup to role-specific connection guidance", async mode => {
+    api.getState.mockResolvedValue(firstRunState);
+    const configured = {...projectlessReadyState,persistent_environment:"fresh-env",topology:{...projectlessReadyState.topology!,server: mode === "create" ? {kind:"local" as const} : {kind:"remote" as const,url:"https://main.example"}}};
+    api.configureEnvironment.mockResolvedValue(configured);
+    renderApp();
+    fireEvent.click(await screen.findByRole("button",{name:mode === "create" ? /创建主节点/ : /加入主节点/}));
+    if (mode === "join") {
+      fireEvent.change(screen.getByLabelText("Server URL"),{target:{value:"https://main.example"}});
+      fireEvent.change(screen.getByLabelText("一次性配对码"),{target:{value:"one-time-code"}});
+    }
+    fireEvent.click(screen.getByRole("button",{name:mode === "create" ? "配置 WebCodex" : "连接电脑"}));
+    expect(await screen.findByRole("heading",{level:1,name:"完成 ChatGPT 连接"})).toBeInTheDocument();
+    expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({mode,runner:true,projectPath:null}));
+    expect(api.configureLocal).not.toHaveBeenCalled();
+    if (mode === "create") expect(screen.getByRole("button",{name:"添加 ChatGPT Tunnel"})).toBeInTheDocument();
+    else expect(screen.queryByRole("button",{name:"添加 ChatGPT Tunnel"})).toBeNull();
   });
 
   it("keeps PowerShell 7 guidance available in manual local recovery without requiring a project", async () => {
@@ -819,7 +917,7 @@ beforeEach(() => {
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
 
     await changeServerConnection();
-    fireEvent.click(screen.getByRole("button", { name: /在此电脑使用 WebCodex/ }));
+    fireEvent.click(screen.getByRole("button", { name: /创建主节点/ }));
     const guidance = screen.getByText("建议安装 PowerShell 7").closest("article");
     expect(guidance).not.toBeNull();
     expect(guidance).toHaveTextContent("Windows PowerShell 5.1");
@@ -832,18 +930,20 @@ beforeEach(() => {
     expect(api.configureLocal).not.toHaveBeenCalled();
   });
 
-  it("surfaces a failed explicit local setup without inventing a default project", async () => {
-    api.getState.mockResolvedValue(firstRunState);
+  it("surfaces a failed explicit persistent local setup without inventing a default project", async () => {
+    api.getState.mockResolvedValue(projectlessReadyState);
     api.configureEnvironment.mockRejectedValue({ code: "runner_offline", message: "Runner did not become connected", next_action: "Retry setup." });
     renderApp();
-    fireEvent.click(await screen.findByRole("button", { name: /在此电脑使用 WebCodex/ }));
+    await screen.findByRole("heading", { level: 1, name: "工作概览" });
+    await changeServerConnection();
+    fireEvent.click(await screen.findByRole("button", { name: /创建主节点/ }));
     fireEvent.click(screen.getByRole("button", { name: "配置 WebCodex" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("runner_offline");
     expect(api.configureEnvironment).toHaveBeenCalledWith(expect.objectContaining({ projectPath: null, runner: true }));
     expect(api.activateLocalProject).not.toHaveBeenCalled();
   });
 
-  it("shows an initial status failure and retries the complete fresh-start bootstrap", async () => {
+  it("shows an initial status failure and retries the first-run state read", async () => {
     const retryState = deferred<DesktopState>();
     api.getState
       .mockRejectedValueOnce({
@@ -867,9 +967,9 @@ beforeEach(() => {
     await waitFor(() => expect(api.getState).toHaveBeenCalledTimes(2));
 
     await act(async () => { retryState.resolve(firstRunState); });
-    expect(await screen.findByRole("button", { name: /在此电脑使用 WebCodex/ })).toBeInTheDocument();
-    expect(api.configureEnvironment).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /创建主节点/ })).toBeInTheDocument();
     expect(api.configureLocal).not.toHaveBeenCalled();
+    expect(api.configureEnvironment).not.toHaveBeenCalled();
     expect(api.resumeSavedRuntime).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -1026,7 +1126,7 @@ beforeEach(() => {
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
 
     fireEvent.click(screen.getByRole("button", { name: "连接" }));
-    expect(await within(screen.getByRole("main")).findByText("1 个隧道 · 1 个本地就绪")).toBeInTheDocument();
+    expect(await within(screen.getByRole("main")).findByText("Desktop 中 1 个隧道 · 1 个本地就绪")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "启动" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "停止 ChatGPT" })).toBeInTheDocument();
   });
@@ -1198,7 +1298,7 @@ beforeEach(() => {
       });
 
       const readyStatus = screen.getByRole("status", { name: "工作区" });
-      expect(readyStatus).toHaveTextContent("Server 连接运行中本机任务服务运行中ChatGPT 隧道1 个隧道 · 1 个本地就绪");
+      expect(readyStatus).toHaveTextContent("Server 连接运行中本机任务服务运行中Desktop 中的 Tunnel 连接Desktop 中 1 个隧道 · 1 个本地就绪");
       expect(screen.getByText("尚未观察到 ChatGPT 活动")).toBeInTheDocument();
       expect(screen.queryByText(/等待 ChatGPT|ChatGPT 未连接|外部连接已验证/)).not.toBeInTheDocument();
       expect(api.getState).toHaveBeenCalledTimes(1);
@@ -1209,7 +1309,7 @@ beforeEach(() => {
 
       expect(api.getState).toHaveBeenCalledTimes(2);
       expect(api.refresh).toHaveBeenCalledTimes(0);
-      expect(screen.getByRole("status", { name: "工作区" })).toHaveTextContent("Server 连接运行中本机任务服务运行中ChatGPT 隧道1 个隧道 · 0 个本地就绪");
+      expect(screen.getByRole("status", { name: "工作区" })).toHaveTextContent("Server 连接运行中本机任务服务运行中Desktop 中的 Tunnel 连接Desktop 中 1 个隧道 · 0 个本地就绪");
       expect(screen.queryByText(/ChatGPT 连接尚未验证|ChatGPT 未连接|等待 ChatGPT/)).not.toBeInTheDocument();
 
       view.unmount();

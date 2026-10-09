@@ -118,12 +118,21 @@ pub(crate) fn render_oauth_insufficient_scope(
     res.render(Json(oauth_insufficient_scope_body(description)));
 }
 
+/// Only advertise reauthorization when OAuth can delegate the missing authority.
+/// None retains the unqualified challenge used for alternative-scope denials.
+pub(crate) fn oauth_scope_denial_is_delegable(required_scope: Option<&str>) -> bool {
+    required_scope.is_none_or(|scope| crate::oauth_http::oauth_scopes_supported().contains(&scope))
+}
+
 pub(crate) fn scope_forbidden_body(
     auth: Option<&AuthContext>,
+    required_scope: Option<&str>,
     description: impl Into<String>,
 ) -> serde_json::Value {
     let description = description.into();
-    if auth.is_some_and(AuthContext::is_oauth_token) {
+    if auth.is_some_and(AuthContext::is_oauth_token)
+        && oauth_scope_denial_is_delegable(required_scope)
+    {
         oauth_insufficient_scope_body(description)
     } else {
         serde_json::json!({
@@ -140,12 +149,18 @@ pub(crate) fn render_scope_forbidden(
     description: impl Into<String>,
 ) {
     let description = description.into();
-    if auth.is_some_and(AuthContext::is_oauth_token) {
+    if auth.is_some_and(AuthContext::is_oauth_token)
+        && oauth_scope_denial_is_delegable(required_scope)
+    {
         render_oauth_insufficient_scope(res, required_scope, description);
         return;
     }
     res.status_code(StatusCode::FORBIDDEN);
-    res.render(Json(scope_forbidden_body(auth, description)));
+    res.render(Json(scope_forbidden_body(
+        auth,
+        required_scope,
+        description,
+    )));
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +292,32 @@ impl Handler for AuthMiddleware {
         };
 
         let db = get_db(depot);
+        if crate::public_ingress_auth::entry(depot).is_some() {
+            let context =
+                crate::public_ingress_auth::authenticate_mcp(req, depot, &config, db.as_ref())
+                    .await;
+            let Some(context) = context else {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                if let Some(challenge) = oauth2_bearer_challenge(&config) {
+                    if let Ok(value) = salvo::http::HeaderValue::from_str(&challenge) {
+                        res.headers_mut().insert("www-authenticate", value);
+                    }
+                }
+                res.render(Json(serde_json::json!({"error":"invalid_token"})));
+                ctrl.skip_rest();
+                return;
+            };
+            if let Err((scope, description)) =
+                scopes::enforce_route_scope(&context, req.method().as_str(), req.uri().path())
+            {
+                render_scope_forbidden(res, Some(&context), scope, description);
+                ctrl.skip_rest();
+                return;
+            }
+            depot.inject(context);
+            ctrl.call_next(req, depot, res).await;
+            return;
+        }
         let project_auth = project_auth_state(depot);
         let project_mode = project_auth
             .as_deref()

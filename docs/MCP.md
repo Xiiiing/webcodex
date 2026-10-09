@@ -24,7 +24,7 @@ Check the Runner and project state independently. If they remain available and t
 
 ## ChatGPT: temporary `share`
 
-Explicit `share` is supported on Linux, macOS, and Windows and owns a temporary single-project environment for that foreground run. Windows x64 can use the managed default Cloudflare Quick Tunnel; Windows ARM64 needs a trusted explicit/PATH `cloudflared` because the pinned Cloudflare release publishes no official ARM64 artifact. Managed OpenAI `tunnel-client` supports both Windows x64 and arm64.
+Explicit `share` is supported on Linux, macOS, and Windows and owns a temporary single-project environment for that foreground run. Windows x64 can use the managed default Cloudflare Quick Tunnel; Windows ARM64 needs a trusted explicit/PATH `cloudflared` because the pinned Cloudflare release publishes no official ARM64 artifact. Native OpenAI Tunnel supports both Windows x64 and arm64.
 
 For the default temporary public path, WebCodex reuses an explicit/PATH `cloudflared` or downloads its pinned verified managed copy automatically, then run:
 
@@ -75,7 +75,7 @@ For an OpenAI-only private transport, create/select a Secure MCP Tunnel, export
 `CONTROL_PLANE_TUNNEL_ID` plus a Restricted `CONTROL_PLANE_API_KEY` with Tunnels
 Read + Use, and run `webcodex share --tunnel openai`. ChatGPT uses Connection:
 Tunnel + No authentication; the temporary WebCodex Bearer stays local and is
-injected by the pinned verified OpenAI `tunnel-client`.
+injected by the native Rust Tunnel client.
 
 For a long-lived **loopback-only** Server reached through OpenAI Secure Tunnel,
 ChatGPT host-file rewrites authenticated by the explicitly allowed local tunnel
@@ -86,12 +86,12 @@ existing explicit value is never overwritten. The exception works only when
 `WEBCODEX_ADDR` resolves to loopback and the authenticated credential is either a
 normal user API token or the configured Server bootstrap credential used by the
 Desktop regular Tunnel. The regular Tunnel derives that credential from the local
-`WEBCODEX_TOKEN` configuration and injects it into its private tunnel-client
+`WEBCODEX_TOKEN` configuration and injects it into its private native Tunnel
 authorization; users should not copy or expose that credential. Independent/network-
 accessible Servers remain off by default and must not use this as a substitute for
 OAuth.
 
-For a regular independent Windows Server + Runner reached through OpenAI Tunnel, or to troubleshoot a case where local `/readyz` is healthy but ChatGPT Connector creation still fails, see the [Windows + OpenAI Secure MCP Tunnel deep dive](WINDOWS_OPENAI_TUNNEL.md). It is advanced setup/troubleshooting material, not required reading for a first-time user.
+For a regular independent Windows Server + Runner reached through OpenAI Tunnel, or to troubleshoot a case where local MCP is healthy but ChatGPT Connector creation still fails, see the [Windows + OpenAI Secure MCP Tunnel deep dive](WINDOWS_OPENAI_TUNNEL.md). It is advanced setup/troubleshooting material, not required reading for a first-time user.
 
 ## Result cards
 
@@ -110,6 +110,18 @@ invoke tools; the canonical tool result remains available independently.
 disabling the underlying tools.
 
 The current Result App is intentionally static. September 2026 Host experiments proved that a separately designed MCP App controller can poll server-owned state and request later ChatGPT model turns, including a bounded foreground autonomous multi-turn loop, but background-tab model-turn scheduling is not an immediate guarantee. Those findings and the production design constraints are recorded in [`agent/mcp-app-continuation-experiments.md`](agent/mcp-app-continuation-experiments.md); they do not change the current Result App contract.
+
+### Dedicated DOCX reader
+
+`present_docx(project, path)` opens one authorized `.docx` in a dedicated read-only
+MCP App. It supports unchanged/untracked files without Git or a Workflow Session,
+pins size/SHA-256 (10 MiB maximum), and privately reads version-fenced segments.
+The reader offers fit width, zoom, optional fullscreen and original DOCX download.
+Common document styles are supported; layout/pagination may differ from Word.
+Legacy `.doc`, encrypted packages and editing are unsupported. A changed file
+requires explicit reopening; repeated presentation may create another Host card.
+The reader reuses the hidden format-neutral `read_app_artifact_chunk` bridge; no DOCX-specific binary transport is added.
+See [DOCX architecture and bounds](architecture/docx-document-viewer.md).
 
 ### Live Work Result card
 
@@ -138,7 +150,28 @@ An open panel retains its exact Project and explicit Session selection on refres
 Window-linked Session evidence never becomes refresh authority. Reopen the panel
 to select a newer successful presentation; missing Window identity or binding
 fails closed. Current authorization and snapshot fences still apply on every read.
-Full-file/Markdown previews and line/selection-to-chat interactions are deferred.
+Changed files and Final Changes offer lazy Full text previews only for advertised
+paths. Changed files follow fresh workspace observations by default, renewing
+only a previously inspected view and keeping each read bound to an exact
+working-tree snapshot. Pin snapshot for review keeps that code stable while
+activity and workspace status refresh; Follow changes resumes updates. Final
+files always use the sealed final tree, even after later workspace edits.
+Snapshot retention and expiry remain bounded; failed reads never retarget code.
+Content loads in explicit
+32 KiB pages up to 256 KiB per file; the card labels partial content and the cap.
+A deleted file has no final version. Binary, non-UTF-8, symlink and submodule
+contents are unavailable; failed or expired reads never fall back to a live path.
+Markdown is enabled for `.md`/`.markdown` only after the complete file is loaded.
+The bundled markdown-it parser supports standard Markdown, tables and
+strikethrough, without promising every GFM extension. Rendering uses DOM node and
+attribute allowlists: raw HTML remains text, unsafe URLs are rejected, links stay
+inert and external images show a placeholder instead of loading resources.
+Line/selection-to-chat interactions remain deferred.
+
+The Markdown bundle is checked into the single-script App resource, so Rust-only
+builds need no npm toolchain. After `npm ci --prefix frontend`, regenerate with
+`npm --prefix frontend run build:work-result`; `node frontend/scripts/build-work-result-markdown.mjs --check`
+checks deterministic output and also runs under `check:dist`.
 
 Rendering entrypoints retain the default model/App visibility. App-only bridge
 helpers return data without `ui.resourceUri`: ChatGPT rejects private tools that
@@ -157,7 +190,7 @@ and fetch their sanitized trace/timing details only when expanded. The inline ca
 shows the canonical hashed Window key used by the Window activity ledger; the
 thread panel puts the same identity under Diagnostics, making
 support traces attributable without exposing the Host's raw Window identifier.
-New cards use `ui://webcodex/work-result/v16` so Hosts with cached older templates
+New cards use `ui://webcodex/work-result/v17` so Hosts with cached older templates
 load the current thread-panel, lazy-detail and canonical tool-name contract.
 Retired resource URIs fail closed instead of serving a new template under an old cache key.
 
@@ -283,6 +316,10 @@ When OAuth is enabled, MCP clients can use the authorization-code flow instead o
 
 For ordinary hosted `connect --auth oauth`, the Runner keeps its hosted credential while the MCP client receives a separate OAuth credential. Add `--oauth-computer-permissions`, `--oauth-local-mcp`, or `--oauth-local-ssh` only when those optional capabilities are needed. Existing clients are not silently widened; a real permission change requires reauthorization.
 
+Shared-key OAuth delegation for Browser Use requires explicit `--oauth-browser-permissions` on `connect --auth oauth`. It adds only `browser:read`, `browser:control`, and `browser:launch`. The baseline excludes Browser scopes. Browser authority is independent of `--oauth-computer-permissions` and its consent checkboxes. Existing clients never expand automatically; narrow historical profiles gain only the explicitly selected class. Scope ceiling changes revoke old grants and require reauthorization. Reusing a Browser-enabled profile requires the flag again.
+
+`read_tool_trace` requires credential-level admin authority and the Stateless MCP 2026 trace-diagnostics capability. A managed OAuth connection can acquire internal admin authority when an admin PAT authorizes its own managed-user client; tools/list, manifest discovery, direct calls and `call_runtime_tool` then use the same admin scope checks. `admin` remains absent from requestable scopes and public OAuth responses; ordinary OAuth denials do not advertise an `admin` scope challenge. Shared-key/project-share OAuth cannot acquire this authority. Pre-upgrade ChatGPT/NewWebCodex connections require one such reauthorization; refresh rotation then preserves authority. See [Authentication](AUTH_MODEL.md#oauth2).
+
 Project-first `share --auth oauth` remains bound to that temporary share environment. Managed-user OAuth is a separate advanced flow (`connect --auth managed-oauth`). OAuth credentials are never valid on Runner transport.
 
 For the credential and scope model, see [Authentication](AUTH_MODEL.md#oauth2).
@@ -379,11 +416,13 @@ work_on_project
 
 `present_work_result` is a one-card presentation layer for substantial coding, not a correctness primitive. Once mounted, its App-only state reads keep current progress, workspace, validation, and review visible without model polling. A non-blocking `finish_coding_task` seals eligible final changes in the presentation cache at closeout; the same card then discovers that immutable snapshot and can lazily expand per-file diffs. Tiny/read-only work should skip the card; repeated presentation of the same Session should be avoided.
 
-For ordinary portable read-only validation, prefer `project_validate`. It accepts only a closed `format_check` / `check` / `test` intent plus an optional `auto` / `rust` / `go` adapter hint; the Runner resolves the nearest unambiguous recipe on its own registered filesystem and then starts the existing structured validation Job. Rust maps to `cargo fmt -- --check`, `cargo check --all-targets`, or `cargo test`; Go maps to `go vet ./...` or `go test -json ./...`. Go project validation runs in Runner-owned single-module mode with `GO111MODULE=on` and `GOWORK=off`, so ambient module mode or parent `go.work` selection cannot silently change the gateway's workspace semantics. Its validation target identity is domain-separated from ambient Go specialist evidence, so success under different workspace semantics cannot reconcile a gateway failure. The standalone `go_test` specialist keeps its existing environment behavior. An optional bounded `scope.packages` (1..8 entries) narrows Rust check/test through repeated Cargo `-p` selectors and Go check/test through project-relative package patterns; package-scoped formatting fails closed. Node/Python detection currently returns a bounded unsupported result. The request never carries arbitrary executable, argv, shell grammar, installation, or source mutation. Existing `cargo_*` / `go_test` tools remain available for ecosystem-specific advanced options. `project_validate` requires the additive `project_validation_v1` Runner capability; scoped requests additionally require `project_validation_package_scope_v1`. Go project-validation Job admission additionally requires `project_go_single_module_v1`, so a Server cannot hand a Go gateway plan to an older Runner that may inherit ambient workspace state.
+For ordinary portable read-only validation, prefer `project_validate`. It accepts only a closed `format_check` / `check` / `test` intent plus an optional `auto` / `rust` / `go` / `python` adapter hint; the Runner resolves the nearest unambiguous recipe on its own registered filesystem and then starts the existing structured validation Job. Rust maps to `cargo fmt -- --check`, `cargo check --all-targets`, or `cargo test`; Go maps to `go vet ./...` or `go test -json ./...`. Go project validation runs in Runner-owned single-module mode with `GO111MODULE=on` and `GOWORK=off`, so ambient module mode or parent `go.work` selection cannot silently change the gateway's workspace semantics. Its validation target identity is domain-separated from ambient Go specialist evidence, so success under different workspace semantics cannot reconcile a gateway failure. The standalone `go_test` specialist keeps its existing environment behavior. Optional `scope` selects exactly one portable package intent: bounded `packages` (1..8 entries) narrows Rust check/test through repeated Cargo `-p` selectors and Go check/test through project-relative package patterns, while `all_packages=true` selects the complete project unit. Rust all-packages maps to Cargo `--workspace` only when the Runner proves the effective Cargo workspace root is exactly the registered Project root and binds the in-Project Cargo manifest graph into the existing re-plan fence; Go all-packages keeps the canonical `./...` single-module scope. Scoped formatting fails closed. Python supports test only, using an existing configured/profile/PATH Python 3 interpreter and canonical `python -m pytest --color=no -rA`; Python check/format, all scope and dependency policy fail closed. Node detection returns a bounded unsupported result. Python planning and Job admission require `project_validation_python_pytest_v1`; missing pytest is a definite not-started tooling failure with no automatic installation or fallback. See [Python/pytest validation](implementation/python-pytest-project-validation.md) for environment selection, evidence and same-Job behavior. The request never carries arbitrary executable, argv, shell grammar, installation, or source mutation. Existing `cargo_*` / `go_test` tools remain available for ecosystem-specific advanced options. `project_validate` requires the additive `project_validation_v1` Runner capability; explicit `packages` additionally require `project_validation_package_scope_v1`, while `all_packages=true` requires `project_all_packages_v1`. Go project-validation Job admission additionally requires `project_go_single_module_v1`, so a Server cannot hand a Go gateway plan to an older Runner that may inherit ambient workspace state.
 
-For ordinary portable Rust/Go builds, prefer `project_build`. It accepts only an exact registered `project`, optional project-relative `cwd`, an optional `auto` / `rust` / `go` adapter hint, optional bounded `scope.packages` (1..8 entries), and total `timeout_secs`. The Runner resolves the nearest unambiguous recipe and owns canonical argv: Rust maps to `cargo build` with repeated `-p` selectors when scoped; Go maps to `go build ./...` or the bounded project-relative package patterns supplied by the caller. Go project builds execute with Runner-owned `GO111MODULE=on` and `GOWORK=off`; full `go.work` workspace semantics are outside the v1 gateway rather than inherited implicitly from the Runner host. The request cannot provide an executable, argv, shell, script, release/profile/target/features, workspace/exclude policy, offline/network policy, or artifact-discovery contract. Node/Python recipes fail closed as unsupported in v1.
+Cargo all-packages provenance is a bounded package-selection witness, not a complete build-input snapshot. It requires a contained workspace, or a standalone package with no ancestor `Cargo.toml` marker; parent markers are only probed, never read outside the registered Project. External path dependencies are unavailable in this scope because their `package.workspace` metadata can add out-of-Project members. Relevant manifest/member/dependency aliases remain fenced, while unrelated non-manifest links are ignored. Unproven topology or exhausted bounds returns `validation_scope_unavailable` / `build_scope_unavailable`; explicit package scope and the existing specialist tools retain their contracts.
 
-Both gateways optionally accept `dependency_policy: {"mode":"locked"}`. This is a portable dependency-resolution guarantee, not a literal cross-ecosystem flag contract: Rust build/check/test use Cargo `--locked`, while Go build/vet/test use `-mod=readonly`. The policy tells the adapter not to repair project dependency selection state in order to make the operation succeed; it does **not** disable registry/module/toolchain network access. Offline/network policy remains a separate #599 extension. `project_validate(action="format_check")` rejects the dependency policy instead of silently ignoring it. Policy-bearing planning and typed Job admission both require the additive `project_dependency_policy_v1` Runner capability. Locked validation derives a distinct durable validation target identity, while requests that omit the policy preserve the historical argv and identity.
+For ordinary portable Rust/Go builds, prefer `project_build`. It accepts only an exact registered `project`, optional project-relative `cwd`, an optional `auto` / `rust` / `go` adapter hint, optional portable `scope` selecting either bounded `packages` (1..8 entries) or `all_packages=true`, and total `timeout_secs`. The Runner resolves the nearest unambiguous recipe and owns canonical argv: Rust maps explicit packages to repeated `-p` selectors and all-packages to `cargo build --workspace` only after proving the effective Cargo workspace root is the registered Project root; Go maps explicit package patterns directly and all-packages to `go build ./...`. Go project builds execute with Runner-owned `GO111MODULE=on` and `GOWORK=off`; full `go.work` workspace semantics are outside the v1 gateway rather than inherited implicitly from the Runner host. The request cannot provide an executable, argv, shell, script, release/profile/target/features, native workspace/exclude flags, offline/network policy, or artifact-discovery contract. Portable all-packages requests require the additive `project_all_packages_v1` Runner capability. Node/Python recipes fail closed as unsupported in v1.
+
+Both gateways optionally accept `dependency_policy: {"mode":"locked"}`. This is a portable dependency-resolution guarantee, not a literal cross-ecosystem flag contract: Rust build/check/test use Cargo `--locked`, while Go build/vet/test use `-mod=readonly`. The policy tells the adapter not to repair project dependency selection state in order to make the operation succeed; it does **not** disable registry/module/toolchain network access. Offline/network policy is tracked as an additive lifecycle extension in #962. `project_validate(action="format_check")` rejects the dependency policy instead of silently ignoring it. Policy-bearing planning and typed Job admission both require the additive `project_dependency_policy_v1` Runner capability. Locked validation derives a distinct durable validation target identity, while requests that omit the policy preserve the historical argv and identity.
 
 `project_build` requires the additive `project_build_v1` Runner capability at both planning and typed Job admission. Go project-build Job admission additionally requires `project_go_single_module_v1`. Admission replans the registered project/root, recipe, manifest/lock provenance, package scope, and canonical invocation; the worker rechecks that same plan after any local queue wait, before native process execution. A stale plan fails as `not_started` and releases its Job slot rather than silently rebuilding or executing the outdated intent. Long builds keep the same durable Job and return the ordinary sparse pending continuation; pending never authorizes retry or redispatch. The closed gateway bounds WebCodex's command authority but is not an OS sandbox: Cargo/Go build logic and project build scripts may still have their own filesystem or network effects. Existing lower-level execution tools remain explicit escape hatches for build forms outside this v1 contract.
 
@@ -394,18 +433,21 @@ For `action="test"`, optional `test` selects tests and states the evidence requi
 ```
 
 Rust interprets `filter` as one libtest substring; Go interprets it as a native
-`-run` regexp, including Go's slash-separated subtest semantics. Go whitespace is
-preserved; this is not a cross-language query syntax. Empty/omitted filters keep
+`-run` regexp, including Go's slash-separated subtest semantics. Python uses a
+native pytest `-k` expression, bounded to 200 UTF-8 bytes with controls and
+option-shaped prefixes rejected. Go and Python preserve meaningful whitespace;
+this is not a cross-language query syntax. Empty/omitted filters keep
 the unfiltered default. Filters cannot introduce arbitrary argv. `require_tests`
 defaults to true (at least one proven executed test); explicit false accepts
-proven zero tests when `min_tests` is absent. A requested `min_tests` (1..1,000,000)
+native success when `min_tests` is absent, including proven zero or unknown counts
+(unknown counts remain unproven; source freshness is independent). A requested `min_tests` (1..1,000,000)
 still applies with false, and count uncertainty is not zero. These are evidence
 postconditions, not extra tests to run. The test block is invalid for check or
 format_check. Any supplied test block requires the additive
 `project_validation_test_options_v1` Runner capability; it is checked at both
 planning and Job admission. Old calls without that block retain their old wire
 and execution defaults. See [project-validation test options](implementation/project-validation-test-options.md)
-for exact scope, identity, and remaining #599 work.
+for exact scope and identity; additive lifecycle extensions are tracked in #962.
 
 Adaptive Runtime may expose common tools directly and long-tail tools through `call_runtime_tool`. Direct versus gateway exposure never changes schema validation, OAuth scope, Project authority, permission policy, Runner capability checks, Session fences, or effects.
 
@@ -522,6 +564,26 @@ serialized-byte and advertised-tool-count budgets on final Stateless results,
 including Session wrappers, gateway tools, and optional App metadata/tools.
 
 ### ChatGPT file bridge
+
+For viewing a project PDF, call `present_pdf(project, path)` directly. It opens
+the dedicated PDF App (`ui://webcodex/pdf/v6`) with a filename, page/zoom/search
+toolbar and a full-height continuous-scroll reading area. It does not include Work Result activity,
+change lists or collaboration. Unchanged and untracked PDFs are supported;
+Git and Workflow Sessions are not prerequisites. The Host controls its outer
+sidebar and display mode. Rendering requires an MCP Apps-capable Host.
+
+The dedicated reader uses the App-only `read_app_artifact_chunk` bridge for bytes.
+That bridge is format-neutral and reuses the canonical artifact export chunk
+transport: each `tools/call` reauthorizes Project access, validates the pinned
+path/size/SHA-256 identity, and returns at most 512 KiB per Host-facing call through private MCP metadata.
+A changed source fails closed. A 9 MiB document needs eighteen Host round trips.
+The unreleased PDF-specific `read_pdf_chunk` adapter has been removed; older
+mounted readers must be reopened from the current descriptor. The PDF remains
+bounded at 20 MiB and PDF.js
+rechecks the assembled digest/header before rendering. Use `present_work_result`
+for substantial coding progress, and `present_pdf` when the user asks to view a
+PDF. See [PDF document viewer](architecture/pdf-document-viewer.md).
+The dedicated reader keeps PDF.js as the rendering engine but uses a small host-compatible continuous-scroll shell with viewport observation and nearby-page lazy rendering; Work Result retains its compact single-page preview. Whole-file transfer keeps one absolute, size-aware deadline: at least 120 seconds and up to 15 minutes based on the bounded 512 KiB Host round trips. Each App-originated chunk call inherits the remaining document budget instead of imposing a second shorter timeout. The transport still assembles and verifies the complete pinned file before PDF.js starts rendering, so progressive first-page range loading remains a separate optimization.
 
 When the connected MCP protocol/host admits the artifact capabilities, WebCodex supports
 host-native file transfer in both directions without routing complete binary

@@ -316,6 +316,11 @@ fn project_build_schema_is_closed_bounded_and_has_no_raw_execution_fields() {
         "timeout_secs": 1800
     });
     assert!(test_support::validate_schema_instance(&valid, &schema).is_ok());
+    assert!(test_support::validate_schema_instance(
+        &serde_json::json!({"project":"demo","scope":{"all_packages":true}}),
+        &schema,
+    )
+    .is_ok());
 
     for forbidden in [
         "executable",
@@ -336,6 +341,9 @@ fn project_build_schema_is_closed_bounded_and_has_no_raw_execution_fields() {
         serde_json::json!({"project":"demo","scope":{"packages":(0..9).map(|i| format!("p-{i}")).collect::<Vec<_>>()}}),
         serde_json::json!({"project":"demo","scope":{"packages":["x".repeat(257)]}}),
         serde_json::json!({"project":"demo","scope":{"packages":["a"],"unknown":true}}),
+        serde_json::json!({"project":"demo","scope":{}}),
+        serde_json::json!({"project":"demo","scope":{"all_packages":false}}),
+        serde_json::json!({"project":"demo","scope":{"packages":["a"],"all_packages":true}}),
         serde_json::json!({"project":"demo","unknown":true}),
     ] {
         assert!(
@@ -354,6 +362,11 @@ fn project_validate_package_scope_schema_is_closed_and_bounded() {
         "scope": {"packages": ["package-a", "package-b"]}
     });
     assert!(test_support::validate_schema_instance(&valid, &schema).is_ok());
+    assert!(test_support::validate_schema_instance(
+        &serde_json::json!({"project":"demo","action":"check","scope":{"all_packages":true}}),
+        &schema,
+    )
+    .is_ok());
 
     for invalid in [
         serde_json::json!({
@@ -361,6 +374,8 @@ fn project_validate_package_scope_schema_is_closed_and_bounded() {
             "action": "check",
             "scope": {"packages": []}
         }),
+        serde_json::json!({"project":"demo","action":"check","scope":{"all_packages":false}}),
+        serde_json::json!({"project":"demo","action":"check","scope":{"packages":["a"],"all_packages":true}}),
         serde_json::json!({
             "project": "demo",
             "action": "check",
@@ -1130,6 +1145,11 @@ fn code_mode_effectful_schema_keeps_authority_outer_bound_and_deadline_explicit(
         json!(["project", "session_id", "source"])
     );
     assert_eq!(properties["source"]["maxLength"], 65_536);
+    let source_description = properties["source"]["description"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(source_description.contains("project_validate, cargo_check and cargo_test"));
+    assert!(source_description.contains("Plugin/MCP gateways"));
     assert!(properties["timeout_ms"]["description"]
         .as_str()
         .unwrap_or_default()
@@ -1165,9 +1185,9 @@ fn code_mode_mutating_schema_keeps_authority_outer_bound_and_mutation_scope_narr
         .as_str()
         .unwrap_or_default();
     assert!(source_description.contains("at most one canonical edit_project_files attempt"));
-    assert!(
-        source_description.contains("cargo_check/cargo_test only after a successful known edit")
-    );
+    assert!(source_description.contains(
+        "project_validate, cargo_check or cargo_test only after a successful known edit"
+    ));
     assert!(source_description.contains("source_state"));
     assert!(source_description.contains("never wait inside JS"));
 }
@@ -1439,4 +1459,23 @@ fn process_alias_and_python_are_host_visible_without_opening_objects() {
     assert!(!language.contains("python3"));
     let shell = input_schema_for_tool("run_shell");
     assert_eq!(shell["properties"]["login"]["type"], "boolean");
+}
+
+#[test]
+fn project_validation_python_adapter_is_public_without_a_pytest_tool() {
+    let value = json!({"project":"demo","action":"test","adapter":"python",
+        "test":{"filter":"selected and not slow","require_tests":true,"min_tests":2}});
+    let schema = input_schema_for_tool("project_validate");
+    assert!(test_support::validate_schema_instance(&value, &schema).is_ok());
+    let adapter_description = schema["properties"]["adapter"]["description"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(adapter_description.contains("Python supports test through pytest"));
+    assert!(adapter_description.contains("Node returns unavailable"));
+    assert!(
+        schema.to_string().contains("pytest -k"),
+        "project_validate schema must expose the Python pytest -k filter contract"
+    );
+    assert!(ToolCall::from_tool_name("project_validate", value).is_ok());
+    assert!(ToolCall::from_tool_name("pytest", json!({"project":"demo"})).is_err());
 }

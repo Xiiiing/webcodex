@@ -76,8 +76,12 @@ impl AppState {
                 .project(&mut snapshot.connections, snapshot.readiness.runtime_ready);
         }
         snapshot.current_operation = self.operations.current();
+        snapshot.environment_setup = environment_invitation::setup_snapshot(&snapshot);
         snapshot.activity_sequence = self.activity.latest_sequence();
-        if snapshot.openai_tunnel_config.source == crate::models::TunnelConfigSource::Environment {
+        if snapshot.persistent_environment.is_none()
+            && snapshot.openai_tunnel_config.source
+                == crate::models::TunnelConfigSource::Environment
+        {
             snapshot.openai_tunnel_config = crate::tunnel_config::environment_snapshot();
             snapshot.openai_tunnel_configured = snapshot.openai_tunnel_config.is_configured();
         }
@@ -92,6 +96,46 @@ impl AppState {
 
     pub async fn inspect_project(&self, path: &str) -> DesktopResult<ProjectSelection> {
         inspect_project_path(path).await
+    }
+
+    pub async fn inspect_project_access(&self, path: &str) -> DesktopResult<ProjectInspection> {
+        let project = inspect_project_path(path).await?;
+        let settings = self.runner_settings().await?;
+        let project_path = PathBuf::from(&project.path);
+        let effective_roots = settings
+            .file_access
+            .effective_roots
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        let allow_cwd_anywhere = settings.file_access.allow_cwd_anywhere;
+        let authorization_required = tokio::task::spawn_blocking(move || {
+            let canonical_project = project_path.canonicalize().map_err(|_| {
+                DesktopError::new(
+                    "project_unavailable",
+                    "The selected project directory could not be resolved",
+                    "Choose an existing directory that this account can access.",
+                )
+            })?;
+            let canonical_roots =
+                webcodex_runner_config::paths::canonicalize_usable_allowed_roots(&effective_roots);
+            Ok::<_, DesktopError>(
+                webcodex_runner_config::paths::validate_project_path_policy(
+                    &canonical_project,
+                    &canonical_roots,
+                    allow_cwd_anywhere,
+                )
+                .is_err(),
+            )
+        })
+        .await
+        .map_err(|_| {
+            desktop_state_unavailable("Project authorization inspection worker stopped")
+        })??;
+        Ok(ProjectInspection {
+            project,
+            authorization_required,
+        })
     }
 
     pub async fn refresh_runtime_status(&self) -> DesktopResult<DesktopStateSnapshot> {
@@ -200,17 +244,14 @@ impl AppState {
         &self,
         project_path: Option<&str>,
     ) -> DesktopResult<DesktopStateSnapshot> {
-        self.configure_environment(crate::models::EnvironmentInput {
-            service_scope: None,
-            mode: "create".into(),
-            server_url: None,
-            project_path: project_path.map(str::to_owned),
-            runner: Some(true),
-            pairing_code: None,
-            user_token: None,
-            replace_pairing_code: false,
-        })
-        .await
+        let (operation, cancellation, mut core, baseline) = self
+            .begin_operation(DesktopOperationKind::LocalSetup, true)
+            .await?;
+        let result = core
+            .configure_local_setup(project_path, &cancellation)
+            .await;
+        self.finish_operation(operation, cancellation, core, baseline, result)
+            .await
     }
 
     pub async fn configure_environment(
@@ -265,6 +306,7 @@ impl AppState {
         project_path: &str,
     ) -> DesktopResult<DesktopStateSnapshot> {
         self.configure_environment(crate::models::EnvironmentInput {
+            runner_display_name: None,
             service_scope: None,
             mode: "join".into(),
             server_url: Some(server_url.to_owned()),
@@ -402,52 +444,17 @@ impl AppState {
         if result.is_ok() && cancellation.is_cancelled() {
             result = Err(cancelled_error());
         }
-        if result.is_err()
-            && matches!(
-                operation.kind,
-                DesktopOperationKind::EnvironmentMigration | DesktopOperationKind::DesktopUpdate
-            )
-        {
-            // Core's durable migration coordinator owns both restoration and
-            // the unknown-result state. Generic supervisor cleanup could kill
-            // a successfully restored original generation.
-            core.terminalize_failed_start(
-                result
-                    .as_ref()
-                    .err()
-                    .is_some_and(|e| e.code == "desktop_operation_cancelled"),
-            );
-            core.publish_snapshot();
-        } else if result.is_err() {
-            let cancelled = result
-                .as_ref()
-                .err()
-                .is_some_and(|error| error.code == "desktop_operation_cancelled");
-            let cleanup = self.cleanup_new_owned_processes(&baseline).await;
-            core.reconcile_after_operation_failure(operation.kind, &baseline, cleanup, cancelled);
-            core.terminalize_failed_start(cancelled);
+        let completion =
+            operation_completion::OperationCompletion::new(operation.kind, result.as_ref().err());
+        let cleanup = if completion.requires_process_cleanup() {
+            Some(self.cleanup_new_owned_processes(&baseline).await)
+        } else {
+            None
+        };
+        if completion.apply_failure(&mut core.snapshot, &baseline.snapshot, cleanup) {
             core.publish_snapshot();
         }
-        if matches!(
-            operation.kind,
-            DesktopOperationKind::LocalSetup
-                | DesktopOperationKind::RemoteSetup
-                | DesktopOperationKind::RuntimeResume
-                | DesktopOperationKind::RunnerRestart
-                | DesktopOperationKind::RuntimeSwitch
-                | DesktopOperationKind::EnvironmentMigration
-                | DesktopOperationKind::EnvironmentService
-        ) {
-            if let Err(error) = &result {
-                core.snapshot.runtime_error =
-                    (error.code != "desktop_operation_cancelled").then(|| error.clone());
-            } else if !matches!(operation.kind, DesktopOperationKind::RuntimeSwitch)
-                || !core.runtime_last_switch.as_ref().is_some_and(|switch| {
-                    matches!(switch.outcome.as_str(), "rolled_back" | "recovery_required")
-                })
-            {
-                core.snapshot.runtime_error = None;
-            }
+        if completion.apply_runtime_error(&mut core.snapshot, core.runtime_last_switch.as_ref()) {
             core.publish_snapshot();
         }
         {

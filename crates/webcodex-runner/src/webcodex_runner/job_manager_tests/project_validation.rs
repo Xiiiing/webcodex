@@ -9,13 +9,29 @@ use webcodex_core::runner_protocol::{ShellJobContext, ShellJobValidationMetadata
 
 #[test]
 fn project_validation_rechecks_manifest_and_dependency_state_after_queueing() {
-    for (marker, dependency, change_dependency, member_cwd) in [
-        ("Cargo.toml", "Cargo.lock", false, false),
-        ("Cargo.toml", "Cargo.lock", true, false),
-        ("go.mod", "go.sum", false, false),
-        ("go.mod", "go.sum", true, false),
-        ("Cargo.toml", "Cargo.lock", false, true),
-        ("Cargo.toml", "Cargo.lock", true, true),
+    for (marker, dependency, change_dependency, member_cwd, ruff_action) in [
+        ("Cargo.toml", "Cargo.lock", false, false, None),
+        ("Cargo.toml", "Cargo.lock", true, false, None),
+        ("go.mod", "go.sum", false, false, None),
+        ("go.mod", "go.sum", true, false, None),
+        ("pyproject.toml", "pytest.ini", false, false, None),
+        ("pyproject.toml", "pytest.ini", true, false, None),
+        ("Cargo.toml", "Cargo.lock", false, true, None),
+        ("Cargo.toml", "Cargo.lock", true, true, None),
+        (
+            "pyproject.toml",
+            "unused",
+            false,
+            false,
+            Some(ProjectValidationAction::Check),
+        ),
+        (
+            "pyproject.toml",
+            "unused",
+            false,
+            false,
+            Some(ProjectValidationAction::FormatCheck),
+        ),
     ] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("project");
@@ -42,7 +58,15 @@ edition = "2021"
             )
             .unwrap();
         } else {
-            std::fs::write(root.join(marker), "").unwrap();
+            std::fs::write(
+                root.join(marker),
+                if ruff_action.is_some() {
+                    "[tool.ruff]\ntarget-version='py311'\n"
+                } else {
+                    ""
+                },
+            )
+            .unwrap();
         }
         std::fs::write(root.join(dependency), "").unwrap();
         std::fs::write(
@@ -61,7 +85,13 @@ edition = "2021"
         let request = ProjectValidationRequest {
             project_id: "demo".into(),
             cwd: member_cwd.then(|| "member".into()),
-            action: ProjectValidationAction::Check,
+            action: if let Some(action) = ruff_action {
+                action
+            } else if marker == "pyproject.toml" {
+                ProjectValidationAction::Test
+            } else {
+                ProjectValidationAction::Check
+            },
             adapter: ProjectValidationAdapter::Auto,
             scope: None,
             dependency_policy: None,
@@ -75,14 +105,14 @@ edition = "2021"
             project_validation: Some(plan.provenance.clone()),
             source_fence: None,
             tool: "project_validate".into(),
-            kind: "check".into(),
+            kind: request.action.kind().into(),
             steps: vec![plan.step.clone()],
             effective_timeout_secs: 60,
             sync_wait_secs: 10,
             adapter: plan.adapter.clone(),
             validation_target_id: Some(plan.validation_target_id.clone()),
-            minimum_tests: None,
-            require_tests: None,
+            minimum_tests: request.test_requirements().1,
+            require_tests: request.test_requirements().0,
             no_run: None,
         };
         assert!(metadata.is_valid());
@@ -345,5 +375,256 @@ fn go_project_validation_overrides_ambient_gowork_but_direct_go_test_does_not() 
             format!("GOWORK={ambient}\nGO111MODULE=off\nARGV=test\t-json\t./...\n")
         };
         assert_eq!(observed, expected);
+    }
+}
+
+fn enqueue_python_project_fixture(
+    shell: ShellConfig,
+    body: &str,
+    filter: Option<&str>,
+) -> (tempfile::TempDir, JobManager) {
+    enqueue_python_validation_fixture(shell, body, filter, ProjectValidationAction::Test)
+}
+
+fn enqueue_python_validation_fixture(
+    shell: ShellConfig,
+    body: &str,
+    filter: Option<&str>,
+    action: ProjectValidationAction,
+) -> (tempfile::TempDir, JobManager) {
+    use webcodex_core::project_validation::ProjectValidationTestOptions;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let registry = temp.path().join("registry");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&registry).unwrap();
+    std::fs::write(
+        root.join("pyproject.toml"),
+        "[tool.pytest.ini_options]\n[tool.ruff]\ntarget-version='py311'\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("test_example.py"), body).unwrap();
+    std::fs::write(
+        registry.join("demo.toml"),
+        format!(
+            "id='demo'\nname='Demo'\npath={}\nallow_patch=true\n",
+            serde_json::to_string(root.to_str().unwrap()).unwrap()
+        ),
+    )
+    .unwrap();
+    let policy = RunnerPolicy {
+        allowed_roots: vec![root.clone()],
+        ..Default::default()
+    };
+    let request = ProjectValidationRequest {
+        project_id: "demo".into(),
+        cwd: None,
+        action,
+        adapter: ProjectValidationAdapter::Python,
+        scope: None,
+        dependency_policy: None,
+        test: filter.map(|filter| ProjectValidationTestOptions {
+            filter: Some(filter.into()),
+            ..Default::default()
+        }),
+    };
+    let (plan, cwd) =
+        crate::webcodex_runner::validation::project::plan(&policy, &registry, &request).unwrap();
+    let metadata = ShellJobValidationMetadata {
+        project_validation: Some(plan.provenance),
+        tool: "project_validate".into(),
+        kind: action.kind().into(),
+        steps: vec![plan.step.clone()],
+        effective_timeout_secs: 60,
+        sync_wait_secs: 1,
+        adapter: plan.adapter,
+        validation_target_id: Some(plan.validation_target_id),
+        source_fence: None,
+        minimum_tests: request.test_requirements().1,
+        require_tests: request.test_requirements().0,
+        no_run: None,
+    };
+    assert!(metadata.is_valid());
+    let context = ShellJobContext {
+        runtime_project_id: Some("agent:validation-agent:demo".into()),
+        validation: Some(metadata),
+        workflow_session_id: None,
+        ssh_resource: None,
+        project_cwd: Some(".".into()),
+        cwd: Some(cwd.to_string_lossy().into_owned()),
+        purpose: Some(
+            webcodex_validation::execution_purpose_for_validation_kind(action.kind())
+                .as_str()
+                .into(),
+        ),
+        shell: None,
+        command_preview: "Python validation".into(),
+        validation_steps: vec![plan.step.name.clone()],
+        structured_execution: None,
+    };
+    let operation = RunnerJobOperation::StartValidation(RunnerJobValidationOperation {
+        job_id: "pytest-fixture-job".into(),
+        cwd: Some(cwd.to_string_lossy().into_owned()),
+        steps: vec![plan.step],
+        timeout_secs: 60,
+        context,
+    });
+    let wire = RunnerRequest::from_operation(
+        RunnerInvocationMetadata {
+            request_id: "pytest-fixture-request".into(),
+            client_id: "validation-agent".into(),
+            requested_by: "test".into(),
+            created_at: chrono::Utc::now().timestamp(),
+        },
+        RunnerOperation::Job(operation),
+    )
+    .unwrap();
+    let manager = JobManager::new(1);
+    let (sink, _rx) = structured_test_sink("validation-agent", "validation-instance");
+    manager.enqueue(
+        sink,
+        PendingJobStart::from_wire(1, policy, shell, SshConfig::default(), registry, wire),
+    );
+    (temp, manager)
+}
+
+#[test]
+fn project_validation_python_pytest_missing_interpreter_starts_no_tests() {
+    let bin = tempfile::tempdir().unwrap();
+    let mut shell = ShellConfig::default();
+    shell
+        .env
+        .insert("PATH".into(), bin.path().to_string_lossy().into_owned());
+    let (_temp, manager) =
+        enqueue_python_project_fixture(shell, "raise RuntimeError('must not run')\n", None);
+    assert!(manager.wait_for_workers(Instant::now() + Duration::from_secs(10)));
+    let snapshot = lock_unpoison(&manager.jobs)["pytest-fixture-job"]
+        .snapshot
+        .clone();
+    manager.stop_all();
+    assert_eq!(
+        snapshot.command_execution_state,
+        Some(ShellCommandExecutionState::NotStarted)
+    );
+    assert_eq!(
+        snapshot.error.as_deref(),
+        Some(VALIDATION_TOOL_UNAVAILABLE_CODE)
+    );
+    assert_eq!(
+        snapshot.context.validation.unwrap().adapter,
+        "python:pytest:test"
+    );
+}
+
+#[cfg(feature = "runner-real-process-tests")]
+#[test]
+#[ignore = "requires explicitly supplied existing Python 3 environment with pytest; never installs"]
+fn runner_real_process_project_validation_python_pytest_fixtures() {
+    let interpreter = std::env::var("WEBCODEX_TEST_PYTEST_PYTHON")
+        .expect("set an existing fixture interpreter path");
+    for (body,filter,exit,count) in [
+        ("def test_ok():\n    assert True\n",None,0,Some(1)),
+        ("def test_bad():\n    assert False\n",None,1,Some(1)),
+        ("def test_ok():\n    assert True\n",Some("absent"),5,Some(0)),
+        ("import pytest\n@pytest.mark.skip(reason='fixture')\ndef test_skip():\n    assert True\n",None,0,Some(0)),
+        ("raise RuntimeError('collection error fixture')\n",None,2,None),
+    ] {
+        let mut shell=ShellConfig::default(); shell.program=interpreter.clone();
+        let (_temp,manager)=enqueue_python_project_fixture(shell,body,filter);
+        assert!(manager.wait_for_workers(Instant::now()+Duration::from_secs(15)));
+        let snapshot=lock_unpoison(&manager.jobs)["pytest-fixture-job"].snapshot.clone();manager.stop_all();
+        assert_eq!(snapshot.exit_code,Some(exit),"{snapshot:?}");
+        assert_eq!(snapshot.status, if exit == 0 { "completed" } else { "failed" }, "{snapshot:?}");
+        let diagnostics=webcodex_core::validation_evidence::parse_pytest_diagnostics(&snapshot.stdout.tail,snapshot.stdout.truncated);
+        let observed=diagnostics.test_summary.as_ref().map(|summary| summary.passed.unwrap()+summary.failed.unwrap());
+        // Collection errors are native failures; the final "Interrupted" line
+        // cannot provide completed-test evidence.
+        assert_eq!(observed,count,"{diagnostics:?}");
+        assert_eq!(snapshot.context.validation.unwrap().tool,"project_validate");
+    }
+    // A long pytest test remains one cancellable managed validation process.
+    let mut shell = ShellConfig::default();
+    shell.program = interpreter.clone();
+    let (temp,manager)=enqueue_python_project_fixture(shell,
+        "from pathlib import Path\nimport time\ndef test_wait():\n    Path('started').write_text('ready')\n    time.sleep(30)\n",None);
+    assert!(wait_until(Duration::from_secs(5), || temp
+        .path()
+        .join("project/started")
+        .exists()));
+    manager.stop("pytest-fixture-job").unwrap();
+    assert!(manager.wait_for_workers(Instant::now() + Duration::from_secs(10)));
+    let snapshot = lock_unpoison(&manager.jobs)["pytest-fixture-job"]
+        .snapshot
+        .clone();
+    manager.stop_all();
+    assert_eq!(snapshot.status, "stopped");
+    assert!(
+        webcodex_core::validation_evidence::parse_pytest_diagnostics(&snapshot.stdout.tail, true)
+            .test_summary
+            .is_none()
+    );
+
+    // Tooling deliberately supplied through a profile PYTHONPATH is probed with
+    // the same module search environment that actual -m execution receives.
+    let module = tempfile::tempdir().unwrap();
+    std::fs::write(
+        module.path().join("pytest.py"),
+        "print('1 passed in 0.01s')\n",
+    )
+    .unwrap();
+    let mut shell = ShellConfig::default();
+    shell.program = interpreter;
+    shell.env.insert(
+        "PYTHONPATH".into(),
+        module.path().to_string_lossy().into_owned(),
+    );
+    let (_temp, manager) = enqueue_python_project_fixture(
+        shell,
+        "raise RuntimeError('fixture module owns execution')\n",
+        None,
+    );
+    assert!(manager.wait_for_workers(Instant::now() + Duration::from_secs(10)));
+    let snapshot = lock_unpoison(&manager.jobs)["pytest-fixture-job"]
+        .snapshot
+        .clone();
+    manager.stop_all();
+    assert_eq!(snapshot.exit_code, Some(0), "{snapshot:?}");
+    assert_eq!(snapshot.stdout.tail.trim(), "1 passed in 0.01s");
+}
+
+#[test]
+fn project_validation_ruff_missing_interpreter_is_definitely_not_started() {
+    for action in [
+        ProjectValidationAction::Check,
+        ProjectValidationAction::FormatCheck,
+    ] {
+        let bin = tempfile::tempdir().unwrap();
+        let mut shell = ShellConfig::default();
+        shell
+            .env
+            .insert("PATH".into(), bin.path().to_string_lossy().into_owned());
+        let (_temp, manager) = enqueue_python_validation_fixture(
+            shell,
+            "raise RuntimeError('must not run')\n",
+            None,
+            action,
+        );
+        assert!(manager.wait_for_workers(Instant::now() + Duration::from_secs(10)));
+        let snapshot = lock_unpoison(&manager.jobs)["pytest-fixture-job"]
+            .snapshot
+            .clone();
+        manager.stop_all();
+        assert_eq!(
+            snapshot.command_execution_state,
+            Some(ShellCommandExecutionState::NotStarted)
+        );
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some(VALIDATION_TOOL_UNAVAILABLE_CODE)
+        );
+        assert_eq!(
+            snapshot.context.validation.unwrap().adapter,
+            format!("python:ruff:{}", action.kind())
+        );
     }
 }

@@ -1,6 +1,8 @@
 //! Installer preflight and a recoverable program/data switch. No project
 //! directory is copied, rewritten or removed by an upgrade.
-use crate::service::{Component, Ownership, ServiceAccount, ServiceManager, ServiceSpec};
+#[cfg(unix)]
+use crate::service::ServiceAccount;
+use crate::service::{Component, Ownership, ServiceManager, ServiceSpec};
 use crate::storage::ensure_private_directory;
 use crate::*;
 use serde::{Deserialize, Serialize};
@@ -10,21 +12,31 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component as PathComponent, Path, PathBuf};
 use webcodex_core::desktop_runtime_contract::{MachineBuildInfo, DESKTOP_RUNTIME_CONTRACT};
+#[cfg(test)]
+mod candidate_relocation_tests;
+#[cfg(unix)]
 mod desktop_tree;
+mod journal_codec;
 mod observation;
-pub mod windows_legacy;
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_package_tests;
+mod status;
+pub mod windows_package;
+pub(crate) use observation::upgrade_observation_under_lock;
 pub use observation::{upgrade_observation, UpgradeObservation, UpgradeOutcome};
+pub use status::{
+    upgrade_status, upgrade_status_at, UpgradeFileComponent, UpgradePhase, UpgradeServiceComponent,
+    UpgradeServiceKind, UpgradeStatus, UpgradeTarget,
+};
 
-const COMPONENTS: [&str; 4] = [
-    "webcodex",
-    "webcodex-server",
-    "webcodex-runner",
-    "webcodex-desktop",
-];
+use crate::unified_update::install::package::{self, PackageInspection};
+use crate::unified_update::{InstallerTarget, PackageFlavor};
 const DATA_FORMAT: u16 = 1;
 const SNAPSHOT_LIMIT: u64 = 16 * 1024 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpgradeCandidate {
+    #[serde(default, skip_serializing_if = "PackageFlavor::is_full")]
+    pub package_flavor: PackageFlavor,
     pub version: String,
     pub source_sha: String,
     pub platform: String,
@@ -80,7 +92,10 @@ struct ProgramBackup {
     name: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(remote = "UpgradeJournal")]
 struct UpgradeJournal {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    installer_target: Option<crate::unified_update::InstallerTarget>,
     schema_version: u16,
     operation_id: String,
     candidate: UpgradeCandidate,
@@ -236,6 +251,10 @@ fn snapshot_desktop(
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedInstallationReceipt {
+    #[serde(default, skip_serializing_if = "PackageFlavor::is_full")]
+    pub package_flavor: PackageFlavor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installer_target: Option<crate::unified_update::InstallerTarget>,
     pub schema_version: u16,
     pub operation_id: String,
     pub environment_id: String,
@@ -250,7 +269,9 @@ const PREPARED_RECEIPT: &str = "upgrade-prepared.json";
 
 fn prepared_receipt(root: &Path, journal: &UpgradeJournal) -> PreparedInstallationReceipt {
     PreparedInstallationReceipt {
-        schema_version: 1,
+        package_flavor: journal.candidate.package_flavor,
+        installer_target: journal.installer_target,
+        schema_version: journal.candidate.package_flavor.source_schema(),
         operation_id: journal.operation_id.clone(),
         environment_id: journal.record.environment_id.clone(),
         environment_dir: root.to_path_buf(),
@@ -378,6 +399,15 @@ pub async fn verify_prepared_installation(
     receipt_path: &Path,
     candidate_dir: &Path,
 ) -> SetupResultValue<PreparedInstallationReceipt> {
+    verify_prepared_installation_for(receipt_path, candidate_dir, PackageInspection::Installed)
+        .await
+}
+
+pub(crate) async fn verify_prepared_installation_for(
+    receipt_path: &Path,
+    candidate_dir: &Path,
+    inspection: PackageInspection,
+) -> SetupResultValue<PreparedInstallationReceipt> {
     if !receipt_path.is_absolute()
         || receipt_path.file_name().and_then(|name| name.to_str()) != Some(PREPARED_RECEIPT)
     {
@@ -400,7 +430,7 @@ pub async fn verify_prepared_installation(
             "The prepared installation receipt is invalid",
         )
     })?;
-    if receipt.schema_version != 1
+    if receipt.schema_version != receipt.package_flavor.source_schema()
         || receipt.environment_dir != root
         || receipt.operation_id.is_empty()
         || receipt.environment_id.is_empty()
@@ -449,14 +479,13 @@ pub async fn verify_prepared_installation(
     }
     let mut prepared_candidate = journal.candidate.clone();
     prepared_candidate.provenance_verified = false;
-    if serde_json::to_value(&prepared_candidate).map_err(|_| SetupDiagnostic::io())?
-        != serde_json::to_value(&candidate).map_err(|_| SetupDiagnostic::io())?
-    {
-        return Err(error(
-            "upgrade_receipt",
-            "Prepared component identities differ from the published candidate",
-        ));
-    }
+    verify_relocated_candidate_identity(&prepared_candidate, &candidate)?;
+    let installed = package::verify_candidate_flavor(
+        receipt.package_flavor,
+        &current.request.binaries,
+        inspection,
+    )?;
+    package::verify_candidate_target(receipt.package_flavor, installed, receipt.installer_target)?;
     verify_published_provenance(&candidate).await?;
     // The user-side prepare already ran the bounded metadata probe. Elevated
     // installer verification must never execute a candidate as administrator.
@@ -491,6 +520,10 @@ pub async fn verify_prepared_installation(
 #[cfg(unix)]
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct FrozenInstallerUpgrade {
+    #[serde(default, skip_serializing_if = "PackageFlavor::is_full")]
+    pub package_flavor: PackageFlavor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installer_target: Option<crate::unified_update::InstallerTarget>,
     pub root: PathBuf,
     pub operation_id: String,
     pub owner: LocalAccount,
@@ -593,7 +626,12 @@ pub(crate) fn freeze_installer_upgrade(
         ));
     }
     if journal.desktop.as_ref().map(|item| &item.target) != receipt.desktop_target.as_ref()
-        || managed_desktop_target(&journal.record.request.binaries).as_ref()
+        || (if journal.candidate.package_flavor.is_full() {
+            managed_desktop_target(&journal.record.request.binaries)
+        } else {
+            None
+        })
+        .as_ref()
             != receipt.desktop_target.as_ref()
     {
         return Err(error(
@@ -633,6 +671,8 @@ pub(crate) fn freeze_installer_upgrade(
             )
         })?;
     Ok(FrozenInstallerUpgrade {
+        package_flavor: receipt.package_flavor,
+        installer_target: receipt.installer_target,
         root: root.clone(),
         operation_id: journal.operation_id,
         owner: current.request.account,
@@ -674,7 +714,9 @@ pub(crate) fn check_frozen_installer_transition(
             )
         })
         .collect();
-    if journal.operation_id != frozen.operation_id
+    if journal.installer_target != frozen.installer_target
+        || journal.candidate.package_flavor != frozen.package_flavor
+        || journal.operation_id != frozen.operation_id
         || journal.record.environment_id != frozen.environment_id
         || journal.record.request.account != frozen.owner
         || journal.candidate.manifest_sha256 != frozen.manifest_sha256
@@ -712,7 +754,7 @@ fn error(code: &str, message: &str) -> SetupDiagnostic {
 /// Call while holding `EnvironmentStore::lock()` before any non-upgrade
 /// operation can mutate services, projects, credentials, or setup state.
 pub fn ensure_upgrade_idle_under_lock(store: &EnvironmentStore) -> SetupResultValue<()> {
-    windows_legacy::ensure_idle(store)?;
+    windows_package::ensure_idle(store)?;
     ensure_upgrade_idle_environment(store)
 }
 
@@ -772,6 +814,71 @@ fn bounded_file(path: &Path) -> SetupResultValue<Vec<u8>> {
     }
     Ok(data)
 }
+/// Compare the prepared, owner-bound candidate with an independently verified
+/// package-hook copy. Only its storage root may change; manifest-relative
+/// component and Desktop paths, bytes, metadata and provenance remain exact.
+fn verify_relocated_candidate_identity(
+    prepared: &UpgradeCandidate,
+    candidate: &UpgradeCandidate,
+) -> SetupResultValue<()> {
+    if candidate_identity_without_root(prepared)? != candidate_identity_without_root(candidate)? {
+        return Err(error(
+            "upgrade_receipt",
+            "Prepared component identities differ from the published candidate",
+        ));
+    }
+    Ok(())
+}
+
+fn candidate_identity_without_root(
+    candidate: &UpgradeCandidate,
+) -> SetupResultValue<UpgradeCandidate> {
+    if !candidate.root.is_absolute()
+        || candidate
+            .root
+            .components()
+            .any(|part| matches!(part, PathComponent::ParentDir | PathComponent::CurDir))
+    {
+        return Err(error("candidate_path", "Candidate storage root is invalid"));
+    }
+    // Both candidates have already passed verification at their respective
+    // roots. This lexical check also rejects altered persisted paths without
+    // requiring the original extraction directory to remain available.
+    let mut identity = candidate.clone();
+    for artifact in identity.artifacts.values_mut() {
+        artifact.path = candidate_relative_path(&candidate.root, &artifact.path)?;
+    }
+    if let Some(desktop) = &mut identity.desktop {
+        desktop.path = candidate_relative_path(&candidate.root, &desktop.path)?;
+        desktop.executable = candidate_relative_path(&candidate.root, &desktop.executable)?;
+        // managed_files maps installation-relative destinations to hashes;
+        // these are identities, not candidate storage locations.
+    }
+    identity.root = PathBuf::new();
+    Ok(identity)
+}
+
+fn candidate_relative_path(root: &Path, path: &Path) -> SetupResultValue<PathBuf> {
+    let invalid = || {
+        error(
+            "candidate_path",
+            "A candidate path leaves its verified storage root",
+        )
+    };
+    if !path.is_absolute() {
+        return Err(invalid());
+    }
+    let relative = path.strip_prefix(root).map_err(|_| invalid())?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|part| !matches!(part, PathComponent::Normal(_)))
+    {
+        return Err(invalid());
+    }
+    Ok(relative.to_path_buf())
+}
+
 fn artifact_path(root: &Path, value: &str) -> SetupResultValue<PathBuf> {
     let relative = Path::new(value);
     if value.contains('\\')
@@ -973,13 +1080,32 @@ pub fn verify_upgrade_candidate(root: &Path) -> SetupResultValue<UpgradeCandidat
         .canonicalize()
         .map_err(|_| error("candidate_path", "Candidate directory is unavailable"))?;
     let bytes = bounded_file(&root.join("source-manifest.json"))?;
-    let manifest: Value = serde_json::from_slice(&bytes).map_err(|_| {
+    let manifest: Value = crate::unified_update::strict_json(&bytes).map_err(|_| {
         error(
             "candidate_manifest",
             "Candidate release manifest is invalid",
         )
     })?;
-    if manifest.get("schema_version").and_then(Value::as_u64) != Some(1) {
+    let flavor: PackageFlavor = match manifest.get("package_flavor") {
+        None if manifest.get("schema_version").and_then(Value::as_u64) == Some(1) => {
+            PackageFlavor::Full
+        }
+        Some(Value::String(value))
+            if value == "runtime"
+                && cfg!(target_os = "linux")
+                && manifest.get("schema_version").and_then(Value::as_u64) == Some(2) =>
+        {
+            PackageFlavor::Runtime
+        }
+        _ => {
+            return Err(error(
+                "candidate_schema",
+                "Candidate package flavor or schema is unsupported",
+            ))
+        }
+    };
+    if manifest.get("schema_version").and_then(Value::as_u64) != Some(flavor.source_schema() as u64)
+    {
         return Err(error(
             "candidate_schema",
             "Candidate release schema is unsupported",
@@ -1060,14 +1186,14 @@ pub fn verify_upgrade_candidate(root: &Path) -> SetupResultValue<UpgradeCandidat
         .get("artifacts")
         .and_then(Value::as_object)
         .ok_or_else(|| error("candidate_manifest", "Component manifest is missing"))?;
-    if declared.len() != COMPONENTS.len() {
+    if declared.len() != flavor.components().len() {
         return Err(error(
             "candidate_components",
-            "A unified candidate must contain exactly four components",
+            "The candidate must contain exactly its declared package components",
         ));
     }
     let mut artifacts = BTreeMap::new();
-    for name in COMPONENTS {
+    for &name in flavor.components() {
         let item = declared.get(name).ok_or_else(|| {
             error(
                 "candidate_components",
@@ -1127,6 +1253,12 @@ pub fn verify_upgrade_candidate(root: &Path) -> SetupResultValue<UpgradeCandidat
             ));
         }
         let relative = string(item, "path")?;
+        if !flavor.is_full() && relative != format!("artifacts/bin/{name}") {
+            return Err(error(
+                "candidate_components",
+                "Runtime components must use their canonical candidate paths",
+            ));
+        }
         let path = artifact_path(&root, relative)?;
         let expected = string(item, "sha256")?;
         if checksums.get(relative).copied() != Some(expected) || digest(&path)? != expected {
@@ -1144,8 +1276,19 @@ pub fn verify_upgrade_candidate(root: &Path) -> SetupResultValue<UpgradeCandidat
             },
         );
     }
-    let desktop = parse_desktop_payload(&root, &manifest, &artifacts)?;
+    let desktop = if flavor.is_full() {
+        Some(parse_desktop_payload(&root, &manifest, &artifacts)?)
+    } else {
+        if manifest.get("desktop_payload").is_some() {
+            return Err(error(
+                "candidate_components",
+                "Runtime packages cannot declare Desktop payload",
+            ));
+        }
+        None
+    };
     Ok(UpgradeCandidate {
+        package_flavor: flavor,
         version: version.into(),
         source_sha: source.into(),
         platform,
@@ -1155,7 +1298,7 @@ pub fn verify_upgrade_candidate(root: &Path) -> SetupResultValue<UpgradeCandidat
         provenance_verified: false,
         root,
         artifacts,
-        desktop: Some(desktop),
+        desktop,
     })
 }
 
@@ -1164,6 +1307,7 @@ pub fn verify_upgrade_candidate(root: &Path) -> SetupResultValue<UpgradeCandidat
 pub async fn verify_same_installed_package(
     candidate_dir: &Path,
     expected_runtime_dir: &Path,
+    expected_target: Option<InstallerTarget>,
 ) -> SetupResultValue<()> {
     let candidate = verify_upgrade_candidate(candidate_dir)?;
     verify_published_provenance(&candidate).await?;
@@ -1204,10 +1348,17 @@ pub async fn verify_same_installed_package(
             "The Windows package runtime target differs",
         ));
     }
-    let desktop = candidate
-        .desktop
-        .as_ref()
-        .ok_or_else(|| error("candidate_manifest", "Desktop payload evidence is missing"))?;
+    let installed = package::verify_candidate_flavor(
+        candidate.package_flavor,
+        &RuntimeBinaries {
+            cli: expected_runtime_dir.join("webcodex"),
+            server: expected_runtime_dir.join("webcodex-server"),
+            runner: expected_runtime_dir.join("webcodex-runner"),
+        },
+        PackageInspection::InstallerHook,
+    )?;
+    package::verify_candidate_target(candidate.package_flavor, installed, expected_target)?;
+    let desktop = candidate.desktop.as_ref();
     for (name, target) in [
         (
             "webcodex",
@@ -1236,6 +1387,11 @@ pub async fn verify_same_installed_package(
             ));
         }
     }
+    if !candidate.package_flavor.is_full() {
+        return Ok(());
+    }
+    let desktop = desktop
+        .ok_or_else(|| error("candidate_manifest", "Desktop payload evidence is missing"))?;
     #[cfg(target_os = "linux")]
     let desktop_target = PathBuf::from("/usr/lib/webcodex/webcodex-desktop");
     #[cfg(target_os = "macos")]
@@ -1289,6 +1445,61 @@ fn verify_installed_target_path(path: &Path) -> SetupResultValue<()> {
 }
 
 impl NativeEnvironment {
+    /// Observe active tasks using the saved Core credentials and execution
+    /// target. No lock, service operation or state write is performed.
+    pub async fn upgrade_task_count(
+        &self,
+        store: &EnvironmentStore,
+        expected_environment_id: &str,
+    ) -> SetupResultValue<u64> {
+        let record = status::load_task_record(store, expected_environment_id)?;
+        let count = self.upgrade_task_count_for_record(store, &record).await;
+        // Recheck even after an unavailable response: a stale observation must
+        // not be attached to a replacement environment or changed request.
+        let current = status::load_task_record(store, expected_environment_id)?;
+        status::verify_task_record_unchanged(&record, &current)?;
+        count.map_err(|_| status::tasks_unknown())
+    }
+
+    async fn upgrade_task_count_for_record(
+        &self,
+        store: &EnvironmentStore,
+        record: &EnvironmentRecord,
+    ) -> SetupResultValue<u64> {
+        let token = if record.request.local_server() {
+            crate::native::bootstrap_token(store)?
+        } else {
+            read_secret(&store.root().join("webcodex-user-token"))?
+        };
+        let runtime = self
+            .post(
+                &record.request.server_url,
+                "/api/runtime/status",
+                Some(token.expose()),
+                json!({}),
+            )
+            .await?;
+        let runner = if !record.request.local_server() {
+            if let Some(client_id) = &record.runner_client_id {
+                let token = read_secret(&store.root().join("webcodex-user-token"))?;
+                Some(
+                    self.post(
+                        &record.request.server_url,
+                        "/api/runtime-console/runner",
+                        Some(token.expose()),
+                        json!({"client_id":client_id,"project_limit":1}),
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        status::task_count_from_responses(record, &runtime, runner.as_ref())
+    }
+
     pub async fn upgrade_preflight(
         &self,
         store: &EnvironmentStore,
@@ -1332,6 +1543,11 @@ impl NativeEnvironment {
                 active_tasks: 0,
             });
         };
+        package::verify_candidate_flavor(
+            candidate.package_flavor,
+            &record.request.binaries,
+            PackageInspection::Installed,
+        )?;
         let mut diagnostics = Vec::new();
         for spec in configured_specs(store, &record)? {
             let status = ServiceManager::inspect(&spec).map_err(crate::native::service_error)?;
@@ -1342,42 +1558,7 @@ impl NativeEnvironment {
                 ));
             }
         }
-        let token = if record.request.local_server() {
-            crate::native::bootstrap_token(store)?
-        } else {
-            read_secret(&store.root().join("webcodex-user-token"))?
-        };
-        let status = self
-            .post(
-                &record.request.server_url,
-                "/api/runtime/status",
-                Some(token.expose()),
-                json!({}),
-            )
-            .await?;
-        let status = status.get("output").unwrap_or(&status);
-        let active = if record.request.local_server() {
-            status.pointer("/jobs/active_count").and_then(Value::as_u64)
-        } else if let Some(client_id) = &record.runner_client_id {
-            let token = read_secret(&store.root().join("webcodex-user-token"))?;
-            let runner = self
-                .post(
-                    &record.request.server_url,
-                    "/api/runtime-console/runner",
-                    Some(token.expose()),
-                    json!({"client_id":client_id,"project_limit":1}),
-                )
-                .await?;
-            runner.get("active_jobs").and_then(Value::as_u64)
-        } else {
-            Some(0)
-        }
-        .ok_or_else(|| {
-            error(
-                "upgrade_tasks_unknown",
-                "Active task state is unavailable; an idle environment cannot be assumed",
-            )
-        })?;
+        let active = self.upgrade_task_count_for_record(store, &record).await?;
         if active != 0 {
             diagnostics.push(error(
                 "upgrade_active_tasks",
@@ -1397,7 +1578,7 @@ impl NativeEnvironment {
         store: &EnvironmentStore,
         candidate_dir: &Path,
     ) -> SetupResultValue<UpgradePreflight> {
-        self.upgrade_prepare_with_options(store, candidate_dir, false)
+        self.upgrade_prepare_with_options(store, candidate_dir, false, None, None)
             .await
     }
     pub async fn upgrade_prepare_development(
@@ -1405,23 +1586,96 @@ impl NativeEnvironment {
         store: &EnvironmentStore,
         candidate_dir: &Path,
     ) -> SetupResultValue<UpgradePreflight> {
-        self.upgrade_prepare_with_options(store, candidate_dir, true)
+        self.upgrade_prepare_with_options(store, candidate_dir, true, None, None)
             .await
+    }
+    /// Prepare only the environment/candidate/operation selected by the caller.
+    /// The identity is checked under the same lock as preparation effects.
+    pub async fn upgrade_prepare_guarded(
+        &self,
+        store: &EnvironmentStore,
+        candidate_dir: &Path,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<UpgradePreflight> {
+        self.upgrade_prepare_with_options(store, candidate_dir, false, Some(target), None)
+            .await
+    }
+    /// Capture the operation created/resumed by this prepare while its Core
+    /// lock is held; an installer must not infer it from a later observation.
+    pub async fn upgrade_prepare_guarded_with_receipt(
+        &self,
+        store: &EnvironmentStore,
+        candidate_dir: &Path,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<(UpgradePreflight, PreparedInstallationReceipt)> {
+        let mut receipt = None;
+        let ready = self
+            .upgrade_prepare_with_options(
+                store,
+                candidate_dir,
+                false,
+                Some(target),
+                Some(&mut receipt),
+            )
+            .await?;
+        Ok((
+            ready,
+            receipt.ok_or_else(|| {
+                error(
+                    "upgrade_receipt",
+                    "The selected environment did not produce a prepared operation",
+                )
+            })?,
+        ))
     }
     async fn upgrade_prepare_with_options(
         &self,
         store: &EnvironmentStore,
         candidate_dir: &Path,
         development_build: bool,
+        target: Option<&UpgradeTarget>,
+        mut capture: Option<&mut Option<PreparedInstallationReceipt>>,
     ) -> SetupResultValue<UpgradePreflight> {
         let lock = store.lock()?;
+        let previous: Option<UpgradeJournal> = if target.is_some() {
+            store.read_json("upgrade.json")?
+        } else {
+            None
+        };
+        if let Some(target) = target {
+            status::validate_target_under_lock(
+                store,
+                target,
+                previous.as_ref(),
+                Some(&target.manifest_sha256),
+            )?;
+        }
         let mut candidate = verify_upgrade_candidate(candidate_dir)?;
+        if let Some(target) = target {
+            status::validate_target_under_lock(
+                store,
+                target,
+                previous.as_ref(),
+                Some(&candidate.manifest_sha256),
+            )?;
+        }
         if !development_build {
             verify_published_provenance(&candidate).await?;
             candidate.provenance_verified = true;
         }
+        if let Some(record) = store.load_environment()? {
+            package::verify_candidate_flavor(
+                candidate.package_flavor,
+                &record.request.binaries,
+                PackageInspection::Installed,
+            )?;
+        }
         verify_candidate_executables(&candidate).await?;
-        let previous: Option<UpgradeJournal> = store.read_json("upgrade.json")?;
+        let previous = if target.is_some() {
+            previous
+        } else {
+            store.read_json("upgrade.json")?
+        };
         if let Some(previous) = previous
             .as_ref()
             .filter(|journal| matches!(journal.phase, Phase::Committed | Phase::RolledBack))
@@ -1443,6 +1697,9 @@ impl NativeEnvironment {
             if previous.phase == Phase::SnapshotReady {
                 verify_stopped(store, &previous)?;
                 write_prepared_receipt(store, &previous)?;
+                if let Some(capture) = capture.as_deref_mut() {
+                    *capture = Some(prepared_receipt(store.root(), &previous));
+                }
                 return Ok(UpgradePreflight {
                     ready: true,
                     candidate,
@@ -1496,7 +1753,11 @@ impl NativeEnvironment {
                     name: name.into(),
                 });
             }
-            let desktop = snapshot_desktop(&record.request.binaries, &backup)?;
+            let desktop = if candidate.package_flavor.is_full() {
+                snapshot_desktop(&record.request.binaries, &backup)?
+            } else {
+                None
+            };
             let mut running = Vec::new();
             let all_services = configured_specs(store, &record)?;
             for spec in &all_services {
@@ -1525,8 +1786,23 @@ impl NativeEnvironment {
             } else {
                 None
             };
+            let installer_target = if candidate.package_flavor.is_full() {
+                None
+            } else {
+                Some(
+                    crate::unified_update::install::package::installed_package().ok_or_else(
+                        || {
+                            error(
+                                "upgrade_package_ownership",
+                                "Runtime package ownership cannot be confirmed",
+                            )
+                        },
+                    )?,
+                )
+            };
             let journal = UpgradeJournal {
-                schema_version: 1,
+                installer_target,
+                schema_version: candidate.package_flavor.source_schema(),
                 operation_id,
                 candidate: candidate.clone(),
                 phase: Phase::Prepared,
@@ -1546,9 +1822,22 @@ impl NativeEnvironment {
             journal
         };
         let prepared = self.complete_upgrade_preparation(store, &mut journal).await;
+        if prepared.is_ok() {
+            if let Some(capture) = capture.as_deref_mut() {
+                *capture = Some(prepared_receipt(store.root(), &journal));
+            }
+        }
         drop(lock);
         if let Err(original) = prepared {
-            if let Err(recovery) = self.upgrade_rollback(store).await {
+            let recovery_target = UpgradeTarget {
+                environment_id: journal.record.environment_id.clone(),
+                manifest_sha256: journal.candidate.manifest_sha256.clone(),
+                operation_id: Some(journal.operation_id.clone()),
+            };
+            if let Err(recovery) = self
+                .upgrade_rollback_with_target(store, target.map(|_| &recovery_target), false)
+                .await
+            {
                 return Err(SetupDiagnostic::new(
                     "upgrade_recovery_required",
                     "Upgrade preparation failed and automatic restoration could not be verified",
@@ -1683,10 +1972,43 @@ impl NativeEnvironment {
     }
 
     pub async fn upgrade_finish(&mut self, store: &EnvironmentStore) -> SetupResultValue<()> {
+        self.upgrade_finish_with_target(store, None, false).await
+    }
+    pub async fn upgrade_finish_guarded(
+        &mut self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_finish_with_target(store, Some(target), false)
+            .await
+    }
+    /// Headless recovery cannot prove that an installer has finished replacing
+    /// files. Only retry the lease release of an already durable commit.
+    pub async fn upgrade_finish_headless_guarded(
+        &mut self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_finish_with_target(store, Some(target), true)
+            .await
+    }
+    async fn upgrade_finish_with_target(
+        &mut self,
+        store: &EnvironmentStore,
+        target: Option<&UpgradeTarget>,
+        headless: bool,
+    ) -> SetupResultValue<()> {
         let lock = store.lock()?;
-        let Some(mut journal): Option<UpgradeJournal> = store.read_json("upgrade.json")? else {
+        let journal: Option<UpgradeJournal> = store.read_json("upgrade.json")?;
+        if let Some(target) = target {
+            status::validate_target_under_lock(store, target, journal.as_ref(), None)?;
+        }
+        let Some(mut journal) = journal else {
             return Ok(());
         };
+        if headless && journal.phase != Phase::Committed {
+            return Err(status::manual_recovery());
+        }
         if journal.phase == Phase::Committed {
             return crate::upgrade_transport::end_maintenance(store, &journal.record).await;
         }
@@ -1704,7 +2026,10 @@ impl NativeEnvironment {
             if journal.phase == Phase::Committed {
                 return Err(original);
             }
-            return match self.upgrade_rollback(store).await {
+            return match self
+                .upgrade_rollback_with_target(store, target, false)
+                .await
+            {
                 Ok(()) => Err(original),
                 Err(recovery) => Err(SetupDiagnostic::new(
                     "upgrade_recovery_required",
@@ -1790,10 +2115,69 @@ impl NativeEnvironment {
     }
 
     pub async fn upgrade_rollback(&self, store: &EnvironmentStore) -> SetupResultValue<()> {
+        self.upgrade_rollback_with_target(store, None, false).await
+    }
+    pub async fn upgrade_rollback_guarded(
+        &self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_rollback_with_target(store, Some(target), false)
+            .await
+    }
+    /// Initial preparation phases have not admitted a current-operation
+    /// installer receipt. Later phases require explicit installer recovery.
+    pub async fn upgrade_rollback_headless_guarded(
+        &self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_rollback_with_target(store, Some(target), true)
+            .await
+    }
+    async fn upgrade_rollback_with_target(
+        &self,
+        store: &EnvironmentStore,
+        target: Option<&UpgradeTarget>,
+        headless: bool,
+    ) -> SetupResultValue<()> {
         let _lock = store.lock()?;
-        let Some(mut journal): Option<UpgradeJournal> = store.read_json("upgrade.json")? else {
+        let journal: Option<UpgradeJournal> = store.read_json("upgrade.json")?;
+        if let Some(target) = target {
+            status::validate_target_under_lock(store, target, journal.as_ref(), None)?;
+        }
+        let Some(mut journal) = journal else {
             return Ok(());
         };
+        if headless
+            && !matches!(
+                journal.phase,
+                Phase::Prepared | Phase::Stopping | Phase::Stopped | Phase::RolledBack
+            )
+        {
+            return Err(status::manual_recovery());
+        }
+        if headless && journal.phase != Phase::RolledBack {
+            let receipt: Option<PreparedInstallationReceipt> = store.read_json(PREPARED_RECEIPT)?;
+            if journal.replacement_started
+                || journal.rollback_from.is_some()
+                || receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.operation_id == journal.operation_id)
+                || journal
+                    .programs
+                    .iter()
+                    .any(|backup| digest(&backup.target).ok().as_deref() != Some(&backup.sha256))
+                || journal.desktop.as_ref().is_some_and(|backup| {
+                    desktop_installed_hash(&backup.target).ok().as_deref() != Some(&backup.sha256)
+                        || (!backup.directory_modes_sha256.is_empty()
+                            && desktop_directory_modes_hash(&backup.target).ok().as_deref()
+                                != Some(&backup.directory_modes_sha256))
+                })
+            {
+                return Err(status::manual_recovery());
+            }
+        }
         if journal.phase == Phase::RolledBack {
             return crate::upgrade_transport::end_maintenance(store, &journal.record).await;
         }
@@ -2041,10 +2425,9 @@ fn configured_specs(
     if record.request.local_runner() {
         out.push(service_spec(store, record, Component::Runner)?);
     }
-    for profile in tunnel_profiles(store)?
-        .into_iter()
-        .filter(|profile| profile.installed)
-    {
+    for profile in tunnel_profiles(store)?.into_iter().filter(|profile| {
+        profile.installed && profile.host_mode == crate::TunnelHostMode::Standalone
+    }) {
         out.push(tunnel_service_spec(store, record, &profile.profile_id)?);
     }
     Ok(out)
@@ -2300,6 +2683,8 @@ pub(crate) fn restore_programs_from_journal(
 }
 
 fn authorize_restore_destinations(root: &Path, journal: &UpgradeJournal) -> SetupResultValue<()> {
+    #[cfg(not(unix))]
+    let _ = root;
     #[cfg(unix)]
     {
         let system = crate::installer_authorization::system_directory()?;
@@ -2370,6 +2755,8 @@ fn restore_desktop(
     operation_id: &str,
     owner: &str,
 ) -> SetupResultValue<()> {
+    #[cfg(not(unix))]
+    let _ = operation_id;
     let parent = backup.target.parent().ok_or_else(SetupDiagnostic::io)?;
     for ancestor in parent.ancestors() {
         if std::fs::symlink_metadata(ancestor)
@@ -2551,7 +2938,7 @@ fn native_executable_architecture(bytes: &[u8]) -> SetupResultValue<&'static str
 
 async fn verify_candidate_executables(candidate: &UpgradeCandidate) -> SetupResultValue<()> {
     verify_candidate_executable_headers(candidate)?;
-    for name in COMPONENTS {
+    for &name in candidate.package_flavor.components() {
         let artifact = candidate
             .artifacts
             .get(name)
@@ -2630,7 +3017,7 @@ async fn verify_candidate_executables(candidate: &UpgradeCandidate) -> SetupResu
 }
 
 fn verify_candidate_executable_headers(candidate: &UpgradeCandidate) -> SetupResultValue<()> {
-    for name in COMPONENTS {
+    for &name in candidate.package_flavor.components() {
         let artifact = candidate
             .artifacts
             .get(name)
@@ -2725,16 +3112,21 @@ async fn verify_published_provenance(candidate: &UpgradeCandidate) -> SetupResul
     } else {
         "Xiiiing/webcodex"
     };
+    let platform = crate::unified_update::RuntimePlatform::ALL
+        .into_iter()
+        .find(|p| p.as_str() == candidate.platform)
+        .ok_or_else(|| error("candidate_provenance", "Unknown candidate platform"))?;
     let mut url = url::Url::parse(&format!("https://github.com/{repo}/releases/download/"))
         .map_err(|_| SetupDiagnostic::io())?;
     url.path_segments_mut()
         .map_err(|_| SetupDiagnostic::io())?
         .pop_if_empty()
         .push(&format!("v{}", candidate.version))
-        .push(&format!(
-            "webcodex-source-v{}-{}.json",
-            candidate.version, candidate.platform
-        ));
+        .push(
+            &candidate
+                .package_flavor
+                .source_filename(platform, &candidate.version),
+        );
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(20))
@@ -2797,7 +3189,7 @@ async fn verify_published_provenance(candidate: &UpgradeCandidate) -> SetupResul
 mod tests {
     use super::*;
 
-    fn fixture(root: &Path, phase: Phase) -> UpgradeJournal {
+    pub(super) fn fixture(root: &Path, phase: Phase) -> UpgradeJournal {
         let account = LocalAccount {
             name: "owner".into(),
             identity: "1000".into(),
@@ -2809,9 +3201,11 @@ mod tests {
             runner: root.join("webcodex-runner"),
         };
         UpgradeJournal {
+            installer_target: None,
             schema_version: 1,
             operation_id: uuid::Uuid::new_v4().to_string(),
             candidate: UpgradeCandidate {
+                package_flavor: PackageFlavor::Full,
                 version: "1.0.0".into(),
                 source_sha: "a".repeat(40),
                 platform: "linux-x64".into(),
@@ -2829,6 +3223,7 @@ mod tests {
                 schema_version: 1,
                 environment_id: "env-fixture".into(),
                 request: SetupRequest {
+                    runner_display_name: None,
                     service_scope: service::ServiceScope::System,
                     mode: EnvironmentMode::Join,
                     server_url: "http://127.0.0.1:1".into(),

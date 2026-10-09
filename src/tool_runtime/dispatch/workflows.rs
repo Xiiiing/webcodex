@@ -57,6 +57,19 @@ impl ToolRuntime {
                 .await
             }
 
+            ToolCall::PresentDocx { project, path } => self.present_docx(project, path, auth).await,
+
+            ToolCall::PresentPdf { project, path } => self.present_pdf(project, path, auth).await,
+            ToolCall::ReadAppArtifactChunk {
+                project,
+                path,
+                sha256,
+                bytes,
+                byte_offset,
+            } => {
+                self.read_app_artifact_chunk(project, path, sha256, bytes, byte_offset, auth)
+                    .await
+            }
             ToolCall::PresentWorkResult {
                 project,
                 session_id,
@@ -69,13 +82,25 @@ impl ToolRuntime {
                 project,
                 session_id,
                 files,
+                automatic,
+                collaboration,
             } => {
-                if let Some(files) = files {
+                if files.is_some() && collaboration.is_some() {
+                    return ToolResult::err(
+                        "files and collaboration history are mutually exclusive",
+                    );
+                }
+                if let Some(history) = collaboration {
+                    self.work_result_collaboration_page(project, session_id, history, auth, window)
+                        .await
+                } else if let Some(files) = files {
                     self.work_result_files(project, session_id, files, auth)
                         .await
                 } else {
-                    self.work_result_state_for_window(project, session_id, auth, window)
-                        .await
+                    self.work_result_state_for_window_with_refresh(
+                        project, session_id, auth, window, automatic,
+                    )
+                    .await
                 }
             }
 
@@ -92,12 +117,14 @@ impl ToolRuntime {
                 session_id,
                 message,
                 delivery_key,
+                kind,
             } => {
-                self.work_result_send_message(
+                self.work_result_send_message_with_kind(
                     project,
                     session_id,
                     message,
                     delivery_key,
+                    kind.map(|kind| kind.as_str()).unwrap_or("guidance"),
                     auth,
                     window,
                 )
@@ -117,7 +144,9 @@ impl ToolRuntime {
             call @ (ToolCall::SessionHandoffSummary { .. }
             | ToolCall::SessionHandoffState { .. }) => self.dispatch_handoff_tool(call, auth).await,
 
-            call @ (ToolCall::ListProjects { .. }
+            call @ (ToolCall::ResolveWorkspace { .. }
+            | ToolCall::UnregisterProjects { .. }
+            | ToolCall::ListProjects { .. }
             | ToolCall::RegisterProject { .. }
             | ToolCall::UnregisterProject { .. }
             | ToolCall::CreateProject { .. }) => self.dispatch_project_tool(call, auth).await,

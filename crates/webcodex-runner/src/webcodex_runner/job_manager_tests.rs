@@ -42,6 +42,126 @@ fn retained_terminal_job(job_id: &str, ended_at: i64) -> RunningJob {
 }
 
 #[test]
+fn rejected_job_timestamps_preserve_server_creation_time() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = JobManager::new(1);
+    manager.shutting_down.store(true, Ordering::SeqCst);
+    let future = chrono::Utc::now().timestamp() + 3600;
+    let mut request = shell_job_request(temp.path(), "never executed");
+    request.created_at = future;
+    let (sink, _rx) = ws_sink("ws-client");
+    manager.enqueue(
+        sink,
+        PendingJobStart::from_wire(
+            1,
+            RunnerPolicy::default(),
+            ShellConfig::default(),
+            SshConfig::default(),
+            temp.path().join("projects"),
+            request,
+        ),
+    );
+    let inventory = manager.inventory();
+    assert_eq!(inventory.jobs.len(), 1);
+    let snapshot = &inventory.jobs[0];
+    assert_eq!(snapshot.status, "failed");
+    assert_eq!(snapshot.started_at, None);
+    assert_eq!(snapshot.created_at, future);
+    assert_eq!(snapshot.ended_at, Some(future));
+}
+
+#[test]
+fn retained_job_timestamps_preserve_causal_order_across_clocks() {
+    for (job_id, already_started, prestart_failure) in [
+        ("server-clock-ahead", false, false),
+        ("runner-clock-rollback", true, false),
+        ("prestart-server-clock-ahead", false, true),
+    ] {
+        let manager = JobManager::new(1);
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let mut snapshot = test_job_snapshot(job_id);
+        snapshot.created_at = future;
+        snapshot.started_at = already_started.then_some(future + 60);
+        snapshot.status = if already_started {
+            "running"
+        } else {
+            "agent_queued"
+        }
+        .to_string();
+        lock_unpoison(&manager.jobs).insert(
+            job_id.to_string(),
+            RunningJob {
+                client_id: "test-agent".to_string(),
+                runner_instance_id: "test-instance".to_string(),
+                snapshot,
+                input: None,
+                child: None,
+                stop_requested: Arc::new(AtomicBool::new(false)),
+                slot_reserved: true,
+            },
+        );
+        if !prestart_failure {
+            manager
+                .record_update(
+                    job_id,
+                    RunnerJobDelta {
+                        status: "running".to_string(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        manager
+            .record_update(
+                job_id,
+                RunnerJobDelta {
+                    status: if prestart_failure {
+                        "failed"
+                    } else {
+                        "completed"
+                    }
+                    .to_string(),
+                    command_execution_state: prestart_failure
+                        .then_some(ShellCommandExecutionState::NotStarted),
+                    exit_code: (!prestart_failure).then_some(0),
+                    duration_ms: Some(17),
+                    finished: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let inventory = manager.inventory();
+        let snapshot = &inventory.jobs[0];
+        assert_eq!(snapshot.created_at, future);
+        if prestart_failure {
+            assert_eq!(snapshot.started_at, None);
+        } else {
+            assert_eq!(
+                snapshot.started_at,
+                Some(future + if already_started { 60 } else { 0 })
+            );
+        }
+        assert_eq!(
+            snapshot.ended_at,
+            Some(snapshot.started_at.unwrap_or(future))
+        );
+        assert_eq!(snapshot.duration_ms, Some(17));
+        // A racing late event cannot revise the first terminal outcome.
+        assert!(manager
+            .record_update(
+                job_id,
+                RunnerJobDelta {
+                    status: "failed".to_string(),
+                    finished: true,
+                    ..Default::default()
+                }
+            )
+            .is_none());
+        assert_eq!(manager.inventory(), inventory);
+    }
+}
+
+#[test]
 fn job_update_delivery_signal_wakes_all_worker_consumers() {
     let signal = Arc::new(JobUpdateDeliverySignal::default());
     let mut waiters = Vec::new();
@@ -101,6 +221,32 @@ fn heartbeat_batch_advances_only_runner_owned_active_lifecycles() {
         );
     }
 
+    let mut detached = test_job_snapshot("heartbeat-detached");
+    detached.status = "running".to_string();
+    detached.context.structured_execution =
+        Some(runner_protocol::ShellJobStructuredExecutionMetadata {
+            execution_source: "run_detached_process".to_string(),
+            language: None,
+            script_bytes: None,
+            arg_count: 0,
+            stdin_present: false,
+            validation_identity: None,
+            validation_tool: None,
+            assertion_name: None,
+        });
+    lock_unpoison(&manager.jobs).insert(
+        "heartbeat-detached".to_string(),
+        RunningJob {
+            client_id: "test-agent".to_string(),
+            runner_instance_id: "test-instance".to_string(),
+            snapshot: detached,
+            input: None,
+            child: None,
+            stop_requested: Arc::new(AtomicBool::new(false)),
+            slot_reserved: true,
+        },
+    );
+
     assert_eq!(
         queue_job_heartbeat_batch(
             &manager.jobs,
@@ -123,6 +269,7 @@ fn heartbeat_batch_advances_only_runner_owned_active_lifecycles() {
         "heartbeat-server-queued",
         "heartbeat-legacy-started",
         "heartbeat-terminal",
+        "heartbeat-detached",
     ] {
         assert_eq!(jobs[job_id].snapshot.update_seq, 1, "{job_id}");
     }
@@ -146,6 +293,7 @@ fn heartbeat_batch_advances_only_runner_owned_active_lifecycles() {
         "heartbeat-server-queued",
         "heartbeat-legacy-started",
         "heartbeat-terminal",
+        "heartbeat-detached",
     ] {
         assert!(!pending.contains_key(job_id), "{job_id}");
     }
@@ -342,13 +490,20 @@ fn heartbeat_worker_keeps_fixed_cadence_across_signals_and_exits_on_shutdown() {
         interval,
     );
 
+    assert!(
+        wait_until(Duration::from_secs(1), || lock_unpoison(&jobs)[job_id]
+            .snapshot
+            .update_seq
+            >= 2),
+        "heartbeat worker must establish its first cadence before the signal check"
+    );
     std::thread::sleep(Duration::from_millis(180));
     signal.notify();
     assert!(
         wait_until(Duration::from_millis(220), || lock_unpoison(&jobs)[job_id]
             .snapshot
             .update_seq
-            >= 2),
+            >= 3),
         "ordinary delivery signals must not postpone the fixed heartbeat cadence"
     );
 
@@ -1001,7 +1156,7 @@ fn detached_job_request(
             validation_steps: Vec::new(),
             validation: None,
             structured_execution: Some(runner_protocol::ShellJobStructuredExecutionMetadata {
-                execution_source: "run_process".to_string(),
+                execution_source: "run_detached_process".to_string(),
                 language: None,
                 script_bytes: None,
                 arg_count: 3,
@@ -1108,6 +1263,27 @@ fn detached_recovery_uses_same_inventory_and_observes_terminal_output() {
     assert_eq!(local.runner_instance_id, "new-runner-instance");
     assert!(local.child.is_none());
     assert!(lock_unpoison(&manager.detached_jobs).contains_key(&request.job_id));
+
+    // Generic liveness heartbeats must never advance the public sequence for a
+    // detached Job. Its durable supervisor/store is the sequence authority, and
+    // the later terminal record must remain admissible to this observer.
+    let durable_seq = recovered.update_seq;
+    assert_eq!(
+        queue_job_heartbeat_batch(
+            &manager.jobs,
+            &manager.pending_job_updates,
+            &manager.job_update_delivery_order,
+            &manager.delivery_signal,
+        ),
+        0
+    );
+    let after_heartbeat = manager
+        .inventory()
+        .jobs
+        .into_iter()
+        .find(|snapshot| snapshot.job_id == request.job_id)
+        .unwrap();
+    assert_eq!(after_heartbeat.update_seq, durable_seq);
 
     assert!(wait_until(Duration::from_secs(10), || manager
         .inventory()
@@ -1647,6 +1823,7 @@ fn structured_process_context(
     context
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn detached_process_context(cwd: &Path, arg_count: usize, stdin_present: bool) -> ShellJobContext {
     let mut context = structured_process_context(cwd, arg_count, stdin_present);
     context.command_preview = format!("detached process ({arg_count} args)");
@@ -1773,6 +1950,7 @@ fn enqueue_structured_process_job_with_policy(
     );
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn enqueue_detached_process_job(
     manager: &JobManager,
     sink: RunnerSink,
@@ -4843,6 +5021,7 @@ fn wait_until(timeout: Duration, condition: impl Fn() -> bool) -> bool {
     condition()
 }
 
+#[cfg(unix)]
 fn wait_for_pid_marker(path: &Path, deadline: Instant, tag: &str) -> u32 {
     loop {
         let observed = std::fs::read_to_string(path)
@@ -5767,6 +5946,7 @@ fn runner_recovery_context_accepts_typescript_semantic_identity_only() {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn wait_for_job_envelope(
     rx: &mut tokio::sync::mpsc::Receiver<RunnerEnvelope>,
     message: &str,
@@ -6188,4 +6368,24 @@ fn assert_local_job_stdin_isolated(test_name: &str, validation: bool) {
         String::from_utf8_lossy(&stderr)
     );
     assert!(String::from_utf8_lossy(&stdout).contains("1 passed"));
+}
+
+#[test]
+fn project_all_packages_cargo_activity_retains_native_progress() {
+    let mut step = ShellJobValidationStep {
+        name: "check".into(),
+        program: "cargo".into(),
+        args: vec!["check".into(), "--all-targets".into(), "--workspace".into()],
+        env: Vec::new(),
+    };
+    assert_eq!(
+        cargo_activity_from_stderr(&step, "Checking member v0.1.0\n"),
+        Some(ShellJobActivity {
+            state: ShellJobActivityState::Working,
+            phase: ShellJobActivityPhase::CargoChecking,
+            source: ShellJobActivitySource::CargoOutput,
+        })
+    );
+    step.args.extend(["-p".into(), "member".into()]);
+    assert!(cargo_activity_from_stderr(&step, "Checking member v0.1.0\n").is_none());
 }

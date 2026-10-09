@@ -1,14 +1,17 @@
 //! Runtime observability metadata injected into `ToolRuntime`.
 
+mod resources;
+
+use super::runtime_compatibility::{
+    build_alignment_name, compatibility_facts_against, SourceAlignmentStatus,
+};
 use super::tool_definition::model_visible_tool_definitions;
 use super::{permissions, ToolResult, ToolRuntime};
 use crate::auth::AuthContext;
 use crate::runner_protocol::{RunnerView, ShellJobInfo};
 use serde_json::{json, Value};
 use webcodex_core::coding_agent::safe_provider_inventory;
-use webcodex_core::desktop_runtime_contract::{
-    build_alignment, runner_protocol_compatibility, ProtocolCompatibility, DESKTOP_RUNTIME_CONTRACT,
-};
+use webcodex_core::desktop_runtime_contract::{ProtocolCompatibility, DESKTOP_RUNTIME_CONTRACT};
 use webcodex_core::runner_job_lifecycle::RunnerJobLifecycle;
 
 const LIST_RUNNERS_MAX_CLIENT_IDS: usize = 8;
@@ -20,6 +23,9 @@ pub(crate) struct ListRunnersOptions {
     pub(crate) client_ids: Option<Vec<String>>,
     pub(crate) include_projects: Option<bool>,
     pub(crate) summary_only: bool,
+    pub(crate) query: Option<String>,
+    pub(crate) status: Option<webcodex_tool_contracts::tool_call::RunnerStatusFilter>,
+    pub(crate) limit: Option<usize>,
 }
 
 /// Lightweight runtime metadata injected into `ToolRuntime` so observability
@@ -31,6 +37,7 @@ pub(crate) struct ListRunnersOptions {
 /// see that the public URL has not been configured.
 #[derive(Debug, Clone)]
 pub struct RuntimeInfo {
+    pub(crate) tunnels: crate::server_tunnels::TunnelStatus,
     pub auth_enabled: bool,
     /// Raw base flag (`WEBCODEX_SHARED_KEY_ENABLED`) captured at Runtime
     /// construction, before the remote-boundary policy is applied.
@@ -79,6 +86,7 @@ impl RuntimeInfo {
             .filter(|s| !s.is_empty());
         Self {
             auth_enabled,
+            tunnels: Default::default(),
             shared_key_configured: crate::auth::shared_key_enabled(),
             shared_key_enabled: crate::auth::direct_shared_key_enabled_with_quic(config, quic_cfg),
             shared_key_remote_enabled: crate::auth::shared_key_remote_enabled(),
@@ -184,11 +192,34 @@ impl ToolRuntime {
             }
         }
 
+        if options
+            .query
+            .as_ref()
+            .is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control))
+        {
+            return ToolResult::err("invalid_runner_query");
+        }
+        let query = options
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .map(str::to_lowercase);
         let access = crate::runner_http::runner_access_from_auth(auth);
-        let mut clients = self
-            .runner_registry
-            .list_runners_for_auth(access.as_ref())
-            .await;
+        let (mut clients, project_counts) = if options.summary_only {
+            let snapshot = self
+                .runner_registry
+                .console_registry_snapshot_for_auth(access.as_ref(), true)
+                .await;
+            (snapshot.runners, Some(snapshot.projects_by_runner))
+        } else {
+            (
+                self.runner_registry
+                    .list_runners_for_auth(access.as_ref())
+                    .await,
+                None,
+            )
+        };
         clients.sort_by(|a, b| a.client_id.cmp(&b.client_id));
         clients.retain(|client| {
             if let Some(expected) = options.client_id.as_deref() {
@@ -201,23 +232,39 @@ impl ToolRuntime {
             }
             true
         });
-        let mut runner_jobs = self
-            .runner_registry
-            .list_all_jobs_for_auth(access.as_ref())
-            .await;
-        if options.client_id.is_some() || options.client_ids.is_some() {
-            runner_jobs.retain(|job| {
-                clients
-                    .iter()
-                    .any(|client| client.client_id == job.client_id)
-            });
+        clients.retain(|client| {
+            use webcodex_tool_contracts::tool_call::RunnerStatusFilter;
+            let status_matches = match options.status {
+                None | Some(RunnerStatusFilter::Any) => true,
+                Some(RunnerStatusFilter::Online) => client.connected,
+                Some(RunnerStatusFilter::Offline) => !client.connected,
+                Some(RunnerStatusFilter::Stale) => client.status == "stale",
+            };
+            status_matches
+                && query.as_deref().is_none_or(|q| {
+                    std::iter::once(client.client_id.as_str())
+                        .chain(client.display_name.as_deref())
+                        .chain(client.hostname.as_deref())
+                        .any(|text| text.to_lowercase().contains(q))
+                })
+        });
+        let matched_count = clients.len();
+        if let Some(limit) = options.limit {
+            clients.truncate(limit.clamp(1, 100));
         }
+        let truncated = clients.len() < matched_count;
+        // Both projections need active aggregates, not historical Job bodies.
+        let active_counts = self
+            .runner_registry
+            .active_job_summary_by_runner_for_auth(access.as_ref())
+            .await;
         let now = chrono::Utc::now().timestamp();
         let include_projects = options.include_projects.unwrap_or(true);
         let runners: Vec<Value> = if options.summary_only {
             clients
                 .iter()
                 .map(|client| {
+                    let counts = active_counts.get(&client.client_id);
                     let mut value = json!({
                         "client_id": client.client_id,
                         "runner_instance_id": client.runner_instance_id,
@@ -228,12 +275,11 @@ impl ToolRuntime {
                         "transport": client.transport,
                         "last_seen_age_secs": last_seen_age_secs(client, now),
                         "pending_requests": client.pending_requests,
-                        "projects_count": enabled_projects_count(client),
-                        "project_inventory": client.project_inventory,
-                        "active_jobs": active_jobs_for_client(&runner_jobs, &client.client_id),
-                        "job_concurrency": job_concurrency_for_client(client, &runner_jobs),
-                        "build": client.build,
+                        "projects_count": project_counts.as_ref().and_then(|counts|counts.get(&client.client_id)).copied().unwrap_or(0),
+                        "active_jobs": counts.map_or(0, |counts|counts.active),
+                        "job_concurrency": {"limit":client.job_concurrency_limit,"running":counts.map_or(0,|counts|counts.running),"queued":counts.map_or(0,|counts|counts.queued)},
                         "coding_agent_providers": safe_provider_inventory(client.coding_agent_providers.as_deref()),
+                        "build": client.build,
                     });
                     if let Some(availability) = client.computer_session_availability {
                         value["computer_session_availability"] = json!(availability);
@@ -245,6 +291,7 @@ impl ToolRuntime {
             clients
                 .iter()
                 .map(|client| {
+                    let counts = active_counts.get(&client.client_id);
                     let mut value = json!({
                         "client_id": client.client_id,
                         "runner_instance_id": client.runner_instance_id,
@@ -261,8 +308,10 @@ impl ToolRuntime {
                         "pending_requests": client.pending_requests,
                         "projects_count": enabled_projects_count(client),
                         "project_inventory": client.project_inventory,
-                        "active_jobs": active_jobs_for_client(&runner_jobs, &client.client_id),
-                        "job_concurrency": job_concurrency_for_client(client, &runner_jobs),
+                        "active_jobs": counts.map_or(0, |counts| counts.active),
+                        "job_concurrency": {"limit":client.job_concurrency_limit,
+                            "running":counts.map_or(0,|counts|counts.running),
+                            "queued":counts.map_or(0,|counts|counts.queued)},
                         "build": client.build,
                         "capabilities": client.capabilities,
                         "coding_agent_providers": safe_provider_inventory(client.coding_agent_providers.as_deref()),
@@ -298,6 +347,8 @@ impl ToolRuntime {
                     "stale": stale,
                 },
                 "count": clients.len(),
+                "matched_count": matched_count,
+                "truncated": truncated,
             }));
         }
         ToolResult::ok(json!({
@@ -305,6 +356,8 @@ impl ToolRuntime {
             "runners": runners,
             "summary": runner_health_summary(&clients),
             "count": clients.len(),
+            "matched_count": matched_count,
+            "truncated": truncated,
         }))
     }
 
@@ -476,7 +529,10 @@ impl ToolRuntime {
         output.insert("projects".to_string(), projects);
         // Runtime Console, admin HTTP, and CLI ops consume this established key.
         output.insert("runners".to_string(), runners);
-        output.insert("connection_layers".to_string(), connection_layers);
+        output.insert(
+            "connection_layers".to_string(),
+            connection_layers.into_value(),
+        );
         output.insert(
             "protocol_compatibility".to_string(),
             version_compatibility["protocol_compatibility"].clone(),
@@ -493,6 +549,10 @@ impl ToolRuntime {
             permissions::authority_profile_payload(),
         );
         output.insert("session_store".to_string(), json!(self.sessions.status()));
+        let tunnels = self.runtime_info.tunnels.snapshot();
+        if !tunnels.is_empty() {
+            output.insert("tunnels".into(), json!(tunnels));
+        }
         if let Some(quic) = quic {
             output.insert("quic".to_string(), quic);
         }
@@ -507,13 +567,42 @@ impl ToolRuntime {
         client_id: Option<String>,
     ) -> ToolResult {
         let sparse = compact || summary_only;
-        match client_id {
+        let mut result = match client_id {
             Some(client_id) => {
                 self.runtime_status_for_client(auth, client_id, sparse)
                     .await
             }
             None => Box::pin(self.runtime_status_inner(auth, sparse)).await,
+        };
+        // Only explicitly requested full diagnostics pay for OS/file observation.
+        // The bootstrap runtime_status path and all sparse/error paths stay cheap.
+        if result.success && !sparse {
+            let sessions = self.sessions.clone();
+            let observed = tokio::task::spawn_blocking(move || {
+                (
+                    resources::observe(),
+                    serde_json::to_value(sessions.persistence_observation()),
+                )
+            })
+            .await;
+            if let Some(output) = result.output.as_object_mut() {
+                match observed {
+                    Ok((resources, persistence)) => {
+                        output.insert("resources".into(), resources);
+                        if let Ok(persistence) = persistence {
+                            output.insert("session_persistence".into(), persistence);
+                        }
+                    }
+                    Err(_) => {
+                        output.insert(
+                            "resources".into(),
+                            json!({"scope":"server_process", "status":"unavailable"}),
+                        );
+                    }
+                }
+            }
         }
+        result
     }
 
     fn sparse_runtime_status(
@@ -960,14 +1049,35 @@ fn connection_states(
     }
 }
 
-fn connection_layers(
+#[derive(Debug, Clone)]
+pub(super) struct RuntimeConnectionLayers {
+    pub(super) runner_process: Value,
+    pub(super) server_transport: Value,
+    pub(super) server_registration: Value,
+    pub(super) project_registry: Value,
+    pub(super) last_successful_tool_call: Value,
+}
+
+impl RuntimeConnectionLayers {
+    fn into_value(self) -> Value {
+        json!({
+            "runner_process": self.runner_process,
+            "server_transport": self.server_transport,
+            "server_registration": self.server_registration,
+            "project_registry": self.project_registry,
+            "last_successful_tool_call": self.last_successful_tool_call,
+        })
+    }
+}
+
+pub(super) fn connection_layers(
     clients: &[RunnerView],
     registered_projects: usize,
     online_projects: usize,
     observations: &super::observations::RuntimeObservations,
     auth: Option<&AuthContext>,
     now: i64,
-) -> Value {
+) -> RuntimeConnectionLayers {
     let states = connection_states(clients, registered_projects, online_projects);
     // Freshest client drives single-value observations; counts stay explicit.
     let freshest = clients.iter().max_by_key(|c| c.last_seen);
@@ -1187,19 +1297,27 @@ fn connection_layers(
         ),
     };
 
-    json!({
-        "runner_process": runner_process,
-        "server_transport": server_transport,
-        "server_registration": server_registration,
-        "project_registry": project_registry,
-        "last_successful_tool_call": last_successful_tool_call,
-    })
+    RuntimeConnectionLayers {
+        runner_process,
+        server_transport,
+        server_registration,
+        project_registry,
+        last_successful_tool_call,
+    }
 }
 
 /// Mixed-version diagnostics: a connected runner is not automatically
 /// capability-compatible. Reports facts about which side to upgrade without
 /// exposing paths or environment.
-fn version_compatibility(clients: &[RunnerView]) -> Value {
+impl ToolRuntime {
+    /// Reuse build/protocol truth without dispatching full runtime diagnostics
+    /// or materializing Project/Job histories for the Console navigation bar.
+    pub(crate) fn console_runner_alignment(&self, clients: &[RunnerView]) -> Value {
+        version_compatibility(clients)
+    }
+}
+
+pub(super) fn version_compatibility(clients: &[RunnerView]) -> Value {
     let build = crate::build_info::runtime_build_info();
     version_compatibility_against(
         clients,
@@ -1219,130 +1337,89 @@ fn version_compatibility_against(
     server_build: Value,
     detailed: bool,
 ) -> Value {
-    let mut overall = if clients.is_empty() {
-        "no_runners"
-    } else {
-        "compatible"
-    };
-    let mut source_overall = if clients.is_empty() {
-        "no_runners"
-    } else {
-        "aligned"
-    };
-    let mut alignment_rank = if clients.is_empty() { 1 } else { 0 };
-    let mut mixed_builds_present = false;
-    let runners: Vec<Value> = clients
-        .iter()
-        .filter_map(|client| {
-            let build_version = client.build.as_ref().and_then(|b| b.version.clone());
-            let build_git_commit = client.build.as_ref().and_then(|b| b.git_commit.clone());
-            let build_git_dirty = client.build.as_ref().and_then(|b| b.git_dirty);
-            let version_matches_server = build_version
-                .as_deref()
-                .map(|version| version == server_version);
-            let git_commit_matches_server = match (build_git_commit.as_deref(), server_git_commit) {
-                (Some(runner), Some(server)) => Some(runner == server),
-                _ => None,
-            };
-            let source_matches_server = match (
-                git_commit_matches_server,
-                build_git_dirty,
-                server_git_dirty,
-            ) {
-                (Some(false), _, _) => Some(false),
-                (Some(true), Some(false), Some(false)) => Some(true),
-                (Some(true), Some(true), _) | (Some(true), _, Some(true)) => Some(false),
-                _ => None,
-            };
-            let (source_status, source_reason_code, source_action) = match source_matches_server {
-                Some(true) => ("aligned", None, None),
-                Some(false) if git_commit_matches_server == Some(false) => (
-                    "different",
-                    Some("runner_git_commit_differs_from_server"),
-                    Some("diagnostic only: normal compatible builds may differ in source revision"),
-                ),
-                Some(false) => (
-                    "different",
-                    Some("dirty_build_prevents_exact_source_alignment"),
-                    Some("diagnostic only: modified builds remain the operator responsibility"),
-                ),
-                None => (
-                    "unknown",
-                    Some("build_source_identity_incomplete"),
-                    Some("use builds that report git commit and dirty state for exact source alignment"),
-                ),
-            };
-            match (source_status, source_overall) {
-                ("different", _) => source_overall = "different",
-                ("unknown", "aligned") => source_overall = "unknown",
-                _ => {}
-            }
+    let facts =
+        compatibility_facts_against(clients, server_version, server_git_commit, server_git_dirty);
+    let runners: Vec<Value> = if detailed {
+        clients
+            .iter()
+            .zip(&facts.runners)
+            .map(|(client, facts)| {
+                let (source_reason_code, source_action) = match facts.source_alignment {
+                    SourceAlignmentStatus::Aligned => (None, None),
+                    SourceAlignmentStatus::Different
+                        if facts.git_commit_matches_server == Some(false) => (
+                        Some("runner_git_commit_differs_from_server"),
+                        Some(
+                            "diagnostic only: normal compatible builds may differ in source revision",
+                        ),
+                    ),
+                    SourceAlignmentStatus::Different => (
+                        Some("dirty_build_prevents_exact_source_alignment"),
+                        Some(
+                            "diagnostic only: modified builds remain the operator responsibility",
+                        ),
+                    ),
+                    SourceAlignmentStatus::Unknown | SourceAlignmentStatus::NoRunners => (
+                        Some("build_source_identity_incomplete"),
+                        Some(
+                            "use builds that report git commit and dirty state for exact source alignment",
+                        ),
+                    ),
+                };
+                let (reason_code, action) = match facts.protocol_compatibility {
+                    ProtocolCompatibility::Compatible => (None, None),
+                    ProtocolCompatibility::Incompatible => (
+                        Some("runner_protocol_generation_unsupported"),
+                        Some("use a Runner with a supported protocol generation"),
+                    ),
+                    ProtocolCompatibility::Unknown => (
+                        Some("runner_protocol_generation_unavailable"),
+                        Some("reconnect with an explicit supported protocol generation"),
+                    ),
+                };
+                let build_built_at = client.build.as_ref().and_then(|b| b.built_at.clone());
+                let build_target = client.build.as_ref().and_then(|b| b.target.clone());
+                let build_architecture = client
+                    .build
+                    .as_ref()
+                    .and_then(|b| b.architecture.clone());
 
-            let protocol = runner_protocol_compatibility(client.runner_protocol_generation.get());
-            let (status, reason_code, action) = match protocol {
-                ProtocolCompatibility::Compatible => ("compatible", None, None),
-                ProtocolCompatibility::Incompatible => ("incompatible", Some("runner_protocol_generation_unsupported"), Some("use a Runner with a supported protocol generation")),
-                ProtocolCompatibility::Unknown => ("unknown", Some("runner_protocol_generation_unavailable"), Some("reconnect with an explicit supported protocol generation")),
-            };
-            if status == "incompatible" || (status == "unknown" && overall == "compatible") {
-                overall = status;
-            }
-            let alignment = build_alignment(
-                build_version.as_deref(), build_git_commit.as_deref(), build_git_dirty,
-                Some(server_version), server_git_commit, server_git_dirty,
-            );
-            use webcodex_core::desktop_runtime_contract::BuildAlignment;
-            alignment_rank = alignment_rank.max(match alignment {
-                BuildAlignment::Exact => 0,
-                BuildAlignment::Unknown => 1,
-                BuildAlignment::DifferentCommit => 2,
-                BuildAlignment::DifferentVersion => 3,
-                BuildAlignment::Dirty => 4,
-            });
-            mixed_builds_present |= version_matches_server == Some(false) || source_matches_server == Some(false);
-            if !detailed { return None; }
-            let build_built_at = client.build.as_ref().and_then(|b| b.built_at.clone());
-            let build_target = client.build.as_ref().and_then(|b| b.target.clone());
-            let build_architecture = client
-                .build
-                .as_ref()
-                .and_then(|b| b.architecture.clone());
-
-            Some(json!({
-                "client_id": client.client_id,
-                "runner_protocol_generation": client.runner_protocol_generation.get(),
-                "build_version": build_version,
-                "build_git_commit": build_git_commit,
-                "build_git_dirty": build_git_dirty,
-                "build_built_at": build_built_at,
-                "build_target": build_target,
-                "build_architecture": build_architecture,
-                "version_matches_server": version_matches_server,
-                "protocol_compatibility": protocol,
-                "build_alignment": alignment,
-                "status": status,
-                "reason_code": reason_code,
-                "action": action,
-                "source_alignment": {
-                    "status": source_status,
-                    "git_commit_matches_server": git_commit_matches_server,
-                    "source_matches_server": source_matches_server,
-                    "reason_code": source_reason_code,
-                    "action": source_action,
-                },
-            }))
-        })
-        .collect();
-    let build_alignment = [
-        "exact",
-        "unknown",
-        "different_commit",
-        "different_version",
-        "dirty",
-    ][alignment_rank];
+                json!({
+                    "client_id": facts.client_id,
+                    "runner_protocol_generation": client.runner_protocol_generation.get(),
+                    "build_version": facts.build_version,
+                    "build_git_commit": facts.build_git_commit,
+                    "build_git_dirty": facts.build_git_dirty,
+                    "build_built_at": build_built_at,
+                    "build_target": build_target,
+                    "build_architecture": build_architecture,
+                    "version_matches_server": facts.version_matches_server,
+                    "protocol_compatibility": facts.protocol_compatibility,
+                    "build_alignment": facts.build_alignment,
+                    "status": facts.status_name(),
+                    "reason_code": reason_code,
+                    "action": action,
+                    "source_alignment": {
+                        "status": facts.source_alignment.as_str(),
+                        "git_commit_matches_server": facts.git_commit_matches_server,
+                        "source_matches_server": facts.source_matches_server,
+                        "reason_code": source_reason_code,
+                        "action": source_action,
+                    },
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let overall = facts.status.status_name();
+    let protocol_compatibility = facts.status.protocol_name();
+    let build_alignment = build_alignment_name(facts.build_alignment);
+    let source_overall = facts.source_alignment.as_str();
+    let mixed_builds_present = facts.mixed_builds_present;
     if !detailed {
         return json!({
-            "protocol_compatibility": if overall == "no_runners" { "unknown" } else { overall },
+            "protocol_compatibility": protocol_compatibility,
             "build_alignment": build_alignment,
             "source_alignment": {"status": source_overall},
             "mixed_builds_present": mixed_builds_present
@@ -1350,7 +1427,7 @@ fn version_compatibility_against(
     }
     json!({
         "status": overall,
-        "protocol_compatibility": if overall == "no_runners" { "unknown" } else { overall },
+        "protocol_compatibility": protocol_compatibility,
         "build_alignment": build_alignment,
         "source_alignment": {
             "status": source_overall,
@@ -1420,6 +1497,10 @@ fn job_status_is_running(status: &str) -> bool {
     )
 }
 
+fn job_status_occupies_execution_slot(status: &str) -> bool {
+    RunnerJobLifecycle::from_wire(status).is_ok_and(RunnerJobLifecycle::occupies_execution_slot)
+}
+
 fn job_status_is_runner_queued(status: &str) -> bool {
     matches!(
         RunnerJobLifecycle::from_wire(status),
@@ -1434,7 +1515,10 @@ fn job_concurrency_for_client(client: &RunnerView, runner_jobs: &[ShellJobInfo])
         .iter()
         .filter(|job| job.client_id == client.client_id)
     {
-        running += usize::from(job_status_is_running(&job.status));
+        // A stop request does not release the durable execution slot until
+        // termination is observed. Keep capacity distinct from the literal
+        // running-state count used elsewhere in Runtime status.
+        running += usize::from(job_status_occupies_execution_slot(&job.status));
         queued += usize::from(job_status_is_runner_queued(&job.status));
     }
     json!({
@@ -1622,6 +1706,7 @@ impl Default for RuntimeInfo {
     fn default() -> Self {
         Self {
             auth_enabled: false,
+            tunnels: Default::default(),
             shared_key_configured: false,
             shared_key_enabled: false,
             shared_key_remote_enabled: false,

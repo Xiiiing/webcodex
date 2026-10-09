@@ -5029,14 +5029,14 @@ dependencies = [
 
 [[package]]
 name = "webcodex-build-info"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "webcodex-core",
 ]
 
 [[package]]
 name = "webcodex-core"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
@@ -5050,7 +5050,7 @@ dependencies = [
 
 [[package]]
 name = "webcodex-desktop"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "libc",
  "reqwest 0.12.28",
@@ -5081,8 +5081,9 @@ dependencies = [
 
 [[package]]
 name = "webcodex-environment"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
+ "dirs 6.0.0",
  "fs2",
  "libc",
  "quick-xml",
@@ -5096,13 +5097,15 @@ dependencies = [
  "url",
  "uuid",
  "webcodex-core",
+ "webcodex-process",
  "webcodex-runner-config",
  "windows-sys 0.61.2",
+ "winreg 0.55.0",
 ]
 
 [[package]]
 name = "webcodex-process"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -5110,7 +5113,7 @@ dependencies = [
 
 [[package]]
 name = "webcodex-runner-config"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "serde",
  "toml 0.8.2",

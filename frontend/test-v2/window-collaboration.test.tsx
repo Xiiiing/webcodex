@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { translate, RUNTIME_LANGUAGES } from "../src/runtime_i18n.js";
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeV2Client } from "../src/runtime-v2/api/client.js";
 import { WindowCollaboration } from "../src/runtime-v2/components/WindowCollaboration.js";
@@ -138,7 +139,7 @@ describe("Window collaboration", () => {
     await screen.findByText("Review done");
     expect(screen.getByText("Saved")).toBeTruthy();
     expect(screen.getByText("Included in tool result")).toBeTruthy();
-    expect(screen.getByText("4 messages")).toBeTruthy();
+    expect(screen.getByText("Messages: 4")).toBeTruthy();
     const windowReply = screen.getByText("Reply from this Window").closest("article");
     expect(windowReply?.textContent).toContain("This Window");
     expect(windowReply?.textContent).not.toMatch(/Saved|Included in tool result|Acknowledged/);
@@ -371,4 +372,91 @@ it("does not send while an input method is composing", async () => {
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "正在输入" } });
   fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", ctrlKey: true, isComposing: true });
   expect(post.mock.calls.some(([path]) => path === "window-collaboration-post")).toBe(false);
+});
+
+// Locale changes update interface copy without remounting or rewriting user data.
+it("loads earlier durable history without a later poll erasing it, then returns to latest", async () => {
+  vi.useFakeTimers();
+  const scope = "a".repeat(64);
+  const older = { ...transcript.messages[0], message_id: "wc_msg_old", message: "Durable older message", created_at_ms: 1 };
+  const post = vi.fn(async (_path: string, payload: any) => ({ ok: true, status: 200, data:
+    payload.before_message_id ? { ...transcript, history_scope: scope, messages: [older], truncated: false, next_before: null }
+    : { ...transcript, history_scope: scope, truncated: true, next_before: "wc_msg_operator" } }));
+  const view = render(<WindowCollaboration client={{ post } as unknown as RuntimeV2Client} windowKey="exact-window" selectedSessionId="" language="en" onUnauthorized={vi.fn()} />);
+  try {
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" })); });
+    expect(screen.getByText("Durable older message")).toBeTruthy();
+    const count = post.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000); });
+    expect(post).toHaveBeenCalledTimes(count);
+    expect(screen.getByText("Durable older message")).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Return to latest messages" })); });
+    expect(post).toHaveBeenLastCalledWith("window-collaboration", expect.not.objectContaining({ before_message_id: expect.anything() }), expect.anything());
+    expect(screen.getByText("Reply from this Window")).toBeTruthy();
+  } finally { view.unmount(); vi.useRealTimers(); }
+});
+
+it("never merges an older page from a replacement history principal", async () => {
+  const post = vi.fn(async (_path: string, payload: any) => ({ ok: true, status: 200, data: {
+    ...transcript, history_scope: (payload.before_message_id ? "b" : "a").repeat(64), truncated: true,
+    next_before: "wc_msg_operator", messages: payload.before_message_id
+      ? [{ ...transcript.messages[0], message: "Other principal history" }] : transcript.messages,
+  } }));
+  const view = render(<WindowCollaboration client={{ post } as unknown as RuntimeV2Client} windowKey="exact-window" selectedSessionId="" language="en" onUnauthorized={vi.fn()} />);
+  await screen.findByText("Review done");
+  fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+  await screen.findByText("This Window is not available to the current access key.");
+  expect(screen.queryByText("Other principal history")).toBeNull();
+  expect(screen.queryByText("Review done")).toBeNull();
+  view.unmount();
+});
+
+it("keeps the unvisited cursor when a head refresh skips a full page", async () => {
+  vi.useFakeTimers();
+  let page = { ...transcript, history_scope: "a".repeat(64), truncated: true, next_before: "wc_msg_operator" };
+  const post = vi.fn(async () => ({ ok: true, status: 200, data: page }));
+  const view = render(<WindowCollaboration client={{ post } as unknown as RuntimeV2Client} windowKey="exact-window" selectedSessionId="" language="en" onUnauthorized={vi.fn()} />);
+  try {
+    await act(async () => { await Promise.resolve(); });
+    page = { ...page, next_before: "wc_msg_jump", messages: [{ ...transcript.messages[0], message_id: "wc_msg_jump", created_at_ms: 9000 }] };
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" })); });
+    expect(post).toHaveBeenLastCalledWith("window-collaboration", expect.objectContaining({ before_message_id: "wc_msg_jump" }), expect.anything());
+  } finally { view.unmount(); vi.useRealTimers(); }
+});
+
+it("new latest slices do not silently discard previously displayed messages", async () => {
+  vi.useFakeTimers();
+  let page = { ...transcript, history_scope: "a".repeat(64) };
+  const post = vi.fn(async () => ({ ok: true, status: 200, data: page }));
+  const view = render(<WindowCollaboration client={{ post } as unknown as RuntimeV2Client} windowKey="exact-window" selectedSessionId="" language="en" onUnauthorized={vi.fn()} />);
+  try {
+    await act(async () => { await Promise.resolve(); });
+    page = { ...page, messages: [{ ...transcript.messages[2], message_id: "wc_msg_new", message: "Latest only", created_at_ms: 9000 }] };
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.getByText("Latest only")).toBeTruthy();
+    expect(screen.getByText("Check failures", { selector: "p" })).toBeTruthy();
+    expect(screen.getByText("Reply from this Window")).toBeTruthy();
+  } finally { view.unmount(); vi.useRealTimers(); }
+});
+
+it("switches every collaboration language while preserving the message draft and context", async () => {
+  const post = vi.fn(async () => ({ ok: true, status: 200, data: transcript }));
+  const client = { post } as unknown as RuntimeV2Client;
+  const onUnauthorized = vi.fn();
+  const panel = (language: typeof RUNTIME_LANGUAGES[number]["value"]) =>
+    <WindowCollaboration client={client} windowKey="exact-window" selectedSessionId="wc_sess_context" language={language} onUnauthorized={onUnauthorized} />;
+  const view = render(panel("en"));
+  await screen.findByText("Check failures", { selector: "p" });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep this draft 原文" } });
+  for (const { value: language } of RUNTIME_LANGUAGES) {
+    view.rerender(panel(language));
+    expect((screen.getByRole("textbox", { name: translate("Message this Window", language) }) as HTMLTextAreaElement).value).toBe("Keep this draft 原文");
+    expect(screen.getByRole("button", { name: translate("Send", language), exact: true })).toBeTruthy();
+    expect(screen.getByText(translate("Saved", language))).toBeTruthy();
+    expect(screen.getByText("Check failures", { selector: "p" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: translate("Message type", language) })).toBeTruthy();
+  }
+  expect(post.mock.calls).toHaveLength(1);
 });

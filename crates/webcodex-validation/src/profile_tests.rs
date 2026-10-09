@@ -42,7 +42,7 @@ fn project_test_filter_plans_and_identities_share_native_semantics() {
             if backend == "rust" { "pkg" } else { "./pkg" }.to_owned()
         ]);
         let operation =
-            project_validation_operation(backend, SemanticCheck::Test, packages).unwrap();
+            project_validation_operation(backend, SemanticCheck::Test, packages, false).unwrap();
         let baseline = operation.validation_target_id(Some("."));
         let selected = operation.clone().with_test_filter(Some(filter)).unwrap();
         let plan = selected.build_readonly_plan().unwrap();
@@ -52,12 +52,13 @@ fn project_test_filter_plans_and_identities_share_native_semantics() {
         let empty = operation.with_test_filter(Some("")).unwrap();
         assert_eq!(empty.validation_target_id(Some(".")), baseline);
     }
-    let rust = project_validation_operation("rust", SemanticCheck::Test, None).unwrap();
+    let rust = project_validation_operation("rust", SemanticCheck::Test, None, false).unwrap();
     for bad in ["--all-features", "bad\nfilter"] {
         assert!(rust.clone().with_test_filter(Some(bad)).is_err());
     }
     for backend in ["rust", "go"] {
-        let check = project_validation_operation(backend, SemanticCheck::Check, None).unwrap();
+        let check =
+            project_validation_operation(backend, SemanticCheck::Check, None, false).unwrap();
         assert!(check.with_test_filter(Some("test")).is_err());
     }
 }
@@ -82,6 +83,7 @@ fn semantic_read_only_operations_preserve_legacy_leaf_plans_and_identity_profile
                     features: Some("feature-a,feature-b".to_string()),
                     package: None,
                     packages: Some(vec!["package-a".to_string(), "package-b".to_string()]),
+                    all_packages: false,
                     dependency_mode: None,
                 },
             )),
@@ -106,6 +108,7 @@ fn semantic_read_only_operations_preserve_legacy_leaf_plans_and_identity_profile
                     features: Some("feature-a".to_string()),
                     package: Some("webcodex".to_string()),
                     packages: None,
+                    all_packages: false,
                     no_run: Some(true),
                     dependency_mode: None,
                 },
@@ -130,6 +133,7 @@ fn semantic_read_only_operations_preserve_legacy_leaf_plans_and_identity_profile
                     "./internal/control".to_string(),
                     "./internal/node".to_string(),
                 ]),
+                all_packages: false,
                 dependency_mode: None,
             })),
             "go_test",
@@ -158,7 +162,7 @@ fn semantic_read_only_operations_preserve_legacy_leaf_plans_and_identity_profile
             .build_readonly_plan(legacy_options)
             .unwrap();
         assert_eq!(semantic_plan, legacy_plan, "{tool_name}");
-        assert_eq!(operation.adapter().tool_identity(), tool_name);
+        assert_eq!(operation.evidence_profile().tool_identity(), tool_name);
     }
 }
 
@@ -188,7 +192,7 @@ fn project_validation_operations_preserve_default_identities_and_scope_commands(
         ("go", SemanticCheck::Test, "target:53578a0709b0ce549e125eb7"),
     ];
     for (backend, action, expected) in defaults {
-        let operation = project_validation_operation(backend, action, None).unwrap();
+        let operation = project_validation_operation(backend, action, None, false).unwrap();
         assert_eq!(
             operation.validation_target_id(Some(".")).as_deref(),
             Some(expected)
@@ -214,7 +218,7 @@ fn project_validation_operations_preserve_default_identities_and_scope_commands(
         ),
     ] {
         let operation =
-            project_validation_operation("rust", action, rust_packages.clone()).unwrap();
+            project_validation_operation("rust", action, rust_packages.clone(), false).unwrap();
         let plan = operation.build_readonly_plan().unwrap();
         assert_eq!(plan.structured_step.args, expected);
         assert!(operation.validation_target_id(Some(".")).is_some());
@@ -228,7 +232,8 @@ fn project_validation_operations_preserve_default_identities_and_scope_commands(
             vec!["test", "-json", "./cmd/...", "./internal"],
         ),
     ] {
-        let operation = project_validation_operation("go", action, go_packages.clone()).unwrap();
+        let operation =
+            project_validation_operation("go", action, go_packages.clone(), false).unwrap();
         let plan = operation.build_readonly_plan().unwrap();
         assert_eq!(plan.structured_step.args, expected);
         assert!(operation.validation_target_id(Some(".")).is_some());
@@ -238,15 +243,63 @@ fn project_validation_operations_preserve_default_identities_and_scope_commands(
         project_validation_operation(
             "rust",
             SemanticCheck::Format,
-            Some(vec!["package-a".to_string()])
+            Some(vec!["package-a".to_string()]),
+            false,
         )
         .unwrap_err(),
         "validation_scope_unsupported"
     );
     assert_eq!(
-        project_validation_operation("go", SemanticCheck::Format, None).unwrap_err(),
+        project_validation_operation("go", SemanticCheck::Format, None, false).unwrap_err(),
         "validation_action_unsupported"
     );
+    assert_eq!(
+        project_validation_operation(
+            "rust",
+            SemanticCheck::Check,
+            Some(vec!["package-a".to_string()]),
+            true,
+        )
+        .unwrap_err(),
+        "validation_scope_invalid"
+    );
+    assert_eq!(
+        project_validation_operation(
+            "go",
+            SemanticCheck::Test,
+            Some(vec!["./cmd/...".to_string()]),
+            true,
+        )
+        .unwrap_err(),
+        "validation_scope_invalid"
+    );
+
+    let rust_all = project_validation_operation("rust", SemanticCheck::Check, None, true).unwrap();
+    assert_eq!(
+        rust_all.build_readonly_plan().unwrap().structured_step.args,
+        ["check", "--all-targets", "--workspace"]
+    );
+    let go_all = project_validation_operation("go", SemanticCheck::Test, None, true).unwrap();
+    assert_eq!(
+        go_all.build_readonly_plan().unwrap().structured_step.args,
+        ["test", "-json", "./..."]
+    );
+
+    let direct_rust_conflict = ReadOnlyValidationOperation::Cargo(
+        CargoReadOnlyValidationOperation::Check(CargoCheckOptions {
+            packages: Some(vec!["package-a".to_string()]),
+            all_packages: true,
+            ..Default::default()
+        }),
+    );
+    assert!(direct_rust_conflict.build_readonly_plan().is_err());
+    let direct_go_conflict =
+        ReadOnlyValidationOperation::Go(GoReadOnlyValidationOperation::Check(GoCheckOptions {
+            packages: Some(vec!["./cmd/...".to_string()]),
+            all_packages: true,
+            ..Default::default()
+        }));
+    assert!(direct_go_conflict.build_readonly_plan().is_err());
 }
 
 #[test]
@@ -254,10 +307,11 @@ fn go_check_semantic_operation_uses_canonical_vet_adapter() {
     let operation =
         ReadOnlyValidationOperation::Go(GoReadOnlyValidationOperation::Check(GoCheckOptions {
             packages: Some(vec!["./internal/control".to_string()]),
+            all_packages: false,
             dependency_mode: None,
         }));
     assert_eq!(operation.compatibility_profile().tool_identity, "go_vet");
-    assert_eq!(operation.adapter().tool_identity(), "go_vet");
+    assert_eq!(operation.evidence_profile().tool_identity(), "go_vet");
     assert_eq!(
         operation
             .build_readonly_plan()
@@ -294,9 +348,9 @@ fn locked_project_dependency_policy_maps_to_native_validation_argv_and_identity(
     ];
 
     for (backend, action, expected) in cases {
-        let default = project_validation_operation(backend, action, None).unwrap();
+        let default = project_validation_operation(backend, action, None, false).unwrap();
         let default_identity = default.validation_target_id(Some(".")).unwrap();
-        let locked = project_validation_operation(backend, action, None)
+        let locked = project_validation_operation(backend, action, None, false)
             .unwrap()
             .with_dependency_policy(policy)
             .unwrap();
@@ -309,7 +363,7 @@ fn locked_project_dependency_policy_maps_to_native_validation_argv_and_identity(
         );
     }
 
-    let format = project_validation_operation("rust", SemanticCheck::Format, None).unwrap();
+    let format = project_validation_operation("rust", SemanticCheck::Format, None, false).unwrap();
     assert_eq!(
         format.with_dependency_policy(policy).unwrap_err(),
         "dependency_policy_unsupported"
@@ -324,7 +378,7 @@ fn default_dependency_policy_preserves_historical_validation_argv_and_identity()
         ("go", SemanticCheck::Check, vec!["vet", "./..."]),
         ("go", SemanticCheck::Test, vec!["test", "-json", "./..."]),
     ] {
-        let operation = project_validation_operation(backend, action, None).unwrap();
+        let operation = project_validation_operation(backend, action, None, false).unwrap();
         assert_eq!(
             operation
                 .build_readonly_plan()
@@ -335,7 +389,7 @@ fn default_dependency_policy_preserves_historical_validation_argv_and_identity()
         );
         assert_eq!(
             operation.validation_target_id(Some(".")),
-            project_validation_operation(backend, action, None)
+            project_validation_operation(backend, action, None, false)
                 .unwrap()
                 .validation_target_id(Some("."))
         );
@@ -758,4 +812,216 @@ fn validation_profiles_reuse_existing_runtime_tool_schemas() {
     assert!(is_known_tool_name("go_test"));
     assert!(!is_known_tool_name("validation_profile"));
     assert!(!is_known_tool_name("validation_adapter"));
+}
+
+#[test]
+fn project_validation_python_pytest_owns_filter_plan_and_parser() {
+    let operation =
+        project_validation_operation("python", SemanticCheck::Test, None, false).unwrap();
+    let selected = operation
+        .clone()
+        .with_test_filter(Some("selected and not slow"))
+        .unwrap();
+    let plan = selected.build_readonly_plan().unwrap();
+    assert_eq!(
+        plan.structured_step.args,
+        [
+            "-m",
+            "pytest",
+            "--color=no",
+            "-rA",
+            "-k",
+            "selected and not slow"
+        ]
+    );
+    assert!(plan.structured_step.is_canonical());
+    assert_ne!(
+        selected.validation_target_id(Some(".")),
+        operation.validation_target_id(Some("."))
+    );
+    let adapter = selected.evidence_profile();
+    assert_eq!(adapter.tool_identity(), "python:pytest:test");
+    assert!(adapter.reports_test_run_metadata());
+    assert_eq!(
+        adapter
+            .parse("1 passed in 0.01s\n", "", false)
+            .test_summary
+            .unwrap()
+            .passed,
+        Some(1)
+    );
+    assert!(adapter
+        .parse("1 passed in 0.01s\n", "", true)
+        .test_summary
+        .is_none());
+    for action in [SemanticCheck::Format, SemanticCheck::Check] {
+        assert_eq!(
+            project_validation_operation("python", action, None, false)
+                .unwrap()
+                .build_readonly_plan()
+                .unwrap_err(),
+            "Ruff requires Runner-owned project manifest resolution"
+        );
+    }
+    assert_eq!(
+        project_validation_operation(
+            "python",
+            SemanticCheck::Test,
+            Some(vec!["tests".into()]),
+            false
+        )
+        .unwrap_err(),
+        "validation_scope_unsupported"
+    );
+    assert!(operation
+        .with_dependency_policy(Some(
+            webcodex_core::project_validation::ProjectDependencyPolicy {
+                mode: webcodex_core::project_validation::ProjectDependencyMode::Locked
+            }
+        ))
+        .is_err());
+    assert!(validation_adapter_for_tool("python:pytest:test")
+        .unwrap()
+        .build_readonly_plan(ValidationCommandOptions {
+            all_packages: true,
+            ..Default::default()
+        })
+        .is_err());
+    assert_eq!(
+        project_validation_operation("python", SemanticCheck::Test, None, true).unwrap_err(),
+        "validation_scope_unsupported"
+    );
+    assert!(!is_known_tool_name("pytest"));
+    assert!(!is_known_tool_name("python:pytest:test"));
+}
+
+#[test]
+fn evidence_profiles_share_direct_adapter_registry_and_recipe_mapping() {
+    use crate::{validation_evidence_profile_for_recipe, validation_evidence_profile_for_tool};
+    for (backend, action, tool) in [
+        ("rust", SemanticCheck::Format, "cargo_fmt"),
+        ("rust", SemanticCheck::Check, "cargo_check"),
+        ("rust", SemanticCheck::Test, "cargo_test"),
+        ("go", SemanticCheck::Check, "go_vet"),
+        ("go", SemanticCheck::Test, "go_test"),
+        ("python", SemanticCheck::Test, "python:pytest:test"),
+    ] {
+        let adapter = validation_adapter_for_tool(tool).unwrap();
+        let profile = validation_evidence_profile_for_tool(tool).unwrap();
+        let recipe = validation_evidence_profile_for_recipe(backend, action).unwrap();
+        assert_eq!(profile.tool_identity(), adapter.tool_identity());
+        assert_eq!(recipe.tool_identity(), tool);
+        assert_eq!(profile.validation_kind(), adapter.validation_kind());
+        assert_eq!(
+            profile.reports_test_run_metadata(),
+            adapter.reports_test_run_metadata()
+        );
+        for truncated in [false, true] {
+            let stdout = "test result: ok. 2 passed; 0 failed; 0 ignored\n2 passed in 0.01s\n";
+            let stderr = "error: example failure";
+            let diagnostics = profile.parse(stdout, stderr, truncated);
+            assert_eq!(
+                serde_json::to_value(&diagnostics).unwrap(),
+                serde_json::to_value(adapter.parse(stdout, stderr, truncated)).unwrap()
+            );
+            for success in [false, true] {
+                let evidence = || ValidationFailureEvidence {
+                    success,
+                    reported_failure_kind: None,
+                    exit_code: Some(if success { 0 } else { 1 }),
+                    diagnostics: Some(&diagnostics),
+                    stdout_excerpt: stdout,
+                    stderr_excerpt: stderr,
+                };
+                assert_eq!(
+                    profile.map_failure_kind(evidence()),
+                    adapter.map_failure_kind(evidence())
+                );
+            }
+        }
+        assert!(adapter
+            .build_readonly_plan(ValidationCommandOptions {
+                check: tool == "cargo_fmt",
+                ..Default::default()
+            })
+            .is_ok());
+    }
+    assert!(validation_evidence_profile_for_tool("unknown_test").is_none());
+    assert!(validation_evidence_profile_for_recipe("go", SemanticCheck::Format).is_none());
+}
+
+#[test]
+fn ruff_evidence_profiles_have_no_static_command_authority_or_borrowed_counts() {
+    use crate::{validation_evidence_profile_for_recipe, validation_evidence_profile_for_tool};
+    let mut identities = std::collections::HashSet::new();
+    for (action, tool) in [
+        (SemanticCheck::Check, "python:ruff:check"),
+        (SemanticCheck::Format, "python:ruff:format"),
+    ] {
+        let op = project_validation_operation("python", action, None, false).unwrap();
+        assert!(op.build_readonly_plan().is_err());
+        assert!(validation_adapter_for_tool(tool).is_none());
+        assert!(identities.insert(op.validation_target_id(Some(".")).unwrap()));
+        let retained = webcodex_workflow_session::execution_output_summary_for_tool_result(
+            "project_validate",
+            &serde_json::json!({"adapter": tool, "stdout_tail": "", "stderr_tail": ""}),
+        )
+        .unwrap();
+        assert_eq!(
+            validation_evidence_profile_for_tool(retained["adapter"].as_str().unwrap())
+                .unwrap()
+                .tool_identity(),
+            tool,
+        );
+        let profile = validation_evidence_profile_for_tool(tool).unwrap();
+        assert_eq!(
+            profile.tool_identity(),
+            validation_evidence_profile_for_recipe("python", action)
+                .unwrap()
+                .tool_identity()
+        );
+        assert!(!profile.reports_test_run_metadata());
+        for output in [
+            "test result: ok. 100 passed; 0 failed; 0 ignored",
+            "2 passed in 0.01s",
+            "error[E0308]: secret",
+            "Would reformat: /private/token.py\n1 file would be reformatted\n",
+        ] {
+            let evidence = profile.parse(output, output, false);
+            assert!(evidence.test_summary.is_none());
+            assert!(evidence.diagnostic_count.is_none());
+            assert!(!serde_json::to_string(&evidence)
+                .unwrap()
+                .contains("/private"));
+        }
+    }
+    let profile = validation_evidence_profile_for_tool("python:ruff:check").unwrap();
+    let line = r#"{"code":"F401","location":{"row":1,"column":8},"filename":"/private/token.py","message":"secret_value","fix":{"content":"secret_value"}}"#;
+    let parsed = profile.parse(line, "", false);
+    assert_eq!(parsed.diagnostic_count, Some(1));
+    assert_eq!(parsed.diagnostics[0].code.as_deref(), Some("F401"));
+    let safe = serde_json::to_string(&parsed).unwrap();
+    assert!(!safe.contains("secret_value") && !safe.contains("/private"));
+    assert!(profile.parse(line, "", true).diagnostic_count.is_none());
+    assert!(profile
+        .parse(&format!("{line}\n{{partial"), "", false)
+        .diagnostic_count
+        .is_none());
+    assert!(profile.parse("", "", false).diagnostic_count.is_none());
+    assert_eq!(
+        profile
+            .parse(&format!("{line}\n{line}"), "", false)
+            .diagnostic_count,
+        Some(1)
+    );
+    let lines = (1..=21)
+        .map(|row| line.replace("\"row\":1", &format!("\"row\":{row}")))
+        .collect::<Vec<_>>();
+    let bounded = profile.parse(&lines.join("\n"), "", false);
+    assert_eq!(bounded.diagnostic_count, Some(21));
+    assert_eq!(bounded.returned_diagnostic_count, 20);
+    assert!(bounded.diagnostics_truncated);
+    let oversized = profile.parse(&"x".repeat(64 * 1024 + 1), "", false);
+    assert_eq!(oversized.truncated, Some(true));
+    assert!(oversized.diagnostic_count.is_none());
 }

@@ -64,6 +64,13 @@ use webcodex_core::runner_skill::{RunnerSkillExecutionRequest, RunnerSkillReques
 use webcodex_core::ssh_resource::{SshResourceRequest, SSH_RESOURCE_REQUEST_MAX_BYTES};
 use webcodex_core::workflow_session_contract::ExecutionShell;
 
+pub(super) fn capability_upgrade_error(client_id: &str, capability: RunnerFeature) -> String {
+    format!(
+        "capability_unavailable: Runner `{client_id}` does not support {}; upgrade that Runner to use this operation",
+        capability.as_wire_name()
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnqueueLspError {
     InvalidRequest {
@@ -560,6 +567,19 @@ impl RunnerRegistry {
         let (tx, rx) = oneshot::channel();
         let request = encode_file_operation(&request_id, &body, requested_by)?;
         let mut inner = self.inner.lock().await;
+        if body.op == "list_page" {
+            let runner = inner
+                .runners
+                .get(&body.client_id)
+                .ok_or("unknown directory Runner")?;
+            if !runner.runner_features.supports(RunnerFeature::FileRead)
+                || !runner.runner_features.supports(RunnerFeature::FileListPage)
+            {
+                return Err(
+                    "capability_unavailable: Runner does not support file_list_page".into(),
+                );
+            }
+        }
         enqueue_pending_request_locked(
             self.telemetry.as_ref(),
             &mut inner,
@@ -2459,45 +2479,90 @@ impl RunnerRegistry {
         timeout_secs: u64,
     ) -> Result<(String, oneshot::Receiver<ShellRunResponse>), String> {
         validate_id(&client_id, "client_id")?;
-        let requires_element_action_admission = matches!(
-            kind,
-            "browser_snapshot"
-                | "browser_click"
-                | "browser_input_text"
-                | "browser_select_option"
-                | "browser_set_value"
-                | "browser_upload_file"
-                | "browser_batch"
-        );
-        let required_feature = match kind {
-            "browser_list_browsers"
-            | "browser_list_pages"
-            | "browser_snapshot"
-            | "browser_screenshot"
-            | "browser_console"
-            | "browser_network"
-            | "browser_diagnostics" => RunnerFeature::BrowserObserve,
-            "browser_launch" => RunnerFeature::BrowserLaunch,
-            "browser_new_page"
-            | "browser_navigate"
-            | "browser_reload"
-            | "browser_click"
-            | "browser_input_text"
-            | "browser_select_option"
-            | "browser_set_value"
-            | "browser_upload_file"
-            | "browser_batch"
-            | "browser_key"
-            | "browser_close_page"
-            | "browser_clear_diagnostics"
-            | "browser_close" => RunnerFeature::BrowserControl,
-            _ => return Err("invalid browser request kind".to_string()),
-        };
         let operation_kind = RunnerBrowserOperationKind::from_wire(kind)
             .ok_or_else(|| "invalid browser request kind".to_string())?;
         if payload.len() > operation_kind.max_payload_bytes() || payload.contains('\0') {
             return Err("browser request payload is invalid or too large".to_string());
         }
+        let semantic_query = operation_kind == RunnerBrowserOperationKind::Snapshot
+            && serde_json::from_str::<serde_json::Value>(&payload)
+                .map_err(|_| "invalid browser snapshot payload".to_string())?
+                .get("query")
+                .is_some_and(|value| !value.is_null());
+        let complex_batch = operation_kind == RunnerBrowserOperationKind::Batch
+            && operation_kind.requires_complex_controls(
+                &serde_json::from_str::<serde_json::Value>(&payload)
+                    .map_err(|_| "invalid browser batch payload".to_string())?,
+            );
+        // Match the canonical enum exhaustively: adding a wire operation must
+        // also choose its registry admission, not silently hit a string fallback.
+        use RunnerBrowserOperationKind as BrowserKind;
+        let required_features: &[RunnerFeature] = match operation_kind {
+            BrowserKind::DiscoverExternal => &[
+                RunnerFeature::BrowserObserve,
+                RunnerFeature::BrowserExtensionBridge,
+            ],
+            BrowserKind::AttachExternal => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserExtensionBridge,
+            ],
+            BrowserKind::LaunchManaged => &[
+                RunnerFeature::BrowserLaunch,
+                RunnerFeature::BrowserManagedProfile,
+            ],
+            BrowserKind::ResolveSurface => &[
+                RunnerFeature::BrowserObserve,
+                RunnerFeature::BrowserSurfaceHandoff,
+                RunnerFeature::ComputerObserve,
+            ],
+            BrowserKind::ListBrowsers
+            | BrowserKind::ListPages
+            | BrowserKind::Screenshot
+            | BrowserKind::Console
+            | BrowserKind::Network
+            | BrowserKind::Diagnostics => &[RunnerFeature::BrowserObserve],
+            BrowserKind::Snapshot if semantic_query => &[
+                RunnerFeature::BrowserObserve,
+                RunnerFeature::BrowserElementActionAdmission,
+                RunnerFeature::BrowserSemanticQuery,
+            ],
+            BrowserKind::Snapshot => &[
+                RunnerFeature::BrowserObserve,
+                RunnerFeature::BrowserElementActionAdmission,
+            ],
+            BrowserKind::Launch => &[RunnerFeature::BrowserLaunch],
+            BrowserKind::NewPage
+            | BrowserKind::Navigate
+            | BrowserKind::Reload
+            | BrowserKind::Key
+            | BrowserKind::ClosePage
+            | BrowserKind::ClearDiagnostics
+            | BrowserKind::CloseBrowser => &[RunnerFeature::BrowserControl],
+            BrowserKind::Click
+            | BrowserKind::InputText
+            | BrowserKind::SelectOption
+            | BrowserKind::SetValue
+            | BrowserKind::UploadFile => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserElementActionAdmission,
+            ],
+            BrowserKind::SelectChoice | BrowserKind::SetDate => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserElementActionAdmission,
+                RunnerFeature::BrowserComplexControls,
+            ],
+            BrowserKind::Batch if complex_batch => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserBatch,
+                RunnerFeature::BrowserElementActionAdmission,
+                RunnerFeature::BrowserComplexControls,
+            ],
+            BrowserKind::Batch => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserBatch,
+                RunnerFeature::BrowserElementActionAdmission,
+            ],
+        };
         let request_id = next_request_id();
         let (tx, rx) = oneshot::channel();
         let request = encode_runner_operation(
@@ -2517,27 +2582,14 @@ impl RunnerRegistry {
             .get(&client_id)
             .ok_or_else(|| format!("unknown shell client: {client_id}"))?;
         assert_runner_access(auth, current)?;
-        if !current.runner_features.supports(required_feature) {
+        if let Some(required_feature) = required_features
+            .iter()
+            .copied()
+            .find(|feature| !current.runner_features.supports(*feature))
+        {
             return Err(format!(
                 "capability_unavailable: runner {client_id} does not support {}",
                 required_feature.as_wire_name()
-            ));
-        }
-        if kind == "browser_batch"
-            && !current
-                .runner_features
-                .supports(RunnerFeature::BrowserBatch)
-        {
-            return Err("capability_unavailable: runner does not support browser_batch".into());
-        }
-        if requires_element_action_admission
-            && !current
-                .runner_features
-                .supports(RunnerFeature::BrowserElementActionAdmission)
-        {
-            return Err(format!(
-                "capability_unavailable: runner {client_id} does not support {}",
-                RunnerFeature::BrowserElementActionAdmission.as_wire_name()
             ));
         }
         enqueue_pending_request_locked(
@@ -2563,6 +2615,10 @@ impl RunnerRegistry {
         access: Option<&crate::RunnerAccess>,
     ) -> Result<(String, oneshot::Receiver<ShellRunResponse>), String> {
         payload.validate()?;
+        let requires_all_packages = payload
+            .scope
+            .as_ref()
+            .is_some_and(webcodex_core::project_build::ProjectBuildScope::selects_all_packages);
         let requires_dependency_policy = payload.dependency_policy.is_some();
         let request_id = next_request_id();
         let (tx, rx) = oneshot::channel();
@@ -2577,19 +2633,30 @@ impl RunnerRegistry {
         let runner = inner.runners.get(&client_id).ok_or("unknown Runner")?;
         assert_runner_access(access, runner)?;
         if !runner.runner_features.supports(RunnerFeature::ProjectBuild) {
-            return Err(
-                "capability_unavailable: upgrade target Runner for project_build_v1".into(),
-            );
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectBuild,
+            ));
+        }
+        if requires_all_packages
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectAllPackages)
+        {
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectAllPackages,
+            ));
         }
         if requires_dependency_policy
             && !runner
                 .runner_features
                 .supports(RunnerFeature::ProjectDependencyPolicy)
         {
-            return Err(
-                "capability_unavailable: upgrade target Runner for project_dependency_policy_v1"
-                    .into(),
-            );
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectDependencyPolicy,
+            ));
         }
         enqueue_pending_request_locked(
             self.telemetry.as_ref(),
@@ -2613,7 +2680,25 @@ impl RunnerRegistry {
         access: Option<&crate::RunnerAccess>,
     ) -> Result<(String, oneshot::Receiver<ShellRunResponse>), String> {
         payload.validate()?;
-        let requires_package_scope = payload.scope.is_some();
+        let python_capability = (payload.adapter
+            == webcodex_core::project_validation::ProjectValidationAdapter::Python)
+            .then_some(
+                if payload.action
+                    == webcodex_core::project_validation::ProjectValidationAction::Test
+                {
+                    RunnerFeature::ProjectValidationPythonPytest
+                } else {
+                    RunnerFeature::ProjectValidationPythonRuff
+                },
+            );
+        let requires_package_scope = payload
+            .scope
+            .as_ref()
+            .and_then(webcodex_core::project_validation::ProjectValidationScope::explicit_packages)
+            .is_some();
+        let requires_all_packages = payload.scope.as_ref().is_some_and(
+            webcodex_core::project_validation::ProjectValidationScope::selects_all_packages,
+        );
         let requires_dependency_policy = payload.dependency_policy.is_some();
         let requires_test_options = payload.test.is_some();
         let request_id = next_request_id();
@@ -2632,36 +2717,55 @@ impl RunnerRegistry {
             .runner_features
             .supports(RunnerFeature::ProjectValidation)
         {
-            return Err(
-                "capability_unavailable: upgrade target Runner for project_validation_v1".into(),
-            );
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectValidation,
+            ));
+        }
+        if let Some(capability) = python_capability {
+            if !runner.runner_features.supports(capability) {
+                return Err(capability_upgrade_error(&client_id, capability));
+            }
+        }
+        if requires_all_packages
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectAllPackages)
+        {
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectAllPackages,
+            ));
         }
         if requires_dependency_policy
             && !runner
                 .runner_features
                 .supports(RunnerFeature::ProjectDependencyPolicy)
         {
-            return Err(
-                "capability_unavailable: upgrade target Runner for project_dependency_policy_v1"
-                    .into(),
-            );
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectDependencyPolicy,
+            ));
         }
         if requires_test_options
             && !runner
                 .runner_features
                 .supports(RunnerFeature::ProjectValidationTestOptions)
         {
-            return Err("capability_unavailable: upgrade target Runner for project_validation_test_options_v1".into());
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectValidationTestOptions,
+            ));
         }
         if requires_package_scope
             && !runner
                 .runner_features
                 .supports(RunnerFeature::ProjectValidationPackageScope)
         {
-            return Err(
-                "capability_unavailable: upgrade target Runner for project_validation_package_scope_v1"
-                    .into(),
-            );
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectValidationPackageScope,
+            ));
         }
         enqueue_pending_request_locked(
             self.telemetry.as_ref(),

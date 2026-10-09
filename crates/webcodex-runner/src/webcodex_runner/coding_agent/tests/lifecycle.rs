@@ -86,6 +86,14 @@ fn config_setup_cumulatively_consumes_total_run_deadline() {
     );
     let log = wire_log(&temp);
     let methods = received_methods(&log);
+    assert!(
+        methods
+            .iter()
+            .filter(|method| method.as_str() == "session/set_config_option")
+            .count()
+            < 4,
+        "the cumulative budget must prevent a fourth configuration admission: {methods:?}"
+    );
     let completed_configs = log
         .iter()
         .filter(|entry| entry.get("config_applied").is_some())
@@ -192,11 +200,11 @@ fn blocked_max_prompt_write_respects_total_deadline_and_reaps_tree() {
         PromptDispatchGateState::PromptDispatchMayHaveOccurred
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
@@ -206,8 +214,8 @@ fn blocked_max_prompt_write_respects_total_deadline_and_reaps_tree() {
     assert_eq!(manager.worker_count(), 0);
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -252,11 +260,11 @@ fn cancel_returns_while_max_prompt_write_is_blocked() {
         CodingAgentExecutionState::OutcomeUnknown
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
@@ -265,8 +273,8 @@ fn cancel_returns_while_max_prompt_write_is_blocked() {
     assert_eq!(manager.worker_count(), 0);
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -302,18 +310,18 @@ fn shutdown_remains_bounded_while_max_prompt_write_is_blocked() {
         CodingAgentExecutionState::OutcomeUnknown
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -388,19 +396,19 @@ fn blocked_cancel_notification_is_bounded_by_cancel_grace() {
         Some("coding_agent_cancel_write_uncertain")
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
     assert_eq!(manager.worker_count(), 0);
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -519,25 +527,50 @@ fn cancel_and_prompt_gate_race_has_only_linearized_outcomes() {
         prompts <= 1,
         "prompt dispatched more than once: {methods:?}"
     );
-    match prompts {
-        0 => {
-            assert_eq!(final_snapshot.state, CodingAgentRunState::Cancelled);
-            assert_eq!(
-                final_snapshot.execution_state,
-                CodingAgentExecutionState::NotStarted
-            );
+    // Provider log lines are not writer acknowledgements. Cancellation can win
+    // before handoff, after acknowledgement, or between those two boundaries.
+    // The last case MUST remain outcome_unknown, even if the provider managed
+    // to read/log the prompt before teardown. It never authorizes a replay.
+    match (&final_snapshot.state, &final_snapshot.execution_state) {
+        (CodingAgentRunState::Cancelled, CodingAgentExecutionState::NotStarted) => {
+            assert_eq!(prompts, 0);
             assert_eq!(cancels, 0);
         }
-        1 => {
-            assert_eq!(final_snapshot.state, CodingAgentRunState::Cancelled);
-            assert_eq!(
-                final_snapshot.execution_state,
-                CodingAgentExecutionState::Completed
-            );
+        (CodingAgentRunState::Cancelled, CodingAgentExecutionState::Completed) => {
+            assert_eq!(prompts, 1);
             assert_eq!(cancels, 1);
+            assert_eq!(
+                final_snapshot
+                    .terminal
+                    .as_ref()
+                    .and_then(|t| t.stop_reason.as_deref()),
+                Some("cancelled")
+            );
         }
-        _ => unreachable!(),
+        (CodingAgentRunState::Lost, CodingAgentExecutionState::OutcomeUnknown) => {
+            assert_eq!(cancels, 0);
+            assert_eq!(
+                final_snapshot
+                    .terminal
+                    .as_ref()
+                    .and_then(|t| t.error_code.as_deref()),
+                Some("coding_agent_prompt_write_uncertain")
+            );
+            assert_eq!(
+                final_snapshot
+                    .terminal
+                    .as_ref()
+                    .and_then(|t| t.stop_reason.as_deref()),
+                None
+            );
+        }
+        _ => panic!("invalid prompt/cancel boundary: {final_snapshot:?}; wire={methods:?}"),
     }
+    assert_eq!(drain.panicked, 0);
+    let recovered = CodingAgentManager::with_store(&cfg, temp.path().join("store")).unwrap();
+    let saved = recovered.runs.lock().unwrap().get(run).unwrap().snapshot();
+    assert_eq!(saved.state, final_snapshot.state);
+    assert_eq!(saved.execution_state, final_snapshot.execution_state);
 }
 
 #[test]
@@ -621,11 +654,11 @@ fn shutdown_drains_setup_worker_and_reaps_provider_tree() {
     wait_for_path(&temp.path().join("initialize.ready"));
     assert!(manager.worker_count() > 0);
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
@@ -652,7 +685,7 @@ fn shutdown_drains_setup_worker_and_reaps_provider_tree() {
     );
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }

@@ -105,6 +105,8 @@ for (const context of [undefined, {}, { session_id: "invalid" }, { session_id: `
     view.notification("ui/notifications/tool-result", result);
     await view.initialize();
     assert.equal(view.nodes.badge.textContent, "Unavailable");
+    assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · " +
+      (context === undefined ? "WR-THREAD-BINDING-MISSING" : "WR-THREAD-BINDING-CONFLICT"));
     assert.equal(view.calls("get_work_result_state").length, 0);
   });
 }
@@ -116,9 +118,11 @@ test("a mounted thread cannot be retargeted by a later presentation", async () =
   await view.initialize();
   view.notification("ui/notifications/tool-result", threadResult({ ...baseState, session_id: `wc_sess_${"2".repeat(32)}` }, `wc_sess_${"2".repeat(32)}`));
   assert.equal(view.nodes.badge.textContent, "Unavailable");
+  // The internally inconsistent state is rejected before binding comparison.
+  assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-STATE-INVALID");
 });
 
-test("thread review prioritizes files and checks while keeping diagnostics folded", async () => {
+test("thread review puts checks before long file lists while keeping diagnostics folded", async () => {
   const view = app("mcp_work_result_app.html");
   view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
   await view.initialize();
@@ -127,7 +131,8 @@ test("thread review prioritizes files and checks while keeping diagnostics folde
   assert.equal(view.nodes.tabResults.textContent, "Review");
   assert.equal(view.nodes.workspaceHeading.textContent, "Changed files");
   assert.deepEqual(view.nodes.viewTabs.children, [view.nodes.tabResults, view.nodes.tabActivity, view.nodes.tabCollaboration]);
-  assert.deepEqual(view.nodes.panelResults.children.slice(0, 3), [view.nodes.workspaceChangesSection, view.nodes.resultChecks, view.nodes.finalChanges]);
+  assert.deepEqual(view.nodes.panelResults.children.slice(0, 4), [view.nodes.resultChecks, view.nodes.quotePanel, view.nodes.workspaceChangesSection, view.nodes.finalChanges]);
+  assert.equal(view.nodes.quotePanel.hidden, true);
   assert.equal(view.nodes.diagnostics.open, false);
   assert.deepEqual(view.nodes.diagnosticContent.children, [view.nodes.taskContext]);
   view.nodes.tabResults.onkeydown({ key: "ArrowRight", preventDefault() {} });
@@ -290,7 +295,7 @@ test("Window card renders and refreshes before any Workflow Session exists", asy
   assert.equal(view.timers.size, 1);
   await view.fireTimers(10000);
   assert.equal(view.calls("get_work_result_state").length, 1);
-  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project });
+  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project, automatic: true });
 });
 
 test("missing initial machine result recovers once through app-only content fallback", async () => {
@@ -301,7 +306,7 @@ test("missing initial machine result recovers once through app-only content fall
     content: [{ type: "text", text: "WebCodex tool completed successfully." }],
   });
   await flush();
-  assert.notEqual(view.nodes.status.textContent, "This task card is unavailable");
+  assert.notEqual(view.nodes.status.textContent, "This Work Result card is unavailable");
   assert.equal(view.calls("get_work_result_state").length, 1);
   await view.reply(view.calls("get_work_result_state")[0], contentOnly(toolResult({ work_result: baseState })));
   assert.equal(view.nodes.taskTitle.textContent, "Work Result test");
@@ -320,7 +325,7 @@ test("Activity stays focused while Results exposes live files", async () => {
   assert.equal(view.nodes.windowActivity.children.length, 2);
   assert.equal(view.nodes.panelResults.hidden, true);
   assert.match(view.nodes.workspaceFiles.children[0].children[0].textContent, /src\/a.rs/);
-  assert.equal(view.nodes.collaborationMeta.textContent, "");
+  assert.equal(view.nodes.collaborationMeta.textContent, "0 loaded");
 });
 
 test("recent inactive work keeps the lightweight last-active state before the idle threshold", async () => {
@@ -435,14 +440,16 @@ test("Window messages render sender delivery state but not inbound peer delivery
   view.toolResult({ work_result: messageState });
   await view.initialize();
   const rows = view.nodes.messages.children;
-  const lastMeta = row => row.children[1].children.at(-1).textContent;
-  assert.equal(lastMeta(rows[0]), "Saved");
-  assert.equal(lastMeta(rows[1]), "Included in tool result");
-  assert.equal(lastMeta(rows[2]), "Acknowledged");
-  assert.doesNotMatch(lastMeta(rows[3]), /Saved|Included in tool result|Acknowledged/);
-  assert.equal(rows[3].children[1].children[0].textContent, "This Window");
-  assert.doesNotMatch(lastMeta(rows[4]), /Saved|Included in tool result|Acknowledged/);
-  assert.equal(lastMeta(rows[5]), "Included in tool result");
+  const metadata = row => row.children.at(-1).children.map(child => child.textContent).join(' ');
+  assert.match(metadata(rows[0]), /Saved/);
+  assert.match(metadata(rows[1]), /Included in tool result/);
+  assert.match(metadata(rows[2]), /Acknowledged/);
+  assert.match(metadata(rows[2]), /Reply received/);
+  assert.doesNotMatch(metadata(rows[3]), /Saved|Included in tool result|Acknowledged/);
+  assert.equal(rows[3].children[0].children[0].textContent, "This Window → You");
+  assert.match(rows[3].children[1].textContent, /Reply to · acknowledged/);
+  assert.doesNotMatch(metadata(rows[4]), /Saved|Included in tool result|Acknowledged/);
+  assert.match(metadata(rows[5]), /Included in tool result/);
 });
 
 test("card composer retries uncertain delivery with the same payload across context changes", async () => {
@@ -479,7 +486,9 @@ test("card composer retries uncertain delivery with the same payload across cont
     replayed: true,
     state_changed: false,
   })));
-  assert.equal(view.calls("get_work_result_state").length, 1);
+  const historyRead = view.calls("get_work_result_state").find(call => call.params.arguments.collaboration);
+  assert.ok(historyRead, "receipt must refresh history even while an earlier activity read is pending");
+  assert.equal(view.nodes.sendMessage.textContent, "Send", "composer does not wait for the history read");
   const refreshed = {
     ...baseState,
     state_version: `wr2_${"e".repeat(64)}`,
@@ -491,9 +500,9 @@ test("card composer retries uncertain delivery with the same payload across cont
       ],
     },
   };
-  await view.reply(view.calls("get_work_result_state")[0], contentOnly(toolResult({ work_result: refreshed })));
+  await view.reply(historyRead, contentOnly(toolResult({ work_result_collaboration: refreshed.collaboration })));
   assert.equal(view.nodes.messageInput.value, "");
-  assert.equal(view.nodes.messages.children[0].children[1].children.at(-1).textContent, "Saved");
+  assert.equal(view.nodes.messages.children[0].children.at(-1).children.at(-1).textContent, "Saved");
 });
 
 test("card conflict is deterministic and the next explicit send gets a new delivery key", async () => {
@@ -602,6 +611,22 @@ test("matching Work input/result identity is idempotent and unchanged initial st
   assert.equal(view.nodes.activityDetail.textContent, "sentinel");
 });
 
+test("automatic workspace reuse is explicit and manual Refresh always requests a new observation", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput(input); view.toolResult({ work_result: baseState }); await view.initialize();
+  await view.fireTimers(10000);
+  const automatic = view.calls("get_work_result_state").at(-1);
+  assert.equal(automatic.params.arguments.automatic, true);
+  await view.reply(automatic, toolResult({work_result: {...baseState,
+    workspace_observation: {reused: true, max_reuse_ms: 30000, semantics: "bounded_snapshot_not_filesystem_freshness"}}}));
+  assert.match(view.nodes.status.title, /at most 30 seconds/);
+  view.nodes.refresh.onclick(); await flush();
+  const manual = view.calls("get_work_result_state").at(-1);
+  assert.equal(manual.params.arguments.automatic, undefined);
+  await view.reply(manual, toolResult({work_result: {...baseState, workspace_observation: {reused: false}}}));
+  assert.equal(view.nodes.status.title, "");
+});
+
 test("live progress performs bounded app-only polling and adapts to visibility", async () => {
   const view = app("mcp_work_result_app.html");
   view.toolInput(input);
@@ -610,7 +635,7 @@ test("live progress performs bounded app-only polling and adapts to visibility",
   assert.equal(view.calls("get_work_result_state").length, 0);
   await view.fireTimers(10000);
   assert.equal(view.calls("get_work_result_state").length, 1);
-  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project, session_id });
+  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project, session_id, automatic: true });
   await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result: nextState }));
   assert.equal(view.nodes.activityStatus.textContent, "Running checks");
   assert.equal(view.nodes.activityAge.textContent, "Active now");
@@ -640,7 +665,7 @@ test("closed linked Session does not stop Window-level automatic polling", async
   assert.equal(view.timers.size, 1);
   await view.fireTimers(10000);
   assert.equal(view.calls("get_work_result_state").length, 1);
-  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project, session_id });
+  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project, session_id, automatic: true });
   await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result: closedState }));
   assert.equal(view.nodes.refresh.disabled, false);
   assert.equal(view.nodes.status.textContent, "Live");
@@ -742,7 +767,7 @@ for (const first of ["input", "result"]) {
     else view.toolInput(foreign);
     await flush();
     assert.equal(view.calls("get_work_result_state").length, 0);
-    assert.equal(view.nodes.status.textContent, "This task card is unavailable");
+    assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-IDENTITY-INVALID");
     assert.equal(view.nodes.refresh.disabled, true);
     assert.equal(view.timers.size, 0);
   });
@@ -756,7 +781,7 @@ test("malformed authoritative Refresh state fails closed", async () => {
   view.nodes.refresh.onclick();
   await flush();
   await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result: { ...baseState, state_version: "bad" } }));
-  assert.equal(view.nodes.status.textContent, "This task card is unavailable");
+  assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-STATE-INVALID");
   assert.equal(view.nodes.refresh.disabled, true);
 });
 
@@ -784,7 +809,7 @@ test("collaboration context_project rejects controls and unbounded identities", 
       },
     } });
     await view.initialize();
-    assert.equal(view.nodes.status.textContent, "This task card is unavailable");
+    assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-STATE-INVALID");
     assert.equal(view.nodes.refresh.disabled, true);
   }
 });
@@ -832,7 +857,7 @@ test("invalid Project input never refreshes", async () => {
     view.toolInput(bad);
     await flush();
     assert.equal(view.calls("get_work_result_state").length, 0);
-    assert.equal(view.nodes.status.textContent, "This task card is unavailable");
+    assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-IDENTITY-INVALID");
     assert.equal(view.nodes.refresh.disabled, true);
     assert.equal(view.timers.size, 0);
   }
@@ -983,7 +1008,8 @@ test("live rows share one snapshot acquisition, load one diff, and keep collapse
   view.nodes.workspaceMore.onclick(); await flush();
   assert.equal(view.nodes.workspaceFiles.children.length, 10);
   view.nodes.workspaceLess.onclick();
-  assert.equal(view.nodes.workspaceFiles.children.length, 5);
+  assert.equal(view.nodes.workspaceFiles.children.filter(row => !row.hidden).length, 5);
+  assert.equal(view.nodes.workspaceFiles.children.length, 10, "hidden rows retain their reading state");
   assert.equal(view.nodes.workspaceFiles.children[0], first);
   view.nodes.workspaceCollapse.onclick();
   assert.equal(first.children[1].hidden, true);
@@ -1029,7 +1055,7 @@ test("a file page cannot replace its Project and sealed changes cannot retarget 
   assert.equal(view.calls("get_work_result_state").length, 1);
   view.toolResult({ work_result: { ...frozenWork(), session_id: `wc_sess_${"3".repeat(32)}` } });
   await flush();
-  assert.equal(view.nodes.status.textContent, "This task card is unavailable");
+  assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-FROZEN-IDENTITY-CONFLICT");
   assert.equal(view.nodes.refresh.disabled, true);
   assert.equal(view.calls("read_changed_file_diff").length, 0);
 });
@@ -1133,7 +1159,7 @@ for (const change of [
     const view = await frozenView();
     frozenNodes(view).button.onclick(); await flush();
     await view.reply(view.calls("read_changed_file_diff")[0], frozenDiff(change));
-    assert.match(view.nodes.status.textContent, /task card is unavailable/);
+    assert.match(view.nodes.status.textContent, /Work Result card is unavailable/);
     assert.equal(view.nodes.finalChanges.hidden, true);
     assert.equal(view.nodes.frozenFiles.children.length, 0);
     assert.equal(view.nodes.refresh.disabled, true);
@@ -1154,7 +1180,7 @@ for (const change of [
     const view = await frozenView("input", frozenWork(change));
     assert.equal(view.calls("read_changed_file_diff").length, 0);
     assert.equal(view.nodes.refresh.disabled, true);
-    assert.match(view.nodes.status.textContent, /task card is unavailable/);
+    assert.match(view.nodes.status.textContent, /Work Result card is unavailable/);
   });
 }
 
@@ -1187,7 +1213,7 @@ for (const via of ["initial", "refresh"]) {
 test("same snapshot id cannot smuggle a changed advertised path list", async () => {
   const view = await frozenView();
   view.toolResult({ work_result: frozenWork({ files: finalChanges.files.map((file, index) => index ? file : { ...file, path: "src/other.rs" }) }) });
-  assert.match(view.nodes.status.textContent, /task card is unavailable/);
+  assert.match(view.nodes.status.textContent, /Work Result card is unavailable/);
   assert.equal(view.nodes.finalChanges.hidden, true);
 });
 
@@ -1195,7 +1221,7 @@ test("cached legacy Changes resource payload is not promoted into authoritative 
   const view = app("mcp_work_result_app.html");
   view.toolInput(input); await view.initialize();
   view.toolResult({ changes: { version: 3, project, session_id, ...finalChanges } });
-  assert.match(view.nodes.status.textContent, /task card is unavailable/);
+  assert.match(view.nodes.status.textContent, /Work Result card is unavailable/);
   assert.equal(view.calls("get_work_result_state").length, 0);
   assert.equal(view.calls("read_changed_file_diff").length, 0);
 });
@@ -1533,7 +1559,7 @@ test("exact Session Job transitions through normal refresh without a model tool 
   } };
   await view.fireTimers(10000);
   const call = view.calls("get_work_result_state").at(-1);
-  assert.deepEqual({ ...call.params.arguments }, { project, session_id });
+  assert.deepEqual({ ...call.params.arguments }, { project, session_id, automatic: true });
   await view.reply(call, toolResult({ work_result: terminal }));
   await flush();
   assert.equal(view.nodes.jobResultsList.children[0].children[0].children[1].textContent, "Passed");
@@ -1616,7 +1642,7 @@ test("Window-linked Session does not become Job authority on refresh", async () 
   await view.initialize();
   assert.equal(view.nodes.jobsSection.hidden, true);
   await view.fireTimers(10000);
-  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project });
+  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, { project, automatic: true });
 });
 
 test("Job failures and recovery remain bounded labels and conflicting Session fails closed", async () => {
@@ -1653,6 +1679,7 @@ test("result-first Job state cannot be rebound by a different explicit Session",
   view.toolInput({ project, session_id: `wc_sess_${"2".repeat(32)}` });
   await view.initialize();
   assert.equal(view.nodes.badge.textContent, "Unavailable");
+  assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-SESSION-CONFLICT");
   assert.equal(view.calls("get_work_result_state").length, 0);
 });
 
@@ -1665,4 +1692,803 @@ for (const jobs of [
   view.toolResult({ work_result: { ...baseState, jobs } });
   await view.initialize();
   assert.equal(view.nodes.badge.textContent, "Unavailable");
+});
+
+function filePreview(view, final = false, index = 0) {
+  const row = view.nodes[final ? "frozenFiles" : "workspaceFiles"].children[index];
+  row.children[0].onclick();
+  const wrap = row.children[1], controls = wrap.children[2], preview = wrap.children[3];
+  return { row, wrap, controls, state: preview.children[0], text: preview.children[1], markdown: preview.children[2],
+    retry: controls.children.find(node => node.textContent === "Retry preview"), hint: controls.children.at(-1) };
+}
+function previewReply(request, text, extra = {}) {
+  const args = request.params.arguments;
+  const offset = args.files.byte_offset;
+  return toolResult({ work_result_files: {
+    project: args.project, session_id: args.session_id ?? null,
+    snapshot_id: args.files.snapshot_id, path: args.files.path, view: "content",
+    byte_offset: offset, bytes_total: offset + new TextEncoder().encode(text).length,
+    content: text, complete: true, limited: false, next_byte_offset: null, ...extra,
+  } });
+}
+function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
+
+async function readingView(state = baseState) {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({});
+  view.notification("ui/notifications/tool-result", threadResult(state, session_id));
+  await view.initialize();
+  return view;
+}
+
+function readingFile(view, final = false, index = 0) {
+  const row = view.nodes[final ? "frozenFiles" : "workspaceFiles"].children[index];
+  row.expand();
+  const controls = row.children[1].children[0], pre = row.children[1].children[2], preview = row.children[1].children[3];
+  return { row, controls, pre, text: preview.children[1], markdown: preview.children[2], button: label => controls.children.find(node => node.textContent === label) };
+}
+
+test("thread section navigation moves focus without reading files or resetting an expanded row", async () => {
+  const view = await readingView(frozenWork());
+  assert.equal(view.nodes.reviewSections.hidden, false);
+  assert.equal(view.nodes.jumpWorkspace.hidden, false);
+  assert.equal(view.nodes.jumpFinal.hidden, false);
+  assert.equal(view.nodes.jumpOutputs.hidden, true);
+  const moves = [];
+  for (const id of ["workspaceChangesSection", "finalChanges", "resultChecks"]) {
+    view.nodes[id].scrollIntoView = () => moves.push(id);
+    view.nodes[id].focus = options => assert.equal(options.preventScroll, true);
+  }
+  view.nodes.jumpWorkspace.onclick();
+  view.nodes.jumpFinal.onclick();
+  view.nodes.workspaceNavigator.children[3].onclick();
+  view.nodes.frozenNavigator.children[3].onclick();
+  assert.deepEqual(moves, ["workspaceChangesSection", "finalChanges", "resultChecks", "resultChecks"]);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+  const file = readingFile(view, true);
+  const requests = view.sent.length;
+  view.nodes.frozenNavigator.children[3].onclick();
+  assert.equal(file.row.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.sent.length, requests);
+  await view.teardown();
+  const before = moves.length;
+  view.nodes.jumpWorkspace.onclick();
+  assert.equal(moves.length, before, "teardown stops section actions");
+});
+
+test("thread overview preserves failed, stale, missing and unrun evidence", async () => {
+  for (const [status, label] of [["passed", "Checks passed"], ["failed", "Checks need attention"],
+    ["stale", "Checks are out of date"], ["not_run", "Checks not run"], ["inconclusive", "Checks inconclusive"]]) {
+    const state = structuredClone(baseState);
+    state.validation.current_status = status;
+    state.workspace = structuredClone(nextState.workspace);
+    const view = await readingView(state);
+    assert.equal(view.nodes.validationStatus.textContent, label);
+    assert.equal(view.nodes.resultChecks.hidden, false);
+    assert.equal(view.nodes.jumpFinal.hidden, true);
+  }
+  const state = structuredClone(baseState);
+  for (const key of ["session_id", "session", "validation", "review"]) delete state[key];
+  const view = app("mcp_work_result_app.html");
+  view.notification("ui/notifications/tool-result", threadResult(state, null));
+  await view.initialize();
+  assert.equal(view.nodes.resultChecks.hidden, false);
+  assert.equal(view.nodes.validationStatus.textContent, "Check status unavailable");
+  assert.equal(view.nodes.reviewStatus.textContent, "Review status unavailable");
+  assert.match(view.nodes.checksScope.textContent, /No Session is linked/);
+  view.toolInput({ project: "other-project" });
+  assert.equal(view.nodes.resultChecks.hidden, true, "invalid binding clears the overview");
+});
+
+test("thread file navigation is scoped to visible loaded files and preserves mounted rows", async () => {
+  const state = structuredClone(frozenWork());
+  state.workspace.files = Array.from({ length: 8 }, (_, i) => ({ path: `src/file_${i}.rs`, status: "modified" }));
+  state.workspace.files_total = 30; state.workspace.truncated = true;
+  const view = await readingView(state);
+  const [select, previous, next] = view.nodes.workspaceNavigator.children;
+  assert.equal(select.children.length, 5);
+  assert.equal(previous.disabled, true); assert.equal(next.disabled, false);
+  assert.equal(view.calls("get_work_result_state").length, 0, "navigation does not eagerly read files");
+  const first = view.nodes.workspaceFiles.children[0];
+  let navigation = 0;
+  view.nodes.workspaceFiles.children[1].scrollIntoView = () => navigation++;
+  next.onclick(); await flush();
+  assert.equal(select.value, "src/file_1.rs"); assert.equal(navigation, 1);
+  const read = view.calls("get_work_result_state")[0];
+  await view.reply(read, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: 24, files_total: 30, source_truncated: false,
+    files: Array.from({ length: 24 }, (_, i) => frozenFile(i)),
+  } }));
+  const second = view.nodes.workspaceFiles.children[1];
+  first.remove = second.remove = () => { throw new Error("Reading row detached during paging"); };
+  view.nodes.workspaceMore.onclick(); await flush();
+  assert.equal(select.children.length, 10);
+  assert.equal(select.value, "src/file_1.rs");
+  view.nodes.workspaceLess.onclick();
+  assert.equal(select.children.length, 5);
+  assert.equal(second.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.nodes.frozenNavigator.children[0].value, finalChanges.files[0].path, "final navigation is independent");
+  view.nodes.frozenMore.onclick(); await flush();
+  assert.equal(view.nodes.frozenNavigator.children[0].children.length, 7);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+});
+
+test("path filtering covers loaded metadata without fetching, detaching rows or losing reading state", async () => {
+  const state = structuredClone(frozenWork());
+  state.workspace.files = Array.from({ length: 8 }, (_, i) => ({ path: `docs/文件_[${i}].md`, status: "modified", content: "+saved", content_kind: "diff" }));
+  state.workspace.files_total = 30; state.workspace.truncated = true;
+  const view = await readingView(state), first = readingFile(view);
+  first.button("Wrap lines").onclick();
+  const nav = view.nodes.workspaceNavigator, filter = nav.children[4].children[0];
+  const requests = view.sent.length;
+  filter.value = "[7]"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 1);
+  assert.equal(nav.children[0].value, "docs/文件_[7].md");
+  assert.match(nav.children[5].textContent, /1 shown · 8 loaded · 30 total · filtering loaded paths only/);
+  assert.equal(view.sent.length, requests);
+  assert.equal(view.nodes.workspaceFiles.children[0], first.row);
+  filter.value = "missing"; filter.oninput();
+  assert.equal(nav.hidden, false, "empty results leave the filter usable");
+  assert.equal(nav.children[0].disabled, true);
+  assert.equal(nav.children[1].disabled, true);
+  assert.equal(nav.children[2].disabled, true);
+  assert.match(nav.children[5].textContent, /no matching loaded files/);
+  filter.onkeydown({ key: "Escape", preventDefault() {} });
+  assert.equal(nav.children[0].children.length, 5);
+  assert.equal(first.row.hidden, false);
+  assert.equal(first.pre.className, "diff no-wrap");
+  assert.equal(first.row.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.nodes.frozenNavigator.children[0].children.length, 5, "final filter is independent");
+  await view.teardown(); filter.value = "[7]"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 5);
+});
+
+test("filtered final files page only on explicit request and extend the same literal filter", async () => {
+  const state = structuredClone(frozenWork());
+  state.final_changes.files_total = 8; state.final_changes.files_changed = 8; state.final_changes.files_truncated = true;
+  const view = await readingView(state), nav = view.nodes.frozenNavigator;
+  const filter = nav.children[4].children[0];
+  filter.value = "file_7"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 0);
+  assert.equal(view.nodes.frozenMore.hidden, false);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+  view.nodes.frozenMore.onclick(); await flush();
+  const request = view.calls("get_work_result_state")[0];
+  assert.equal(request.params.arguments.files.offset, 7);
+  await view.reply(request, toolResult({ work_result_files: {
+    project, session_id, snapshot_id, offset: 7, next_offset: null, files_total: 8, source_truncated: false,
+    files: [frozenFile(7)],
+  } }));
+  assert.equal(nav.children[0].children.length, 1);
+  assert.equal(view.nodes.frozenMore.hidden, true);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+});
+
+test("complete file paths copy explicitly with a manual fallback when clipboard access fails", async () => {
+  for (const denied of [false, true]) {
+    const copied = [];
+    const view = app("mcp_work_result_app.html", { navigator: { clipboard: { async writeText(text) { if (denied) throw new Error("denied"); copied.push(text); } } } });
+    const state = structuredClone(baseState);
+    const path = "docs/很长的目录/".repeat(10) + "name with spaces.md";
+    state.workspace.files[0].path = path;
+    view.notification("ui/notifications/tool-result", threadResult(state, session_id)); await view.initialize();
+    const [summary, field, copy, status] = view.nodes.workspaceNavigator.children[6].children;
+    assert.equal(field.value, path); assert.equal(copied.length, 0);
+    let selected = false; field.select = () => { selected = true; };
+    await copy.onclick();
+    assert.equal(selected, denied);
+    assert.equal(denied ? status.textContent.includes("manually") : copied[0] === path, true);
+    await view.teardown(); await copy.onclick();
+    assert.equal(copied.length, denied ? 0 : 1);
+  }
+});
+
+async function quoteView({ capabilities = { updateModelContext: { text: {} } }, hostContext, navigator, state = baseState } = {}) {
+  const copy = structuredClone(state);
+  Object.assign(copy.workspace.files[0], { content: "@@ -1 +1 @@\n-before\n+after", content_kind: "diff" });
+  const view = app("mcp_work_result_app.html", { navigator });
+  view.notification("ui/notifications/tool-result", threadResult(copy, session_id));
+  await view.reply(view.sent[0], { protocolVersion: "2026-01-26", hostCapabilities: capabilities, hostContext });
+  return view;
+}
+function selectExcerpt(view, file, text = "+after", node = file.pre.children.at(-1)) {
+  view.selection.value = { rangeCount: 1, isCollapsed: false, toString: () => text,
+    getRangeAt: () => ({ startContainer: node, endContainer: node, toString: () => text.replaceAll("\n", "") }) };
+  file.button("Quote selection").onclick();
+}
+const contextUpdates = view => view.sent.filter(request => request.method === "ui/update-model-context");
+
+test("quoting previews exact text and provenance without reads or sending, then adds only on confirmation", async () => {
+  const view = await quoteView(), file = readingFile(view), before = view.sent.length;
+  selectExcerpt(view, file, "-before\n+after <script>literal</script> 😀");
+  assert.equal(view.sent.length, before);
+  assert.equal(view.nodes.quotePanel.hidden, false);
+  assert.equal(view.nodes.quoteText.textContent, "-before\n+after <script>literal</script> 😀", "rendered line breaks are preserved");
+  assert.equal(view.nodes.quoteText.children.length, 0);
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Observation: ${baseState.state_version}`));
+  assert.match(view.nodes.quoteCopy.value, /not a pinned file snapshot/);
+  const adding = view.nodes.quoteAdd.onclick();
+  view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view).length, 1);
+  const request = contextUpdates(view)[0];
+  assert.equal(request.params.content.length, 1);
+  assert.equal(request.params.content[0].text, view.nodes.quoteCopy.value);
+  assert.match(request.params.content[0].text, /File: "src\/a.rs"/);
+  await view.reply(request, {}); await adding;
+  assert.equal(view.nodes.quoteDraft.hidden, true);
+  assert.equal(view.nodes.quoteReferences.children.length, 1);
+  assert.match(view.nodes.quoteReferences.children[0].children[0].textContent, /-before\n\+after/);
+  selectExcerpt(view, file, "-before\n+after <script>literal</script> 😀");
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view).length, 1, "duplicate quote does not replace context again");
+  assert.equal(view.sent.filter(request => request.method === "ui/message").length, 0);
+  assert.equal(view.calls("send_work_result_message").length, 0);
+});
+
+test("quotes reject cross-file and oversized selections, cancel locally and discard stale draft sources", async () => {
+  const view = await quoteView(), file = readingFile(view);
+  selectExcerpt(view, file, "outside", view.nodes.resultChecks);
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  selectExcerpt(view, file, "😀".repeat(4001));
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  view.selection.value = { rangeCount: 0, isCollapsed: true };
+  file.button("Quote selection").onclick();
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  selectExcerpt(view, file, "😀".repeat(4000));
+  assert.equal(Array.from(view.nodes.quoteText.textContent).length, 4000);
+  view.nodes.quoteCancel.onclick();
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  view.viewport.scrollY = 300;
+  let returned = false; file.button("Quote selection").focus = () => { returned = true; };
+  selectExcerpt(view, file); view.viewport.scrollY = 0;
+  view.nodes.quoteCancel.onclick();
+  assert.equal(view.viewport.scrollY, 300);
+  assert.equal(returned, true);
+  selectExcerpt(view, file);
+  view.nodes.workspaceReload.onclick();
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(view.nodes.quoteDraft.hidden, true);
+  assert.match(view.nodes.quoteStatus.textContent, /file view changed/);
+  assert.equal(contextUpdates(view).length, 0);
+});
+
+test("full text and Markdown quotes retain the exact working-tree snapshot without promoting Session scope", async () => {
+  const state = structuredClone(baseState); state.workspace.files[0].path = "README.md";
+  const view = await quoteView({ state }), file = readingFile(view);
+  file.button("Full text").onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [frozenFile(0, { path: "README.md" })],
+  } }));
+  const read = view.calls("get_work_result_state")[1];
+  await view.reply(read, previewReply(read, "# Snapshot text\n\nQuoted paragraph."));
+  const requests = view.sent.length;
+  selectExcerpt(view, file, "Quoted paragraph.", file.text);
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Snapshot: ${snapshot_id}`));
+  assert.doesNotMatch(view.nodes.quoteCopy.value, /Session:/);
+  assert.match(view.nodes.quoteCopy.value, /View: Full text/);
+  view.nodes.quoteCancel.onclick();
+  file.button("Markdown").onclick();
+  selectExcerpt(view, file, "Snapshot text", file.markdown.children[0]);
+  assert.match(view.nodes.quoteCopy.value, /View: Markdown/);
+  assert.equal(view.sent.length, requests);
+});
+
+test("final Diff quotes carry the frozen snapshot and explicit Session", async () => {
+  const view = await quoteView({ state: frozenWork() }), file = readingFile(view, true);
+  await view.reply(view.calls("read_changed_file_diff")[0], frozenDiff());
+  selectExcerpt(view, file, "+new");
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Snapshot: ${snapshot_id}`));
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Session: ${session_id}`));
+  assert.match(view.nodes.quoteCopy.value, /Source: Final changes/);
+});
+
+test("Hosts without text context get a copyable quote and never receive a fabricated resource or message", async () => {
+  for (const capabilities of [{}, { updateModelContext: { resource: {}, resourceLink: {} } }]) {
+    const view = await quoteView({ capabilities }), file = readingFile(view);
+    selectExcerpt(view, file);
+    assert.equal(view.nodes.quoteAdd.textContent, "Copy quote");
+    assert.equal(view.nodes.quoteCopy.hidden, false);
+    let selected = false; view.nodes.quoteCopy.select = () => { selected = true; };
+    await view.nodes.quoteAdd.onclick();
+    assert.equal(selected, true);
+    assert.equal(contextUpdates(view).length, 0);
+    assert.equal(view.sent.filter(request => request.method === "ui/message").length, 0);
+  }
+  const copied = [], view = await quoteView({ capabilities: {}, navigator: { clipboard: { async writeText(text) { copied.push(text); } } } });
+  selectExcerpt(view, readingFile(view));
+  assert.equal(copied.length, 0);
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(copied[0], view.nodes.quoteCopy.value);
+});
+
+test("context update uncertainty retries only the exact set and teardown stops all quote actions", async () => {
+  const view = await quoteView(), file = readingFile(view);
+  selectExcerpt(view, file);
+  const first = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  await view.reject(request); await first;
+  assert.equal(view.nodes.quoteRetry.hidden, false);
+  assert.equal(view.nodes.quoteAdd.disabled, true);
+  selectExcerpt(view, file, "different");
+  assert.equal(view.nodes.quoteText.textContent, "+after");
+  view.nodes.quoteRetry.onclick();
+  assert.deepEqual(contextUpdates(view)[1].params, request.params);
+  await view.reply(contextUpdates(view)[1], {});
+  assert.equal(view.nodes.quoteReferences.children.length, 1);
+  await view.teardown();
+  const requests = view.sent.length;
+  file.button("Quote selection").onclick();
+  await view.nodes.quoteAdd.onclick(); view.nodes.quoteRetry.onclick();
+  assert.equal(view.sent.length, requests);
+  assert.equal(view.nodes.quoteText.textContent, "");
+});
+
+test("advertised Host context restores other references and canonical removal wins over a delayed acknowledgment", async () => {
+  const original = { type: "resource_link", uri: "webcodex-resource://file/example", name: "Existing file" };
+  const capabilities = { updateModelContext: { text: {} }, experimental: { "openai/modelContext": {} } };
+  const view = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "initial", content: [original] } } });
+  const file = readingFile(view); selectExcerpt(view, file);
+  const adding = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(request.params.content[0])), original);
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": null });
+  await view.reply(request, { _meta: { "openai/modelContext": { updateId: "late" } } }); await adding;
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  assert.match(view.nodes.quoteStatus.textContent, /cleared in the chat/);
+  const second = view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view)[1].params.content.length, 1, "cleared resource is not resurrected");
+  await view.reply(contextUpdates(view)[1], { _meta: { "openai/modelContext": { updateId: "accepted" } } });
+  await second;
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "accepted" } });
+  assert.equal(view.nodes.quoteReferences.children.length, 1, "matching acknowledgment does not clear content");
+  const reference = view.nodes.quoteReferences.children[0];
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "same-content", content: JSON.parse(JSON.stringify(contextUpdates(view)[1].params.content)) } });
+  assert.equal(view.nodes.quoteReferences.children[0], reference, "unchanged context preserves keyboard focus");
+  view.nodes.quoteReferences.children[0].children[1].onclick();
+  assert.equal(contextUpdates(view)[2].params.content.length, 0);
+  await view.reply(contextUpdates(view)[2], {});
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+});
+
+test("unadvertised synchronization and oversized Host context cannot overwrite references", async () => {
+  const view = await quoteView();
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "ignored", content: [{ type: "text", text: "ignored" }] } });
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  const capabilities = { updateModelContext: { text: {} }, experimental: { "openai/modelContext": {} } };
+  for (const content of [Array.from({ length: 13 }, () => ({ type: "text", text: "old" })), [{ type: "text", text: "x".repeat(65536) }]]) {
+    const blocked = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "large", content } } });
+    selectExcerpt(blocked, readingFile(blocked));
+    await blocked.nodes.quoteAdd.onclick();
+    assert.equal(blocked.nodes.quoteAdd.disabled, true);
+    assert.equal(contextUpdates(blocked).length, 0);
+  }
+  const full = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "full", content: Array.from({ length: 12 }, () => ({ type: "text", text: "old" })) } } });
+  selectExcerpt(full, readingFile(full)); await full.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(full).length, 0);
+  assert.match(full.nodes.quoteStatus.textContent, /Context is full/);
+});
+
+test("a late context acknowledgment cannot restore a torn-down quote", async () => {
+  const view = await quoteView(); selectExcerpt(view, readingFile(view));
+  const adding = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  await view.teardown(); await adding;
+  await view.reply(request, {});
+  assert.equal(view.nodes.quoteText.textContent, "");
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  assert.equal(view.nodes.quoteAdd.disabled, true);
+  assert.equal(contextUpdates(view).length, 1);
+});
+
+test("context acknowledgment restores disabled-button focus without stealing it after the user moves away", async () => {
+  for (const movedAway of [false, true]) {
+    const view = await quoteView(), file = readingFile(view);
+    view.nodes.quotePanel.append(view.nodes.quoteAdd);
+    selectExcerpt(view, file); view.nodes.quoteAdd.focus();
+    const adding = view.nodes.quoteAdd.onclick();
+    // Browsers blur a focused button as soon as the pending action disables it.
+    view.document.activeElement = view.document.body;
+    if (movedAway) file.button("Quote selection").focus();
+    await view.reply(contextUpdates(view)[0], {}); await adding;
+    assert.equal(view.document.activeElement, movedAway ? file.button("Quote selection") : view.nodes.quotePanel);
+  }
+});
+
+test("thread Diff numbers follow hunk ranges, zero-length sides and literal plus/minus content", async () => {
+  const diff = ["diff --git a/demo b/demo", "--- a/demo", "+++ b/demo", "@@ -10,3 +20,4 @@ title", " same", "---literal", "+++literal", " after", "+extra", "\\ No newline at end of file", "@@ -0,0 +1 @@", "+new", "@@ -6 +0,0 @@", "-gone", "@@ malformed", "+unknown"].join("\n");
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { content: diff, content_kind: "diff" });
+  const view = await readingView(state), { pre, button } = readingFile(view);
+  const rows = pre.children.map(line => [line.getAttribute("data-old-line"), line.getAttribute("data-new-line"), line.children[0].textContent]);
+  assert.deepEqual(rows.slice(4, 9), [["10", "20", " same"], ["11", "", "---literal"], ["", "21", "+++literal"], ["12", "22", " after"], ["", "23", "+extra"]]);
+  assert.deepEqual(rows[11], ["", "1", "+new"]);
+  assert.deepEqual(rows[13], ["6", "", "-gone"]);
+  assert.deepEqual(rows[15], ["", "", "+unknown"]);
+  assert.equal(pre.children[5].className, "diff-line deleted");
+  assert.equal(pre.children[6].className, "diff-line added");
+  button("Wrap lines").onclick();
+  assert.equal(pre.className, "diff no-wrap");
+  assert.equal(button("Wrap lines").getAttribute("aria-pressed"), "false");
+  assert.equal(view.calls("get_work_result_state").length, 0);
+});
+
+test("thread keeps Diff DOM and wrap state through refresh and collapse", async () => {
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { content: "@@ -1 +1 @@\n-old\n+new", content_kind: "diff" });
+  const view = await readingView(state), file = readingFile(view);
+  const firstLine = file.pre.children[0];
+  file.button("Wrap lines").onclick();
+  file.row.collapse(); file.row.expand();
+  assert.equal(file.pre.children[0], firstLine);
+  assert.equal(file.pre.className, "diff no-wrap");
+  view.nodes.refresh.onclick();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result: { ...state, state_version: nextState.state_version } }));
+  assert.equal(view.nodes.workspaceFiles.children[0], file.row);
+  assert.equal(file.pre.children[0], firstLine);
+  assert.equal(file.row.children[0].getAttribute("aria-expanded"), "true");
+});
+
+test("thread restores each reading mode and fences asynchronous previews after snapshot reset", async () => {
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { path: "README.md", content: "@@ -1 +1 @@\n-old\n+new", content_kind: "diff" });
+  const view = await readingView(state), file = readingFile(view);
+  const bounds = () => ({ top: 100 - view.viewport.scrollY, bottom: 1100 - view.viewport.scrollY, height: 1000 });
+  file.pre.getBoundingClientRect = file.text.getBoundingClientRect = bounds;
+  view.viewport.scrollY = 300;
+  file.button("Full text").onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  const read = view.calls("get_work_result_state")[1];
+  await view.reply(read, previewReply(read, "# Safe preview\n"));
+  view.viewport.scrollY = 450;
+  file.button("Changes").onclick();
+  assert.equal(view.viewport.scrollY, 300, "Diff restores its own offset");
+  file.button("Full text").onclick();
+  assert.equal(view.viewport.scrollY, 450, "Full text restores its separate offset");
+  assert.equal(view.calls("get_work_result_state").length, 2, "cached modes do not refetch");
+  view.nodes.workspaceReload.onclick();
+  assert.equal(view.nodes.workspaceNavigator.children[0].value, "README.md", "a new snapshot starts with a valid file selection");
+  const replacement = readingFile(view);
+  assert.notEqual(replacement.row, file.row);
+  assert.equal(replacement.pre.className, "diff");
+  replacement.button("Full text").onclick(); await flush();
+  const pending = view.calls("get_work_result_state").at(-1);
+  view.nodes.workspaceReload.onclick();
+  const currentRow = view.nodes.workspaceFiles.children[0];
+  await view.reply(pending, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  assert.equal(view.nodes.workspaceFiles.children[0], currentRow);
+  assert.equal(currentRow.children[0].getAttribute("aria-expanded"), "false");
+  assert.equal(view.calls("get_work_result_state").at(-1), pending, "late snapshot cannot start another content read");
+});
+
+test("thread failure removes navigation together with file content", async () => {
+  const view = await readingView(frozenWork());
+  view.toolInput({ project: "other-project" });
+  assert.equal(view.nodes.badge.textContent, "Unavailable");
+  assert.equal(view.nodes.workspaceNavigator.hidden, true);
+  assert.equal(view.nodes.frozenNavigator.hidden, true);
+});
+
+async function workspacePreview() {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({ project });
+  const state = structuredClone(baseState);
+  for (const key of ["session_id", "session", "validation", "review"]) delete state[key];
+  state.workspace.files[0].path = "README.md";
+  view.toolResult({ work_result: state });
+  await view.initialize();
+  const nodes = filePreview(view);
+  nodes.controls.children[1].onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  return { view, nodes, request: view.calls("get_work_result_state").find(call => call.params.arguments.files?.view === "content") };
+}
+
+async function pdfReadingView() {
+  const state = structuredClone(baseState);
+  state.workspace.files[0].path = "report.pdf";
+  state.workspace.files[0].binary = true;
+  const view = await readingView(state);
+  assert.equal(view.calls("get_work_result_state").length, 0, "inventory alone never reads PDF bytes");
+  const file = readingFile(view); await flush();
+  const inventory = view.calls("get_work_result_state")[0];
+  await view.reply(inventory, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "report.pdf", kind: "modified", additions: null, deletions: null, binary: true }],
+  } }));
+  return { view, file, request: view.calls("get_work_result_state").find(call => call.params.arguments.files?.view === "pdf") };
+}
+
+test("PDF rows read the pinned working-tree source and fence late replies on close, mode change and teardown", async () => {
+  for (const close of ["collapse", "mode", "teardown", "refresh"]) {
+    const { view, file, request } = await pdfReadingView();
+    assert.ok(request, "expanded PDF defaults to the PDF view");
+    assert.deepEqual(JSON.parse(JSON.stringify(request.params.arguments)), { project,
+      files: { snapshot_id, path: "report.pdf", view: "pdf", byte_offset: 0 } });
+    assert.equal(file.button("PDF").getAttribute("aria-pressed"), "true");
+    if (close === "collapse") file.row.collapse();
+    if (close === "mode") file.button("Full text").onclick();
+    if (close === "teardown") await view.teardown();
+    if (close === "refresh") view.nodes.workspaceReload.onclick();
+    const before = view.calls("get_work_result_state").length;
+    const reply = toolResult({ work_result_files: {
+      project, session_id: null, snapshot_id, path: "report.pdf", view: "pdf",
+      byte_offset: 0, bytes_total: 200_000, complete: false, next_byte_offset: 131_072,
+    } });
+    reply._meta = { "webcodex/pdfChunk": { content_base64: Buffer.alloc(131_072).toString("base64") } };
+    await view.reply(request, reply);
+    assert.equal(view.calls("get_work_result_state").length, before, "closed preview cannot fetch the next PDF segment");
+    await view.teardown();
+  }
+});
+
+test("PDF reads continue through temporary path filtering without changing the pinned source", async () => {
+  const { view, file, request } = await pdfReadingView();
+  const filter = view.nodes.workspaceNavigator.children[4].children[0];
+  filter.value = "no-match"; filter.oninput();
+  assert.equal(file.row.hidden, true);
+  const reply = toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, path: "report.pdf", view: "pdf",
+    byte_offset: 0, bytes_total: 200_000, complete: false, next_byte_offset: 131_072,
+  } });
+  reply._meta = { "webcodex/pdfChunk": { content_base64: Buffer.alloc(131_072).toString("base64") } };
+  await view.reply(request, reply);
+  const reads = view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "pdf");
+  assert.equal(reads.length, 2, "hidden rows retain the live PDF transfer");
+  assert.deepEqual(JSON.parse(JSON.stringify(reads[1].params.arguments)), { project,
+    files: { snapshot_id, path: "report.pdf", view: "pdf", byte_offset: 131_072 } });
+  filter.value = ""; filter.oninput();
+  assert.equal(file.row.hidden, false);
+  file.button("PDF").onclick(); await flush();
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "pdf").length, 2,
+    "restoring visibility and selecting the same tab reuse the pending transfer");
+  await view.teardown();
+});
+
+test("PDF failures while path-filtered remain actionable after the row returns", async () => {
+  const { view, file, request } = await pdfReadingView();
+  const filter = view.nodes.workspaceNavigator.children[4].children[0];
+  filter.value = "no-match"; filter.oninput();
+  await view.reply(request, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, path: "report.pdf", view: "pdf", unavailable_reason: "too_large",
+  } }));
+  filter.value = ""; filter.oninput();
+  const retry = file.button("Retry preview");
+  assert.equal(file.row.hidden, false); assert.equal(retry.hidden, false);
+  retry.onclick(); await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls("get_work_result_state").at(-1).params.arguments)),
+    JSON.parse(JSON.stringify(request.params.arguments)));
+  await view.teardown();
+});
+
+test("PDF error retry keeps the same exact snapshot and never requests text for a binary PDF", async () => {
+  const { view, file, request } = await pdfReadingView();
+  await view.reply(request, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, path: "report.pdf", view: "pdf", unavailable_reason: "too_large",
+  } }));
+  const retry = file.button("Retry preview"); assert.equal(retry.hidden, false);
+  retry.onclick(); await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls("get_work_result_state").at(-1).params.arguments)),
+    JSON.parse(JSON.stringify(request.params.arguments)));
+  file.button("Full text").onclick();
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 0);
+  await view.teardown();
+});
+
+test("workspace full text uses exact pinned snapshot, explicit pages and complete-only safe Markdown", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  assert.deepEqual(JSON.parse(JSON.stringify(request.params.arguments)), { project,
+    files: { snapshot_id, path: "README.md", view: "content", byte_offset: 0 } });
+  assert.equal(nodes.controls.children[2].disabled, true);
+  assert.equal(nodes.controls.children[2].getAttribute("aria-describedby"), nodes.hint.id);
+  assert.equal(nodes.hint.hidden, false);
+  const first = "# title\n\n" + "a".repeat(32 * 1024 - 10);
+  const tail = '\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n~~gone~~ **bold**\n\n<script>alert(1)</script>\n\n![alt](https://example.com/track.png)\n\n[link](https://example.com/) [bad](javascript:alert(1))\n\n```js\n<script>literal</script>\n```';
+  const total = new TextEncoder().encode(first + tail).length;
+  const bytes = new TextEncoder().encode(first).length;
+  await view.reply(request, previewReply(request, first, { bytes_total: total, complete: false, next_byte_offset: bytes }));
+  assert.match(nodes.state.textContent, /Partial content/);
+  assert.match(nodes.hint.textContent, /remaining file content/);
+  assert.equal(nodes.controls.children[2].disabled, true);
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1, "no automatic page loop");
+  nodes.controls.children[3].onclick(); await flush();
+  const next = view.calls("get_work_result_state").at(-1);
+  assert.equal(next.params.arguments.files.byte_offset, bytes);
+  await view.reply(next, previewReply(next, tail));
+  assert.equal(nodes.text.textContent, first + tail);
+  assert.match(nodes.state.textContent, /Complete file/);
+  assert.equal(nodes.hint.hidden, true);
+  assert.equal(nodes.controls.children[2].disabled, false);
+  nodes.controls.children[2].onclick();
+  const dom = descendants(nodes.markdown);
+  assert.equal(dom.some(node => node.tagName === "H1" && descendants(node).some(child => child.textContent === "title")), true);
+  assert.equal(dom.some(node => node.tagName === "TABLE"), true);
+  assert.equal(dom.some(node => node.tagName === "S"), true);
+  assert.equal(dom.some(node => node.tagName === "STRONG"), true);
+  assert.equal(dom.some(node => ["SCRIPT", "IMG", "IFRAME", "A"].includes(node.tagName)), false);
+  assert.equal(dom.some(node => /external image not loaded/.test(node.textContent)), true);
+  assert.equal(dom.some(node => /<script>/.test(node.textContent)), true);
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 2, "rendering needs no external resource request");
+});
+
+test("final full text retains explicit Session and rejects a mismatched content scope", async () => {
+  const view = await frozenView();
+  const nodes = filePreview(view, true);
+  nodes.controls.children[1].onclick(); await flush();
+  const request = view.calls("get_work_result_state")[0];
+  assert.equal(request.params.arguments.session_id, session_id);
+  await view.reply(request, previewReply(request, "wrong source", { session_id: null }));
+  assert.equal(nodes.text.textContent, "");
+  assert.match(nodes.state.textContent, /Content unavailable/);
+});
+
+test("preview ignores late responses after switching view, refreshing snapshot and teardown", async () => {
+  for (const action of ["switch", "refresh", "teardown"]) {
+    const { view, nodes, request } = await workspacePreview();
+    if (action === "switch") nodes.controls.children[0].onclick();
+    if (action === "refresh") view.nodes.workspaceReload.onclick();
+    if (action === "teardown") await view.teardown();
+    await view.reply(request, previewReply(request, "late content"));
+    assert.equal(nodes.text.textContent, "", action);
+  }
+});
+
+test("preview marks the byte cap and unsupported encoding without enabling Markdown", async () => {
+  for (const reason of ["binary", "non_utf8", "symlink", "submodule"]) {
+    const { view, nodes, request } = await workspacePreview();
+    await view.reply(request, previewReply(request, "", { unavailable_reason: reason }));
+    assert.match(nodes.state.textContent, /preview unavailable/);
+    assert.equal(nodes.controls.children[2].disabled, true);
+    assert.match(nodes.hint.textContent, /preview unavailable/);
+    assert.equal(nodes.retry.hidden, true, "an unsupported file is not a transient read failure");
+  }
+  const { view, nodes, request } = await workspacePreview();
+  const chunk = "x".repeat(32 * 1024);
+  for (let index = 0; index < 8; index++) {
+    const call = index === 0 ? request : view.calls("get_work_result_state").at(-1);
+    await view.reply(call, previewReply(call, chunk, { bytes_total: 256 * 1024 + 1,
+      complete: false, limited: index === 7, next_byte_offset: index === 7 ? null : (index + 1) * 32 * 1024 }));
+    if (index < 7) { nodes.controls.children[3].onclick(); await flush(); }
+  }
+  assert.match(nodes.state.textContent, /256 KiB preview limit/);
+  assert.equal(nodes.text.textContent.length, 256 * 1024);
+  assert.equal(nodes.controls.children[3].hidden, true);
+  assert.equal(nodes.controls.children[2].disabled, true);
+  assert.match(nodes.hint.textContent, /exceeds the 256 KiB preview limit/);
+});
+
+test("preview retry retains content and retries only the failed page of the same snapshot", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  await view.reply(request, previewReply(request, "first", { bytes_total: 9, complete: false, next_byte_offset: 5 }));
+  nodes.controls.children[3].onclick(); await flush();
+  const failed = view.calls("get_work_result_state").at(-1);
+  await view.reject(failed);
+  assert.equal(nodes.text.textContent, "first");
+  assert.match(nodes.state.textContent, /5 bytes retained/);
+  assert.equal(nodes.retry.hidden, false);
+  assert.equal(nodes.retry.disabled, false);
+  assert.equal(nodes.controls.children[2].disabled, true);
+  assert.match(nodes.hint.textContent, /Retry preview/);
+  nodes.retry.onclick(); nodes.retry.onclick(); await flush();
+  const retries = view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content");
+  assert.equal(retries.length, 3, "rapid retries share one owning request");
+  assert.deepEqual(retries.at(-1).params.arguments, failed.params.arguments);
+  assert.equal(nodes.retry.disabled, true);
+  await view.reply(retries.at(-1), previewReply(retries.at(-1), "tail"));
+  assert.equal(nodes.text.textContent, "firsttail");
+  assert.equal(nodes.retry.hidden, true);
+  assert.equal(nodes.controls.children[2].disabled, false);
+  assert.equal(nodes.hint.hidden, true);
+});
+
+test("initial preview retry stays pinned and a replaced snapshot cannot receive its late error", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  await view.reject(request);
+  assert.equal(nodes.retry.hidden, false);
+  nodes.retry.onclick(); await flush();
+  const retried = view.calls("get_work_result_state").at(-1);
+  assert.deepEqual(retried.params.arguments, request.params.arguments);
+  view.nodes.workspaceReload.onclick();
+  await view.reject(retried);
+  assert.equal(nodes.retry.hidden, true, "an obsolete retry does not revive its action");
+  assert.equal(nodes.text.textContent, "");
+});
+
+test("rapid Full text and next-page clicks share their owning request and settle together", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  nodes.controls.children[1].onclick(); nodes.controls.children[1].onclick();
+  await flush();
+  const calls = () => view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content");
+  assert.equal(calls().length, 1);
+  await view.reply(request, previewReply(request, "first", { bytes_total: 9, complete: false, next_byte_offset: 5 }));
+  assert.equal(nodes.text.textContent, "first");
+  nodes.controls.children[3].onclick(); nodes.controls.children[3].onclick(); await flush();
+  assert.equal(calls().length, 2);
+  await view.reply(calls()[1], previewReply(calls()[1], "tail"));
+  assert.equal(nodes.text.textContent, "firsttail");
+  assert.equal(nodes.controls.children[3].disabled, false);
+});
+
+test("collapse clears active content DOM; re-expansion joins the original request without stale display", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  nodes.row.collapse();
+  await view.reply(request, previewReply(request, "cached content"));
+  assert.equal(nodes.text.textContent, "", "collapsed preview ignores late display");
+  nodes.row.children[0].onclick(); await flush();
+  assert.equal(nodes.text.textContent, "cached content");
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1);
+  nodes.row.collapse(); assert.equal(nodes.text.textContent, "");
+  const pending = await workspacePreview();
+  pending.nodes.row.collapse(); pending.nodes.row.children[0].onclick(); await flush();
+  await pending.view.reply(pending.request, previewReply(pending.request, "joined content"));
+  assert.equal(pending.nodes.text.textContent, "joined content");
+  assert.equal(pending.nodes.controls.children[3].disabled, false);
+  assert.equal(pending.view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1);
+});
+
+test("malformed content pages cannot claim complete, skip bytes or exceed UTF-8 bounds", async () => {
+  for (const change of [
+    { content: "\ud800" }, { byte_offset: 1 }, { bytes_total: 0 },
+    { next_byte_offset: 100, complete: false }, { limited: true },
+    { content: "x".repeat(32 * 1024 + 1), bytes_total: 32 * 1024 + 1 },
+  ]) {
+    const { view, nodes, request } = await workspacePreview();
+    await view.reply(request, previewReply(request, "safe", change));
+    assert.equal(nodes.text.textContent, "");
+    assert.match(nodes.state.textContent, /Content unavailable/);
+    assert.equal(nodes.controls.children[2].disabled, true);
+  }
+});
+
+test("activity preserves raw outcomes and distinguishes expected failures and mismatches", async () => {
+  for (const [status, classification, label] of [
+    ["failed", "matched_expected_failure", "Failed · Expected result"],
+    ["failed", "matched_expected_result", "Failed · Expected result"],
+    ["success", "unexpected_success", "Succeeded · Expectation not met"],
+    ["failed", "expectation_mismatch", "Failed · Expectation not met"],
+    ["failed", undefined, "Failed"],
+  ]) {
+    const view = app("mcp_work_result_app.html");
+    view.toolInput(input);
+    view.toolResult({ work_result: { ...baseState, window_activity: {
+      ...baseState.window_activity, events: [{ ...baseState.window_activity.events[0], status, failure_expectation_result: classification }],
+      events_returned: 1, events_observed: 1,
+    } } });
+    await view.initialize();
+    const summary = view.nodes.windowActivity.children[0].children[0];
+    assert.equal(summary.children[1].textContent, label);
+  }
+});
+
+test("fail-closed Work Result displays only a bounded diagnostic code for invalid identity", async () => {
+  const view = app("mcp_work_result_app.html");
+  const sensitive = "agent:special:private-project";
+  view.toolInput({ project: sensitive + "\nprivate-token" });
+  await view.initialize();
+  assert.equal(view.nodes.badge.textContent, "Unavailable");
+  assert.equal(view.nodes.status.textContent, "This Work Result card is unavailable · WR-IDENTITY-INVALID");
+  assert(!view.nodes.status.textContent.includes("private"));
+  assert.equal(view.nodes.refresh.disabled, true);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+});
+
+test("fail-closed Work Result distinguishes invalid state from thread binding loss", async () => {
+  const invalidState = app("mcp_work_result_app.html");
+  invalidState.toolResult({ work_result: { ...baseState, state_version: "bad" } });
+  await invalidState.initialize();
+  assert.equal(invalidState.nodes.status.textContent, "This Work Result card is unavailable · WR-STATE-INVALID");
+  assert.equal(invalidState.nodes.refresh.disabled, true);
+
+  const missingThread = app("mcp_work_result_app.html");
+  missingThread.toolInput({});
+  missingThread.notification("ui/notifications/tool-result", toolResult({ work_result: baseState }));
+  await missingThread.initialize();
+  assert.equal(missingThread.nodes.status.textContent, "This Work Result card is unavailable · WR-THREAD-BINDING-MISSING");
+  assert.equal(missingThread.nodes.refresh.disabled, true);
 });

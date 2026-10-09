@@ -1,9 +1,20 @@
 use super::RouteAuth;
 use super::RouteAuth::{AuthMiddleware, HandlerManaged};
 use super::{route, AuditClass::*, RouteId::*, RouteMethod::*, RouteSpec, RouteSurface::*};
-use webcodex_core::authority::{OAuthRouteScopePolicy::*, SCOPE_RUNTIME_READ};
+use webcodex_core::authority::{
+    OAuthRouteScopePolicy::*, SCOPE_ACCOUNT_MANAGE, SCOPE_RUNTIME_READ,
+};
 
 pub(super) const PUBLIC_ROUTES: &[RouteSpec] = &[
+    route(
+        CloudflareForwardingProbe,
+        Get,
+        "/.well-known/webcodex-connection",
+        Public,
+        OAuth,
+        Other,
+        RouteAuth::Public,
+    ),
     route(
         WellKnownProtectedResource,
         Get,
@@ -89,10 +100,19 @@ pub(super) const PUBLIC_ROUTES: &[RouteSpec] = &[
 
 pub(super) const MANAGEMENT_ROUTES: &[RouteSpec] = &[
     route(
+        CloudflareControl,
+        Post,
+        "/api/connections/cloudflare",
+        FirstPartyOnly,
+        OAuth,
+        Other,
+        AuthMiddleware,
+    ),
+    route(
         OAuthClientsCreate,
         Post,
         "/api/oauth/clients/create",
-        FirstPartyOnly,
+        FirstPartyRequire(SCOPE_ACCOUNT_MANAGE),
         OAuth,
         Other,
         AuthMiddleware,
@@ -101,7 +121,7 @@ pub(super) const MANAGEMENT_ROUTES: &[RouteSpec] = &[
         OAuthClientsList,
         Post,
         "/api/oauth/clients/list",
-        FirstPartyOnly,
+        FirstPartyRequire(SCOPE_ACCOUNT_MANAGE),
         OAuth,
         Other,
         AuthMiddleware,
@@ -110,7 +130,7 @@ pub(super) const MANAGEMENT_ROUTES: &[RouteSpec] = &[
         OAuthClientsUpdateScopes,
         Post,
         "/api/oauth/clients/update_scopes",
-        FirstPartyOnly,
+        FirstPartyRequire(SCOPE_ACCOUNT_MANAGE),
         OAuth,
         Other,
         AuthMiddleware,
@@ -119,7 +139,7 @@ pub(super) const MANAGEMENT_ROUTES: &[RouteSpec] = &[
         OAuthClientsAddRedirectUri,
         Post,
         "/api/oauth/clients/add_redirect_uri",
-        FirstPartyOnly,
+        FirstPartyRequire(SCOPE_ACCOUNT_MANAGE),
         OAuth,
         Other,
         AuthMiddleware,
@@ -128,7 +148,7 @@ pub(super) const MANAGEMENT_ROUTES: &[RouteSpec] = &[
         OAuthClientsRemoveRedirectUri,
         Post,
         "/api/oauth/clients/remove_redirect_uri",
-        FirstPartyOnly,
+        FirstPartyRequire(SCOPE_ACCOUNT_MANAGE),
         OAuth,
         Other,
         AuthMiddleware,
@@ -137,7 +157,7 @@ pub(super) const MANAGEMENT_ROUTES: &[RouteSpec] = &[
         OAuthClientsRevoke,
         Post,
         "/api/oauth/clients/revoke",
-        FirstPartyOnly,
+        FirstPartyRequire(SCOPE_ACCOUNT_MANAGE),
         OAuth,
         Other,
         AuthMiddleware,

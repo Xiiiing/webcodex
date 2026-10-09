@@ -1,3 +1,4 @@
+mod app_registry;
 mod discovery;
 mod http_metadata;
 mod presentation;
@@ -60,6 +61,8 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use tokio::sync::Semaphore;
 
+#[cfg(test)]
+use app_registry::*;
 #[cfg(test)]
 use resources::*;
 #[cfg(test)]
@@ -316,7 +319,9 @@ pub async fn mcp_info(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         ));
         return;
     };
-    if let Err((status, _, message)) = crate::auth::require_mcp_request_authority(req, &config) {
+    if let Err((status, _, message)) =
+        crate::public_ingress_auth::require_authority(req, depot, &config)
+    {
         let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
         res.status_code(status);
         res.render(json_error(status, message));
@@ -449,15 +454,8 @@ fn mcp_tool_job_audit_correlation(
         };
     }
 
-    let promoted = output
-        .get("promoted_to_job")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !promoted && tool_name != Some("run_job") {
-        return McpToolJobAuditCorrelation::default();
-    }
     McpToolJobAuditCorrelation {
-        async_job_id: safe_audit_job_id(output.get("job_id")),
+        async_job_id: crate::tool_runtime::job_audit::execution_job_id_for_audit(tool_name, output),
         observed_job_ids: Vec::new(),
         resolved_project: None,
     }
@@ -504,6 +502,18 @@ fn mcp_tool_action_audit_ids(
     (!ids.is_empty()).then_some(Value::Object(ids))
 }
 
+tokio::task_local! {
+    static REQUEST_PUBLIC_ORIGIN: Option<String>;
+}
+
+pub(super) fn app_public_origin(runtime: &ToolRuntime) -> Option<String> {
+    REQUEST_PUBLIC_ORIGIN
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
+        .or_else(|| runtime.runtime_info.configured_public_url.clone())
+}
+
 #[handler]
 pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     let mut guard = ToolRequestLifecycle::new("mcp", new_trace_id(), "-", "POST /mcp", None);
@@ -530,7 +540,8 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
         );
         return;
     };
-    if let Err((status, _, message)) = crate::auth::require_mcp_json_request(req, &authority_config)
+    if let Err((status, _, message)) =
+        crate::public_ingress_auth::require_json_authority(req, depot, &authority_config)
     {
         let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_REQUEST);
         guard.parsed("http_validation_error");
@@ -595,7 +606,7 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             .params
             .get("uri")
             .and_then(Value::as_str)
-            .filter(|uri| resources::is_mcp_computer_app_resource_uri(uri))
+            .filter(|uri| *uri == app_registry::MCP_COMPUTER_UI_RESOURCE_URI)
             .map(str::to_string)
     } else {
         None
@@ -768,6 +779,12 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             if let Some(composition) = correlation.code_mode_composition_audit_summary() {
                 summary["code_mode_composition"] = composition;
             }
+            if let Some(expectation) = &correlation.failure_expectation_result {
+                summary["failure_expectation_result"] = json!(expectation);
+            }
+            if let Some(job_trace) = correlation.job_audit_summary() {
+                summary["job_trace"] = job_trace;
+            }
             let mut event = ActionAuditRecord::new(tool.clone(), success, status)
                 .error(error)
                 .summary(summary)
@@ -850,21 +867,24 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
     // ~2 MiB libtest/Tokio worker stack even when a request takes another arm.
     let outcome = match tokio::time::timeout(
         MCP_DISPATCH_HARD_TIMEOUT,
-        scope_active_trace(
-            active_trace_id,
-            Box::pin(handle_mcp_request_with_lifecycle(
-                &runtime,
-                request,
-                auth.as_ref(),
-                protocol_era,
-                host_file_import_trust,
-                window.identity.as_ref(),
-                Some(&mut guard),
-                Some(&mut model_ergonomics),
-                compact_schemas,
-                server_mcp_apps_enabled,
-                Some(&mut tool_correlation),
-            )),
+        REQUEST_PUBLIC_ORIGIN.scope(
+            crate::public_ingress_auth::entry(depot).map(|entry| entry.origin.clone()),
+            scope_active_trace(
+                active_trace_id,
+                Box::pin(handle_mcp_request_with_lifecycle(
+                    &runtime,
+                    request,
+                    auth.as_ref(),
+                    protocol_era,
+                    host_file_import_trust,
+                    window.identity.as_ref(),
+                    Some(&mut guard),
+                    Some(&mut model_ergonomics),
+                    compact_schemas,
+                    server_mcp_apps_enabled,
+                    Some(&mut tool_correlation),
+                )),
+            ),
         ),
     )
     .await
@@ -1151,7 +1171,9 @@ pub async fn mcp_post(req: &mut Request, depot: &mut Depot, res: &mut Response) 
             let estimated = estimate_json_bytes(&body);
             guard.response_serialized(403, estimated, Some(false), None, "forbidden");
             res.status_code(StatusCode::FORBIDDEN);
-            if auth.as_ref().is_some_and(AuthContext::is_oauth_token) {
+            if auth.as_ref().is_some_and(AuthContext::is_oauth_token)
+                && crate::auth::oauth_scope_denial_is_delegable(required_scope)
+            {
                 let challenge = crate::auth::oauth_insufficient_scope_challenge(required_scope);
                 if let Ok(val) = salvo::http::HeaderValue::from_str(&challenge) {
                     res.headers_mut().insert("www-authenticate", val);
@@ -1380,7 +1402,7 @@ fn scope_forbidden(
     description: impl Into<String>,
 ) -> McpOutcome {
     McpOutcome::Forbidden {
-        body: crate::auth::scope_forbidden_body(auth, description),
+        body: crate::auth::scope_forbidden_body(auth, required_scope, description),
         required_scope,
     }
 }

@@ -27,10 +27,11 @@ issues, and shared logs.
    matching your machine's architecture from [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases).
    On macOS, use **System Settings → Privacy & Security → Open Anyway** if the
    current non-notarized build is blocked; do not disable Gatekeeper globally.
-2. **Choose the project.** Select **Local Full Runtime / Use WebCodex on this
-   computer**, choose the actual repository directory, then wait until
-   **Service**, **Runner**, and **Project** are all Ready. WebCodex Desktop is a
-   runtime controller, not the chat interface.
+2. **Create the main node.** Choose **Create main node** to configure separate
+   Server and local Runner services. The initial repository is optional; skipping
+   it keeps the Runner enabled. Wait for setup to finish and check both services.
+   **Join main node** adds this computer’s Runner to an existing Server; see the
+   [device instructions](desktop-guide.md#add-another-device).
 3. **Create the OpenAI Tunnel credentials.** Create a Tunnel on the
    [OpenAI Tunnels page](https://platform.openai.com/settings/organization/tunnels),
    record its exact Tunnel ID, and create an API key on the
@@ -82,7 +83,7 @@ Download the matching Desktop artifact from the [GitHub Releases](https://github
 - **Windows:** use the installer matching your architecture, x64 or ARM64. Windows ARM64 Desktop is part of the v0.4.2+ release build path.
 - **macOS:** use the DMG matching your Mac architecture, Intel or Apple Silicon.
 
-Published v0.4.3 macOS builds are ad-hoc signed and are not notarized, so Gatekeeper may require **System Settings → Privacy & Security → Open Anyway**. The formal release pipeline after the macOS TCC signing fix requires Developer ID Application signing and notarization; local source/dogfood builds may still be ad-hoc signed. Do not disable Gatekeeper globally.
+macOS signing has three explicit modes: `self-signed` is the current persistent fallback for public releases and long-lived dogfood; `developer-id` uses Developer ID Application plus notarization/stapling when Apple credentials are available; `adhoc` is only for disposable CI/local verification and promises no TCC upgrade continuity. Keep the same self-signed certificate **and private key** across builds and upgrades. Recreating a certificate with the same name changes identity. Both Desktop (`dev.webcodex.desktop`) and bundled Runner (`dev.webcodex.runner`) use certificate-anchored designated requirements without binary cdhash. Final app/DMG verification runs after Tauri nested signing. This does not preserve grants from historical ad-hoc builds automatically: users may need to reauthorize the new persistent identity once. Self-signed distribution is not Apple notarized; use **System Settings → Privacy & Security → Open Anyway** if Gatekeeper requires it, without disabling Gatekeeper globally.
 
 Launch WebCodex Desktop after installation.
 
@@ -128,44 +129,42 @@ Do not commit or share real API keys, WebCodex tokens, or authorization values.
 
 ## 3. Save Tunnel configuration inside Desktop (recommended)
 
-Open **Connection → Tunnel connection settings**. This editor stays visible while the regular Tunnel is running or stopped:
+Open **Connections** and add a ChatGPT connection. In a persistent local Environment:
 
-1. Enter your Tunnel ID in **Tunnel ID**.
-2. Enter an API key authorized for that Tunnel in the **Tunnel API key** password field.
-3. Click **Save configuration**. Once the source shows the local configuration file, you can start the connection. **No Desktop restart is required.**
+1. Enter a profile name and the exact **Tunnel ID**.
+2. Enter the authorized API key in the write-only password field.
+3. Choose **Run with WebCodex Server (recommended)**, or choose **Separate Tunnel service (advanced)** only when an independent service lifecycle is required.
+4. Save the profile. Saving never restarts a working Server. Add any remaining profiles, then use the single explicit **Restart Server** action if Desktop reports that the saved runtime state has not been applied.
 
-Desktop stores the API key **unencrypted** in the current user's local
-application-data directory. Keep it out of projects, Git, tickets, screenshots,
-and shared backups.
+A Server-owned profile is written to the current `EnvironmentStore` and is loaded only when the Server starts. It never creates a standalone Tunnel service. A separate-service profile retains per-profile Start, Stop and Restart controls. Existing owners cannot be changed in the ordinary editor; use the explicit ownership-transfer flow after the previous owner is cleanly stopped and uninstalled.
 
-**Success looks like:** the source is the local file and both presence checks
-pass. Next, select the actual project ChatGPT should use.
+Desktop never reads an API key back into the form. Leaving the key blank while editing retains the selected profile's saved key; a replacement is accepted only against the current profile revision. Keys remain unencrypted in an owner-private binding, so keep Environment data, support bundles, tickets, screenshots and backups appropriately protected.
 
-### Optional: saved configuration behavior and storage
+**Success looks like:** each card shows its independent name, Tunnel ID, owner and readiness. Server-owned profiles additionally show their per-profile startup selection. A Server-owned profile may show **Restart Server** until the one explicit restart loads all pending profiles. Saving configuration and observing a live Tunnel are separate results.
 
-The same fields are available in the optional Tunnel section during local setup. When a key is already saved, leaving its field blank keeps that key. Desktop never retrieves the secret into the UI; submission clears the input. A failed save retains the Tunnel ID but requires re-entering an unsaved key.
+### Profile authority and legacy storage
 
-**Priority: complete saved configuration → inherited Desktop process environment.** Desktop never combines a saved Tunnel ID with an environment API key. Saving does not modify system variables. An active Desktop-owned regular Tunnel is replaced with the saved configuration, without restarting Server or Runner. A stopped Tunnel remains stopped. OpenAI Quick Share uses the new values on its next start. Save success and connection recovery are distinct: a replacement failure retains the new configuration and asks you to retry the connection.
+For a persistent Environment, `EnvironmentStore` is canonical for both CLI and Desktop: `tunnel.json` stores the catalog and `server/tunnels/<profile>/webcodex.env` stores the private binding. A profile added by CLI appears on the Desktop Connections page, and a Desktop save is visible to CLI `tunnel-status`.
 
-The file is `secrets/tunnel-config.json` in Desktop's local application data directory:
+A historical Desktop `secrets/tunnel-config.json` is not a second writable catalog in persistent mode. It is checked only as a fail-closed identity reconciliation fence: matching profile/Tunnel identities are accepted, but a missing or different identity blocks mutation rather than silently overwriting, importing or deleting either side. Historical API-key bytes are not compared after authority transfer, because key rotation belongs only to the revision-fenced EnvironmentStore binding.
+
+Legacy/non-persistent Desktop runtimes continue to use `secrets/tunnel-config.json` in the local application-data directory:
 
 - macOS: `~/Library/Application Support/dev.webcodex.desktop/secrets/tunnel-config.json`.
 - Windows: `%LOCALAPPDATA%\dev.webcodex.desktop\secrets\tunnel-config.json`.
 
-macOS/Unix writes are owner-only (`0600`); Windows inherits access permissions from the current user's local application data directory. Saves use atomic replacement without retaining old secret backups. The `secrets` directory is excluded by WebCodex’s existing sensitive-path policy. Ordinary `desktop-state.json` remains non-secret runtime state.
+macOS/Unix writes are owner-only (`0600`); Windows inherits current-user application-data permissions. Saves use guarded atomic replacement and retain no old secret backup. Invalid, unreadable, symlinked or oversized files fail closed.
 
-**Clear saved configuration and use environment** clears the saved pair and restores environment fallback; the file records `null`. Invalid or unreadable saved configuration does not fall back automatically. Repair it by saving again in the UI or explicitly clear it. Manual file edits require restarting Desktop; in-app saves do not.
+### Optional: continue using environment variables in legacy mode
 
-### Optional: continue using environment variables
-
-Without saved configuration, Desktop uses its inherited process environment:
+Without saved legacy/non-persistent configuration, Desktop can use its inherited process environment:
 
 ```text
 CONTROL_PLANE_TUNNEL_ID
 CONTROL_PLANE_API_KEY
 ```
 
-No additional `OPENAI_ADMIN_KEY` or `OPENAI_API_KEY` is needed. On first OpenAI Secure Tunnel use, WebCodex automatically downloads and verifies a pinned `tunnel-client`; manual installation is normally unnecessary. If download fails, check networking or proxies. Advanced users can set `WEBCODEX_TUNNEL_CLIENT_BIN`.
+No additional `OPENAI_ADMIN_KEY` or `OPENAI_API_KEY` is needed. Environment variables are not a persistent multi-profile format and are never merged field-by-field with saved data. OpenAI Secure Tunnel uses the built-in native Rust client, so there is no separate `tunnel-client` download or installation. If startup fails, check connection health and the control-plane route; if WebCodex reports unconfirmed prior work, resolve that state before restarting the same Tunnel identity.
 
 Windows users can set persistent variables for the current user. On macOS, Finder / Dock launches do not read `~/.zshrc`; launch from a Terminal that has loaded the variables or configure the login session environment. After changing variables through this advanced path, use **Quit WebCodex** in the tray and launch it again. Closing the window only hides it and cannot refresh its process environment. **Recheck configuration** neither executes shell startup scripts nor reloads manually edited configuration files.
 
@@ -177,21 +176,25 @@ For screenshots, window observation, keyboard or pointer control, grant the rele
 
 ## 4. Start the local runtime and add your project
 
-On first use, choose **Local Full Runtime / Use WebCodex on this computer** and
-select the actual repository directory that ChatGPT should use. WebCodex grants
-access only to projects you explicitly add, not unrelated directories or the
-whole disk.
+On first use, choose **Create main node**. You can select an initial repository
+or skip it and add one later; the local Runner is enabled in either case. Runner
+filesystem policy remains the access boundary, and Project registration never
+grants access outside that policy. Advanced retains Server-only, viewer-only and
+Quick Share; reopening setup preserves saved roles.
 
 On Home, expand **View runtime diagnostics** and confirm:
 
 - Service: Running / Ready;
 - Runner: Connected / Ready;
-- Project: Ready, with the directory you selected.
+- Project: Ready with the selected directory, if you chose an initial Project.
+  An empty Project list does not stop Server or Runner.
 
-To use another repository later, open **Projects** and select **Choose another
-project** or **Add project**.
+To add a repository later, open **Projects → Add local project**. The existing
+Runner identity and Server connection are reused.
 
-**Success looks like:** Service, Runner, and Project are all Ready, and the displayed project path is exact.
+**Success looks like:** Server and local Runner are ready. When a Project has
+been registered, check its exact path and owning Runner. A real project read from
+ChatGPT still verifies the full connection separately.
 
 **If it fails:** use **Activate project again**. If it still fails, inspect the error and
 **Activity** details. Do not broaden project access to work around the error.

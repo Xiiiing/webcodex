@@ -199,10 +199,48 @@ struct ServerInitOptions {
     json: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServerTunnelProvider {
+    Openai,
+    CloudflareNamed,
+    CloudflareQuick,
+}
+impl ServerTunnelProvider {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "openai" => Ok(Self::Openai),
+            "cloudflare_named" => Ok(Self::CloudflareNamed),
+            "cloudflare_quick" => Ok(Self::CloudflareQuick),
+            _ => Err("--provider must be openai, cloudflare_named or cloudflare_quick".into()),
+        }
+    }
+    fn matches(self, provider: &webcodex_environment::TunnelProvider) -> bool {
+        matches!(
+            (self, provider),
+            (Self::Openai, webcodex_environment::TunnelProvider::Openai)
+                | (
+                    Self::CloudflareNamed,
+                    webcodex_environment::TunnelProvider::CloudflareNamed { .. }
+                )
+                | (
+                    Self::CloudflareQuick,
+                    webcodex_environment::TunnelProvider::CloudflareQuick
+                )
+        )
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ServerTunnelOptions {
+    provider: ServerTunnelProvider,
     env_file: PathBuf,
+    runtime_binding: Option<PathBuf>,
     stop_on_stdin_eof: bool,
+}
+#[cfg(windows)]
+impl ServerTunnelOptions {
+    fn private_file(&self) -> &Path {
+        self.runtime_binding.as_deref().unwrap_or(&self.env_file)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +348,34 @@ fn path_is_inside_git_checkout(path: &Path) -> bool {
     })
 }
 
+fn management_build_info_json() -> String {
+    let info = build_info::machine_build_info("webcodex");
+    management_build_info_json_for_platform(&info, cfg!(windows))
+}
+fn management_build_info_json_for_platform(
+    info: &webcodex_core::desktop_runtime_contract::MachineBuildInfo,
+    windows: bool,
+) -> String {
+    if !windows {
+        return format!(
+            "{}\n",
+            serde_json::to_string(info).expect("Machine build identity is serializable")
+        );
+    }
+    let mut raw = serde_json::to_value(info).expect("Machine build identity is serializable");
+    if windows {
+        // This compiled CLI attests the guarded CLI + outer NSIS protocol from
+        // its own source. The official native workflow requires the outer
+        // builder to consume the same CLI/source/run and attest the same bit.
+        raw[webcodex_environment::unified_update::WINDOWS_GUARDED_BOOTSTRAP_BUILD_INFO_FIELD] =
+            webcodex_environment::unified_update::WINDOWS_GUARDED_HANDOFF_VERSION.into();
+    }
+    format!(
+        "{}\n",
+        serde_json::to_string(&raw).expect("Machine build identity is serializable")
+    )
+}
+
 fn cli_action<I, S>(args: I) -> CliAction
 where
     I: IntoIterator<Item = S>,
@@ -331,7 +397,7 @@ where
             stderr: String::new(),
         },
         "--build-info-json" if args.len() == 1 => CliAction::Exit {
-            code: 0, stdout: build_info::build_info_json("webcodex"), stderr: String::new(),
+            code: 0, stdout: management_build_info_json(), stderr: String::new(),
         },
         "--version" | "-V" => CliAction::Exit {
             code: 0,
@@ -418,6 +484,7 @@ fn parse_connect(args: &[String]) -> CliAction {
     let mut key_file = None;
     let mut auth = ConnectAuth::SharedKey;
     let mut oauth_redirect_uri = None;
+    let mut oauth_browser_permissions = false;
     let mut oauth_computer_permissions = false;
     let mut oauth_local_mcp = false;
     let mut oauth_local_plugins = false;
@@ -462,6 +529,7 @@ fn parse_connect(args: &[String]) -> CliAction {
                     return cli_parse_error("--oauth-redirect-uri requires a value".to_string())
                 }
             },
+            "--oauth-browser-permissions" => oauth_browser_permissions = true,
             "--oauth-computer-permissions" => oauth_computer_permissions = true,
             "--oauth-local-mcp" => oauth_local_mcp = true,
             "--oauth-local-plugins" => oauth_local_plugins = true,
@@ -530,6 +598,11 @@ fn parse_connect(args: &[String]) -> CliAction {
             // actual optional grants are still selected in browser consent.
         }
         ConnectAuth::ManagedOAuth => {
+            if oauth_browser_permissions {
+                return cli_parse_error(
+                    "--oauth-browser-permissions requires --auth oauth".to_string(),
+                );
+            }
             if oauth_computer_permissions {
                 return cli_parse_error(
                     "--oauth-computer-permissions requires --auth oauth".to_string(),
@@ -562,6 +635,11 @@ fn parse_connect(args: &[String]) -> CliAction {
             }
         }
         ConnectAuth::SharedKey => {
+            if oauth_browser_permissions {
+                return cli_parse_error(
+                    "--oauth-browser-permissions requires --auth oauth".to_string(),
+                );
+            }
             if oauth_computer_permissions {
                 return cli_parse_error(
                     "--oauth-computer-permissions requires --auth oauth".to_string(),
@@ -605,6 +683,7 @@ fn parse_connect(args: &[String]) -> CliAction {
         key_file,
         auth,
         oauth_redirect_uri,
+        oauth_browser_permissions,
         oauth_computer_permissions,
         oauth_local_mcp,
         oauth_local_plugins,
@@ -1814,29 +1893,45 @@ fn parse_server_run(args: &[String]) -> Result<InternalRunOptions, String> {
 }
 
 fn parse_server_tunnel(args: &[String]) -> Result<ServerTunnelOptions, String> {
-    let mut provider: Option<String> = None;
-    let mut env_file: Option<PathBuf> = None;
+    let mut provider = None;
+    let mut env_file = None;
+    let mut runtime_binding = None;
     let mut json = false;
     let mut stop_on_stdin_eof = false;
+    let mut seen = std::collections::BTreeSet::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
+        if !seen.insert(arg.as_str()) {
+            return Err("server tunnel options must not be repeated".into());
+        }
         match arg.as_str() {
-            "--provider" => provider = Some(next_value(&mut iter, arg)?),
+            "--provider" => {
+                provider = Some(ServerTunnelProvider::parse(&next_value(&mut iter, arg)?)?)
+            }
             "--env-file" => env_file = Some(PathBuf::from(next_value(&mut iter, arg)?)),
+            "--runtime-binding" => {
+                runtime_binding = Some(PathBuf::from(next_value(&mut iter, arg)?))
+            }
             "--json" => json = true,
             "--stop-on-stdin-eof" => stop_on_stdin_eof = true,
-            other => return Err(format!("unknown server tunnel option: {other}")),
+            _ => return Err("unknown server tunnel option; use server tunnel --help".into()),
         }
     }
-    if provider.as_deref() != Some("openai") {
-        return Err("--provider openai is required for regular Server Tunnel".to_string());
-    }
-    let env_file = env_file.ok_or_else(|| "--env-file is required".to_string())?;
+    let provider = provider.ok_or("--provider is required")?;
     if !json {
-        return Err("server tunnel currently requires --json".to_string());
+        return Err("server tunnel currently requires --json".into());
+    }
+    match provider {
+        ServerTunnelProvider::Openai if runtime_binding.is_none() && env_file.is_some() => {}
+        ServerTunnelProvider::CloudflareNamed | ServerTunnelProvider::CloudflareQuick
+            if env_file.is_none() && runtime_binding.is_some() => {}
+        ServerTunnelProvider::Openai => return Err("OpenAI requires only --env-file PATH".into()),
+        _ => return Err("Cloudflare requires only --runtime-binding PATH".into()),
     }
     Ok(ServerTunnelOptions {
-        env_file,
+        provider,
+        env_file: env_file.unwrap_or_default(),
+        runtime_binding,
         stop_on_stdin_eof,
     })
 }
@@ -2695,7 +2790,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Err(error) => {
-                eprintln!("{error}");
+                if args.first().map(String::as_str) == Some("update")
+                    && args.iter().any(|arg| arg == "--json")
+                {
+                    // Public headless status has one bounded JSON document on
+                    // stdout; sudo and authorization prompts use the terminal.
+                    println!("{error}");
+                } else {
+                    eprintln!("{error}");
+                }
                 std::process::exit(1);
             }
         },
@@ -3068,7 +3171,7 @@ pub fn validate_windows_tunnel_service_args(args: &[String]) -> Result<(), Strin
     if opts.stop_on_stdin_eof {
         return Err("persistent Tunnel service cannot use --stop-on-stdin-eof".into());
     }
-    webcodex_environment::runtime_entry::validate_service_env_file(&opts.env_file)
+    webcodex_environment::runtime_entry::validate_service_env_file(opts.private_file())
 }
 
 #[cfg(windows)]
@@ -3087,7 +3190,7 @@ pub async fn run_windows_tunnel_service(
     }
     validate_windows_tunnel_service_args(&args)?;
     let log_dir = opts
-        .env_file
+        .private_file()
         .parent()
         .ok_or("Tunnel service env file has no parent directory")?;
     let mut service_log = webcodex_environment::service::ServiceLogGuard::open(

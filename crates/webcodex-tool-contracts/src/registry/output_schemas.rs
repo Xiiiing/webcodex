@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 
 mod agent_tasks;
 mod agent_waits;
@@ -14,6 +14,7 @@ mod common;
 mod communication;
 mod computer;
 mod discovery;
+mod docx;
 mod edits;
 mod files;
 mod git;
@@ -36,6 +37,39 @@ pub use common::{
 };
 
 fn base_output_schema_for_tool(name: &str) -> Value {
+    if let Some(schema) = docx::output_schema_for_tool(name) {
+        return schema;
+    }
+    if name == "read_app_artifact_chunk" {
+        let payload = json!({
+            "type":"object", "additionalProperties":false,
+            "properties":{
+                "project":{"type":"string","maxLength":512},
+                "path":{"type":"string","maxLength":512},
+                "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+                "bytes_total":{"type":"integer","minimum":1,"maximum":268435456},
+                "byte_offset":{"type":"integer","minimum":0,"maximum":268435455},
+                "next_byte_offset":{"type":["integer","null"],"minimum":1,"maximum":268435455},
+                "complete":{"type":"boolean"},
+                "content_base64":{"type":"string","maxLength":699052,"description":"Runtime-only bytes; MCP moves them to private App metadata before structured/text framing."}
+            },
+            "required":["project","path","sha256","bytes_total","byte_offset","next_byte_offset","complete"]
+        });
+        return common::wrapped_output_schema(vec![("artifact_chunk", payload)]);
+    }
+    if name == "present_pdf" {
+        let payload = json!({
+            "type": "object", "additionalProperties": false,
+            "properties": {
+                "project": {"type":"string", "maxLength":512},
+                "path": {"type":"string", "maxLength":512},
+                "sha256": {"type":"string", "pattern":"^[0-9a-f]{64}$"},
+                "name": {"type":"string", "maxLength":255},
+                "bytes": {"type":"integer", "minimum":5, "maximum":20971520},
+            }, "required": ["project", "path", "sha256", "name", "bytes"]
+        });
+        return common::wrapped_output_schema(vec![("pdf_document", payload)]);
+    }
     if let Some(schema) = resource_references::output_schema_for_tool(name) {
         return schema;
     }

@@ -46,6 +46,7 @@ fn valid_window_message_priority(value: &str) -> bool {
 }
 
 impl ToolRuntime {
+    #[cfg(test)]
     pub(crate) async fn post_window_operator_message(
         &self,
         target_window_key: &str,
@@ -325,18 +326,44 @@ impl ToolRuntime {
         recipient_principal_id: &str,
         limit: usize,
     ) -> serde_json::Value {
+        self.window_collaboration_page_for_principal(
+            window,
+            recipient_principal_kind,
+            recipient_principal_id,
+            limit,
+            None,
+        )
+    }
+
+    pub(crate) fn window_collaboration_page_for_principal(
+        &self,
+        window: &str,
+        kind: &str,
+        principal: &str,
+        limit: usize,
+        before: Option<&str>,
+    ) -> serde_json::Value {
         let unavailable = || json!({"available":false,"can_send":false,"messages":[]});
         let Some(db) = self.communication_db.as_ref() else {
             return unavailable();
         };
-        match db.window_collaboration_transcript(
-            recipient_principal_kind,
-            recipient_principal_id,
-            window,
-            limit,
-        ) {
-            Ok((messages, truncated)) => {
-                json!({"available":true,"can_send":true,"returned":messages.len(),"messages":messages,"truncated":truncated})
+        match db.window_collaboration_page(kind, principal, window, limit, before) {
+            Ok(Some((messages, truncated))) => {
+                let next_before = if truncated {
+                    messages.first().map(|message| message.message_id.clone())
+                } else {
+                    None
+                };
+                // Opaque cache namespace only; a cursor/scope never grants authority.
+                let history_scope = format!(
+                    "{:x}",
+                    Sha256::digest(serde_json::to_vec(&(kind, principal, window)).unwrap())
+                );
+                json!({"available":true,"can_send":true,"returned":messages.len(),"messages":messages,
+                    "truncated":truncated,"next_before":next_before,"history_scope":history_scope})
+            }
+            Ok(None) => {
+                json!({"available":false,"can_send":false,"messages":[],"error_kind":"history_cursor_unavailable"})
             }
             Err(_) => unavailable(),
         }
@@ -349,6 +376,23 @@ impl ToolRuntime {
         window: Option<&ClientWindow>,
         ack_ids: &[String],
     ) {
+        self.add_window_operator_projection_until(
+            result,
+            auth,
+            window,
+            ack_ids,
+            super::optional_enrichment::deadline(),
+        );
+    }
+
+    pub(crate) fn add_window_operator_projection_until(
+        &self,
+        result: &mut ToolResult,
+        auth: Option<&AuthContext>,
+        window: Option<&ClientWindow>,
+        ack_ids: &[String],
+        deadline: std::time::Instant,
+    ) {
         let (Some(window), Some(db), Ok((kind, principal))) = (
             window,
             self.communication_db.as_ref(),
@@ -359,34 +403,31 @@ impl ToolRuntime {
         if !result.output.is_object() {
             return;
         }
-        let now = chrono::Utc::now().timestamp_millis();
-        let Ok(batch) =
-            db.take_window_operator_attention(&kind, &principal, window.key(), ack_ids, now, 4)
-        else {
-            return;
-        };
-        if batch.messages.is_empty() && batch.accepted_ack_ids.is_empty() {
-            return;
-        }
-        result.output["operator_messages"] =
-            json!({"messages":batch.messages,"ack":{"accepted_ids":batch.accepted_ack_ids}});
-        if crate::json_measurement::serialized_json_len(result).is_ok_and(|bytes| {
-            bytes > webcodex_workspace::file_read_range::MAX_SERIALIZED_OUTPUT_BYTES
-        }) {
-            result
-                .output
-                .as_object_mut()
-                .unwrap()
-                .remove("operator_messages");
-            if let Err(error) = db.rollback_window_operator_attention(
-                &kind,
-                &principal,
-                window.key(),
-                now,
-                &batch.projection_rollbacks,
-            ) {
-                tracing::warn!(?error, "failed to roll back oversized Operator attention");
+        let started = std::time::Instant::now();
+        let value = |batch: &webcodex_store::WindowOperatorAttention| json!({"messages": batch.messages, "ack": {"accepted_ids": batch.accepted_ack_ids}});
+        let outcome = match db.project_window_operator_attention(
+            &kind,
+            &principal,
+            window.key(),
+            ack_ids,
+            chrono::Utc::now().timestamp_millis(),
+            4,
+            Some(deadline),
+            |batch| super::optional_enrichment::fits(result, "operator_messages", value(batch)),
+        ) {
+            Ok(Some(batch)) => {
+                if !batch.messages.is_empty() || !batch.accepted_ack_ids.is_empty() {
+                    let value = value(&batch);
+                    if super::optional_enrichment::fits(result, "operator_messages", value.clone())
+                    {
+                        result.output["operator_messages"] = value;
+                    }
+                }
+                "completed"
             }
-        }
+            Ok(None) => super::optional_enrichment::omitted(deadline),
+            Err(_) => "store_error",
+        };
+        crate::tool_request_trace::record_phase_latency("operator_attention", started, outcome);
     }
 }

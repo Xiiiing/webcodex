@@ -26,11 +26,14 @@ For everyday development, follow the [Full Setup guide](PERSONAL_SETUP.md) and u
 ### Environment configuration
 
 For a new personal machine: `webcodex environment configure --create --runner --scope user`,
-then `webcodex environment configure-tunnel default` and `webcodex environment status`.
-Local user/Runner credentials are created internally; no pairing input is needed.
-Linux user services depend on linger for post-logout persistence; macOS LaunchAgents
-and Windows interactive tasks require a signed-in owner. Scope changes do not adopt
-existing services. [Lifecycle and compatibility details](implementation/personal-environment-lifecycle.md).
+then `webcodex environment configure-tunnel default --host embedded` and
+`webcodex environment status`. Embedded is the recommended persistent ownership:
+the Server loads the profile at startup, while configuration never installs a
+standalone Tunnel service or restarts a running Server implicitly. Local user/Runner
+credentials are created internally; no pairing input is needed. Linux user services
+depend on linger for post-logout persistence; macOS LaunchAgents and Windows
+interactive tasks require a signed-in owner. Scope changes do not adopt existing
+services. [Lifecycle and compatibility details](implementation/personal-environment-lifecycle.md).
 
 `webcodex environment` and Desktop call the same setup core. This namespace configures the machine's persistent environment; the existing project-level `webcodex setup` command keeps its original meaning. Installer availability and native acceptance are tracked in [Unified installation](unified-installation.md) and [Deployment validation](unified-deployment-validation.md).
 
@@ -44,11 +47,60 @@ existing services. [Lifecycle and compatibility details](implementation/personal
 | `invite` | Create a short-lived Runner invitation on the environment's local Server; the displayed code is sensitive. |
 | `add-project PATH` | Reuse the existing Runner identity; a viewer must complete Runner enrollment first. |
 | `status --json` / `doctor --json` | Inspect saved configuration, Server reachability, Runner/project readiness, and structured diagnostics. |
-| `start COMPONENT` / `stop COMPONENT` / `restart COMPONENT` | Explicitly manage an environment-owned `server`, `runner`, or `tunnel`. |
+| `start COMPONENT` / `stop COMPONENT` / `restart COMPONENT` | Explicitly manage an environment-owned `server`, `runner`, or standalone `tunnel`; use `--profile NAME` for a named standalone Tunnel. |
+| `configure-tunnel [PROFILE] --host embedded\|standalone [--credentials-file PATH]` | Create a named profile directly under the Server lifecycle or as a separate service. Credentials come only from hidden input or a protected file. |
+| `tunnel-status [PROFILE]` | Inspect the exact profile identity, owner, readiness and whether an explicit Server restart is required. |
+| `tunnel-host PROFILE --host embedded\|standalone` | Transfer an existing profile only after the previous owner is cleanly stopped and, for standalone, uninstalled. |
 | `repair-user-credential [--token-file PATH]` | Verify and replace the saved user credential without pairing or changing service state. |
 | `repair-credential runner` | Repair Windows SCM account credentials through hidden input. |
 
 Use `webcodex environment --help` for the complete namespace, including Tunnel profiles, explicit legacy migrations, and installer upgrade/recovery commands. Public environment commands support `--json` and `--environment-dir PATH`. Do not put tokens, pairing codes, or service passwords in command arguments. When pairing redemption is uncertain, read the recovery diagnostic before explicitly supplying a replacement through `resume --new-pairing-code --code-stdin`; do not replay the old code automatically.
+
+### Local unified updates (Linux terminal)
+
+`webcodex environment update` uses the same official release discovery, private
+Desktop download cache, candidate verifier and Environment transaction as Desktop.
+It updates the local official unified package, including its installed Desktop,
+CLI, Server and Runner files; it never updates remote Runner installations.
+An additional Runner uses this entry without opening a Desktop window. It must
+still have the existing official unified package installed.
+
+| Command | Effects |
+| --- | --- |
+| `environment update status` | Inspect the local installation, cached candidate and recorded transaction. Does not discover a new release or create an unconfigured Environment. |
+| `environment update check` | Discover the latest official stable release; does not download or install. The release notice is advisory until candidate validation. |
+| `environment update download --version VERSION` | Download and validate that stable version into the existing private cache. Does not prepare services or install. |
+| `environment update apply --version VERSION --yes` | Revalidate the exact cached candidate and Environment, check tasks, prepare owned services and dispatch the existing installer helper. |
+| `environment update resume --operation-id ID --yes` | Retry the existing completion mechanism only when Core proves the recorded operation can be safely continued. Never dispatches another installer. |
+| `environment update rollback --operation-id ID --yes` | Restore only when Core proves replacement has not begun, or release maintenance for an already restored operation. Ambiguous/later phases require the existing explicit recovery procedure. |
+
+All commands accept `--environment-dir PATH` and `--json`. JSON stdout is a single
+schema-1 document capped at 64 KiB; action failure returns a nonzero exit status.
+It contains fixed component identities, known phases and static error kinds;
+it excludes raw configuration, owner receipts, service arguments, credentials
+and arbitrary installer output. System authorization prompts use the terminal.
+
+Linux application, continuation and restoration require stdin to be a terminal
+(for SSH, allocate a TTY), explicit `--yes`, and normal system sudo authorization.
+The Environment owner stays unprivileged; only the verified installed installer
+helper is elevated with literal arguments. Non-TTY sessions can inspect, check
+and download, but are rejected before any service-changing operation. A missing
+or ambiguous package format or missing trusted package tools blocks application;
+the updater does not switch between DEB and RPM.
+
+macOS and Windows do not gain a headless application adapter here. Their CLI
+queries and downloads remain available, while application uses the existing
+native Desktop/manual route. Bare Runner, npm, source/dirty builds, custom Runtime,
+missing managed Desktop files and unknown ownership retain their installation
+type and use the documented manual release path.
+
+Installer acknowledgement is distinct from completed replacement and service
+recovery. An uncertain result is not permission to retry installation or race a
+rollback. Inspect the operation with `environment update status --json` and use
+[the existing upgrade/recovery procedure](unified-installation.md). Interrupting
+a download cancels only the download; interrupting after dispatch does not claim
+that installation was canceled. Original service state, configuration, identities,
+projects and Tunnel credentials remain governed by the existing Core transaction.
 
 ### Project / local workflow
 
@@ -71,13 +123,17 @@ These commands work on the current Git project.
 
 Quick Tunnel origins remain temporary. For an operator-managed stable HTTPS origin, use `--tunnel none --public-url https://share.example` and route that origin to the loopback WebCodex Server yourself; `--public-url` advertises the external origin/issuer and does not create a proxy or tunnel.
 
-`webcodex share --tunnel openai` is the explicit OpenAI Secure MCP Tunnel provider. It requires `CONTROL_PLANE_TUNNEL_ID` plus a Restricted `CONTROL_PLANE_API_KEY` with Tunnels Read + Use and currently supports only `--auth bearer`. WebCodex resolves pinned OpenAI `tunnel-client` v0.0.12 from `WEBCODEX_TUNNEL_CLIENT_BIN`, `PATH`, or a verified managed download; it runs `doctor` before the daemon and waits for `/readyz`. The temporary WebCodex Bearer is written only to the private share directory and referenced by `tunnel-client` through a file-backed MCP `Authorization` header. ChatGPT therefore uses Connection: Tunnel + No authentication. `OPENAI_ADMIN_KEY` and `OPENAI_API_KEY` are explicitly removed from the long-lived daemon environment; the Runtime API key remains the control-plane authority.
+`webcodex share --tunnel openai` uses the native Rust Secure MCP Tunnel client. It requires `CONTROL_PLANE_TUNNEL_ID` and a Restricted `CONTROL_PLANE_API_KEY` with Tunnels Read + Use, and supports `--auth bearer`. The temporary local Bearer stays in memory and is injected only into the fixed local MCP hop. ChatGPT uses Connection: Tunnel + No authentication. Startup verifies local MCP and a successful control-plane poll; no external tunnel-client binary, doctor process or health port is used. Strict deadlines, bounded ingress, no local execution replay and an uncertain-restart latch are described in the [crate contract](../crates/webcodex-openai-tunnel/README.md).
 
 For public `share`, WebCodex best-effort copies only the MCP URL to the clipboard and does not copy the temporary credential in the default Bearer/OAuth modes. The explicit `--auth query-token` mode instead copies the sensitive tokenized URL by design and says so in its status output. Interactive Linux/macOS terminals also offer an Enter shortcut to open ChatGPT App settings. Clipboard/browser integration is convenience-only and never gates runtime readiness. Use `--no-copy-url` to suppress clipboard access.
 
 For supervised machine integration, `webcodex share --json --stop-on-stdin-eof` keeps the same foreground lifecycle but also treats the supervising parent's closed stdin as a stop request. This lets Desktop or another structured process owner ask `share` to clean up its own temporary Server, Runner, and Tunnel without shell-command signaling. The flag is rejected outside `--json` mode.
 
 `webcodex connect <server> --auth oauth --oauth-redirect-uri <exact-callback>` is the ordinary hosted OAuth path. The Runner keeps its existing hosted credential while the MCP client uses OAuth. Add `--oauth-computer-permissions`, `--oauth-local-mcp`, or `--oauth-local-ssh` only when those optional capabilities are actually needed; they are explicit permission changes and can require reauthorization. `--oauth-local-ssh` grants the MCP client the optional `ssh:local` authority needed by the model-facing `manage_ssh_resource` onboarding tool; it does not expose SSH credentials or make a registered resource active without the Runner restart reported by that tool. See [MCP](MCP.md#oauth2) for client setup and [Authentication](AUTH_MODEL.md#oauth2) for the security model.
+
+Shared-key OAuth delegation for Browser Use requires explicit `--oauth-browser-permissions` on `connect --auth oauth`. It adds only `browser:read`, `browser:control`, and `browser:launch`. The baseline excludes Browser scopes. Browser authority is independent of `--oauth-computer-permissions` and its consent checkboxes. Existing clients never expand automatically; narrow historical profiles gain only the explicitly selected class. Scope ceiling changes revoke old grants and require reauthorization. Reusing a Browser-enabled profile requires the flag again.
+
+For managed OAuth, use a PAT with `account:manage` (or the `admin` super-scope) to create/list/update/revoke OAuth clients; ordinary account managers remain limited to their own clients. OAuth access tokens cannot perform these first-party management operations. Authorize only scopes held by the PAT; `offline_access` is a refresh capability, not a runtime permission. To enable admin diagnostics in a managed OAuth connection, authorize your own managed client with an admin PAT. Existing connections need one reauthorization after upgrade; later refreshes preserve the grant authority. Shared-key `connect --auth oauth` does not grant admin. See [Authentication](AUTH_MODEL.md#oauth2).
 
 The advanced managed identity flow remains available as `--auth managed-oauth --oauth-redirect-uri <exact-callback>` and requires `webcodex login`; `--user` applies only to that mode.
 

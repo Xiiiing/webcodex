@@ -10,6 +10,7 @@ members = [
     "crates/webcodex-core",
     "crates/webcodex-environment",
     "crates/webcodex-lsp",
+    "crates/webcodex-openai-tunnel",
     "crates/webcodex-persistent-shell",
     "crates/webcodex-process",
     "crates/webcodex-runner",
@@ -24,7 +25,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.4"
+version = "0.5.0"
 license = "Apache-2.0"
 edition = "2021"
 
@@ -53,6 +54,7 @@ name = "webcodex-server"
 path = "src/bin/webcodex-server.rs"
 
 [dependencies]
+webcodex-openai-tunnel = { path = "crates/webcodex-openai-tunnel", version = "0.1.0", default-features = false }
 webcodex-admin = { path = "crates/webcodex-admin" }
 webcodex-build-info = { path = "crates/webcodex-build-info" }
 webcodex-code-mode = { path = "crates/webcodex-code-mode", optional = true }
@@ -60,6 +62,7 @@ webcodex-runner-config = { path = "crates/webcodex-runner-config" }
 webcodex-runner-registry = { path = "crates/webcodex-runner-registry" }
 webcodex-core = { path = "crates/webcodex-core" }
 webcodex-environment = { path = "crates/webcodex-environment" }
+webcodex-process = { path = "crates/webcodex-process" }
 webcodex-tool-contracts = { path = "crates/webcodex-tool-contracts" }
 webcodex-tool-runtime-contracts = { path = "crates/webcodex-tool-runtime-contracts" }
 webcodex-validation = { path = "crates/webcodex-validation", features = ["session-evidence"] }
@@ -146,7 +149,7 @@ incremental = true
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 webcodex-runner-registry = { path = "crates/webcodex-runner-registry", features = ["root-test-support"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 webcodex-store = { path = "crates/webcodex-store", features = ["root-test-support"] }
 webcodex-tool-contracts = { path = "crates/webcodex-tool-contracts", features = ["root-test-support"] }
 webcodex-workflow-session = { path = "crates/webcodex-workflow-session", features = ["root-test-support"] }

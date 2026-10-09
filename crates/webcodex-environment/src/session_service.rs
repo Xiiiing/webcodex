@@ -16,8 +16,10 @@ struct HelperPlan {
     marker: String,
     program: PathBuf,
     session_dir: PathBuf,
+    #[cfg(windows)]
     account_name: String,
     account_identity: String,
+    #[cfg(target_os = "macos")]
     home: Option<PathBuf>,
 }
 
@@ -34,6 +36,7 @@ fn plan(spec: &ServiceSpec, session_dir: &Path) -> Result<HelperPlan, ServiceErr
     let ServiceAccount::SystemUser {
         name,
         expected_identity,
+        #[cfg(target_os = "macos")]
         home,
         ..
     } = &spec.account
@@ -88,8 +91,10 @@ fn plan(spec: &ServiceSpec, session_dir: &Path) -> Result<HelperPlan, ServiceErr
         marker: format!("webcodex-computer-helper:v1:{}", &suffix[..32]),
         program: spec.program.clone(),
         session_dir: session_dir.to_path_buf(),
+        #[cfg(windows)]
         account_name: name.clone(),
         account_identity: expected_identity.clone(),
+        #[cfg(target_os = "macos")]
         home: home.clone(),
     })
 }
@@ -218,6 +223,10 @@ fn task_fields(
                 fields.entry(name.clone()).or_default().push(String::new());
                 current = Some(name);
             }
+            Ok(Event::Empty(tag)) => {
+                let name = String::from_utf8_lossy(tag.local_name().as_ref()).into_owned();
+                fields.entry(name).or_default().push(String::new());
+            }
             Ok(Event::Text(value)) => {
                 if let Some(name) = &current {
                     let text = value.decode().map_err(|_| {
@@ -280,6 +289,19 @@ fn task_fields(
     Ok(fields)
 }
 #[cfg(any(windows, test))]
+fn same_task_owner(value: &str, expected_sid: &str) -> bool {
+    if value.eq_ignore_ascii_case(expected_sid) {
+        return true;
+    }
+    #[cfg(windows)]
+    if !value.is_empty() && !value.starts_with("S-1-") {
+        return platform::resolved_sid(value)
+            .is_ok_and(|sid| sid.eq_ignore_ascii_case(expected_sid));
+    }
+    false
+}
+
+#[cfg(any(windows, test))]
 fn owned_task(plan: &HelperPlan, source: &str) -> bool {
     let Ok(fields) = task_fields(source) else {
         return false;
@@ -294,10 +316,12 @@ fn owned_task(plan: &HelperPlan, source: &str) -> bool {
             values.len() == 2
                 && values
                     .iter()
-                    .all(|value| value.eq_ignore_ascii_case(&plan.account_identity))
+                    .all(|value| same_task_owner(value, &plan.account_identity))
         })
         && only("LogonType", "InteractiveToken")
-        && only("RunLevel", "LeastPrivilege")
+        // Task Scheduler omits its default lowest-privilege RunLevel on export.
+        // Explicit empty, duplicate, elevated and unknown values remain rejected.
+        && (!fields.contains_key("RunLevel") || only("RunLevel", "LeastPrivilege"))
         && only("Command", plan.program.to_str().unwrap_or(""))
         && only("Arguments", &arguments(plan))
 }
@@ -316,7 +340,7 @@ mod platform {
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(Some(0)).collect()
     }
-    fn resolved_sid(name: &str) -> Result<String, ServiceError> {
+    pub(super) fn resolved_sid(name: &str) -> Result<String, ServiceError> {
         let name = wide(name);
         let mut sid_size = 0;
         let mut domain_size = 0;
@@ -943,25 +967,31 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn spec(dir: &Path) -> ServiceSpec {
+    pub(super) fn spec(dir: &Path) -> ServiceSpec {
+        let program = dir.join(if cfg!(windows) {
+            "webcodex-runner.exe"
+        } else {
+            "webcodex-runner"
+        });
+        let config = dir.join("runner.toml").to_string_lossy().into_owned();
         ServiceSpec {
             scope: crate::service::ServiceScope::System,
             id: "WebCodexRunner-test".into(),
             component: Component::Runner,
-            program: PathBuf::from("/opt/webcodex/webcodex-runner"),
+            program,
             args: if cfg!(windows) {
                 vec![
                     "--windows-service".into(),
                     "WebCodexRunner-test".into(),
                     "--config".into(),
-                    "/opt/webcodex/runner.toml".into(),
+                    config.clone(),
                     "--computer-session-dir".into(),
                     dir.to_string_lossy().into_owned(),
                 ]
             } else {
                 vec![
                     "--config".into(),
-                    "/opt/webcodex/runner.toml".into(),
+                    config,
                     "--computer-session-dir".into(),
                     dir.to_string_lossy().into_owned(),
                 ]
@@ -971,7 +1001,7 @@ mod tests {
                 name: "owner".into(),
                 group: None,
                 expected_identity: "501".into(),
-                home: Some(PathBuf::from("/Users/owner")),
+                home: Some(dir.to_path_buf()),
             },
             config_identity: "environment-id".into(),
             env_file: None,
@@ -1014,11 +1044,24 @@ mod tests {
         assert!(!xml.contains("--config"));
         assert!(!xml.contains("--token"));
         assert!(owned_task(&helper, &xml), "{:?}", task_fields(&xml));
+        assert!(owned_task(
+            &helper,
+            &xml.replace("<RunLevel>LeastPrivilege</RunLevel>", "")
+        ));
         for (from, to) in [
             ("InteractiveToken", "Password"),
             ("LeastPrivilege", "HighestAvailable"),
             ("S-1-5-21-100", "S-1-5-21-101"),
             ("--computer-session-helper", "--other-mode"),
+            ("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel/>"),
+            (
+                "<RunLevel>LeastPrivilege</RunLevel>",
+                "<RunLevel>unknown</RunLevel>",
+            ),
+            (
+                "<RunLevel>LeastPrivilege</RunLevel>",
+                "<RunLevel>LeastPrivilege</RunLevel><RunLevel>LeastPrivilege</RunLevel>",
+            ),
         ] {
             assert!(
                 !owned_task(&helper, &xml.replace(from, to)),
@@ -1027,3 +1070,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "session_service/windows_tests.rs"]
+mod windows_tests;

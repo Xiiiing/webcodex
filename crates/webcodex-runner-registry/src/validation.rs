@@ -10,7 +10,6 @@ use webcodex_core::runner_protocol::{
 };
 
 const MAX_CLIENT_ID_LEN: usize = 80;
-const MAX_RUNNER_FIELD_LEN: usize = 200;
 /// Max length for `agent_instance_id`. A UUID v4 is 36 chars; allow headroom
 /// for future formats but bound it so a malicious peer cannot stash huge
 /// strings in the registry.
@@ -268,18 +267,7 @@ pub(super) fn validate_runner_instance_id(value: &str) -> Result<(), String> {
 }
 
 pub(super) fn validate_optional_field(value: &Option<String>, field: &str) -> Result<(), String> {
-    if let Some(value) = value {
-        if value.chars().count() > MAX_RUNNER_FIELD_LEN {
-            return Err(format!(
-                "{} is too long; maximum is {} characters",
-                field, MAX_RUNNER_FIELD_LEN
-            ));
-        }
-        if value.contains('\0') {
-            return Err(format!("{} cannot contain NUL bytes", field));
-        }
-    }
-    Ok(())
+    webcodex_core::runner_protocol::validate_optional_runner_field(value, field)
 }
 
 pub(super) fn validate_file_request(body: &ShellFileOpRequest) -> Result<(), String> {
@@ -288,6 +276,7 @@ pub(super) fn validate_file_request(body: &ShellFileOpRequest) -> Result<(), Str
         "read"
         | "write"
         | "list"
+        | "list_page"
         | "project_overview"
         | "delete_project_files"
         | "write_project_file"
@@ -307,7 +296,7 @@ pub(super) fn validate_file_request(body: &ShellFileOpRequest) -> Result<(), Str
         | "skill_read_file" => {}
         _ => {
             return Err(
-                "op must be one of read, write, list, project_overview, write_project_file, apply_text_edits, apply_patch, save_project_artifact, read_project_artifact_metadata, read_project_artifact, read_project_artifact_export_chunk, artifact_upload_begin, artifact_upload_chunk, artifact_upload_finish, artifact_upload_abort, checkpoint_create, checkpoint_restore, skill_list_packages, skill_read_file"
+                "op must be one of read, write, list, list_page, project_overview, write_project_file, apply_text_edits, apply_patch, save_project_artifact, read_project_artifact_metadata, read_project_artifact, read_project_artifact_export_chunk, artifact_upload_begin, artifact_upload_chunk, artifact_upload_finish, artifact_upload_abort, checkpoint_create, checkpoint_restore, skill_list_packages, skill_read_file"
                     .to_string(),
             )
         }
@@ -367,7 +356,9 @@ pub(super) fn validate_file_request(body: &ShellFileOpRequest) -> Result<(), Str
     }
 
     if let Some(content) = &body.content {
-        let max_content_bytes = if artifact_payload {
+        let max_content_bytes = if body.op == "list_page" {
+            256
+        } else if artifact_payload {
             MAX_ARTIFACT_PAYLOAD_BYTES
         } else if checkpoint_payload {
             MAX_CHECKPOINT_PAYLOAD_BYTES
@@ -384,6 +375,7 @@ pub(super) fn validate_file_request(body: &ShellFileOpRequest) -> Result<(), Str
         }
         if body.op != "write"
             && body.op != "project_overview"
+            && body.op != "list_page"
             && body.op != "apply_text_edits"
             && !structured_edit_payload
             && !structured_delete_payload

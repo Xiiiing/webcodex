@@ -114,7 +114,6 @@ jobs:
             echo "tag=$tag"
             echo "version=$version"
             echo "source_sha=$source_sha"
-            echo "source_short=${source_sha:0:12}"
             echo "built_at=$built_at"
           } >> "$GITHUB_OUTPUT"
 
@@ -125,10 +124,11 @@ jobs:
     permissions:
       contents: write
     env:
+      BUILD_KIND: release
+      WEBCODEX_MACOS_CERTIFICATE_SHA1: ${{ vars.MACOS_CERTIFICATE_SHA1 }}
       TAG: ${{ needs.resolve.outputs.tag }}
       VERSION: ${{ needs.resolve.outputs.version }}
       SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
-      SOURCE_SHORT: ${{ needs.resolve.outputs.source_short }}
       WEBCODEX_BUILT_AT: ${{ needs.resolve.outputs.built_at }}
       PLATFORM: darwin-x64
     steps:
@@ -207,29 +207,59 @@ jobs:
                   target.chmod(0o755)
           PY
 
-          expected_commit="$SOURCE_SHA"
-          legacy_short_identity="$(python3 - "$VERSION" <<'PY'
-          import sys
-
-          core = tuple(int(part) for part in sys.argv[1].split("+", 1)[0].split("-", 1)[0].split("."))
-          print("true" if core < (0, 4, 4) else "false")
-          PY
-          )"
-          if [ "$legacy_short_identity" = true ]; then
-            # v0.4.3 release archives predate the full-SHA release identity
-            # contract. Keep guarded backfill support for those immutable bytes.
-            expected_commit="$SOURCE_SHORT"
-          fi
+          build_info_dir="$RUNNER_TEMP/webcodex-$PLATFORM-build-info"
+          mkdir -p "$build_info_dir"
           for name in webcodex webcodex-server webcodex-runner; do
             binary="$runtime_dir/$name"
-            expected_version="$name $VERSION (commit $expected_commit, dirty=false, built_at=$WEBCODEX_BUILT_AT)"
-            test "$("$binary" --version)" = "$expected_version"
+            "$binary" --build-info-json > "$build_info_dir/$name.json"
             file "$binary" | grep -Fq x86_64
           done
-          # The current public macOS distribution contract is ad-hoc signed.
-          # The immutable runtime archive is already produced under that contract,
-          # so do not introduce a separate Developer ID re-signing requirement here.
+          python3 - "$build_info_dir" "$VERSION" "$SOURCE_SHA" "$WEBCODEX_BUILT_AT" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          version, source_sha, built_at = sys.argv[2:]
+          names = ("webcodex", "webcodex-server", "webcodex-runner")
+          commits = set()
+          for name in names:
+              info = json.loads((root / f"{name}.json").read_text(encoding="utf-8"))
+              if info.get("schema_version") != 1 or info.get("binary") != name:
+                  raise SystemExit(f"unexpected build-info schema: {name}")
+              if info.get("version") != version or info.get("git_dirty") is not False or info.get("built_at") != built_at:
+                  raise SystemExit(f"immutable runtime identity mismatch: {name}")
+              if info.get("target") != "x86_64-apple-darwin" or info.get("architecture") != "x86_64":
+                  raise SystemExit(f"immutable runtime target mismatch: {name}")
+              commit = info.get("git_commit")
+              if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{12,40}", commit):
+                  raise SystemExit(f"immutable runtime commit identity is malformed: {name}")
+              if not source_sha.startswith(commit):
+                  raise SystemExit(f"immutable runtime commit does not identify release source: {name}")
+              commits.add(commit)
+          if len(commits) != 1:
+              raise SystemExit("immutable runtime binaries disagree on commit identity")
+          PY
+          # Preserve immutable runtime provenance here; the final Desktop bundle
+          # is re-signed below with the configured persistent release identity.
           echo "RUNTIME_DIR=$runtime_dir" >> "$GITHUB_ENV"
+
+      - name: Configure persistent macOS signing
+        shell: bash
+        env:
+          WEBCODEX_MACOS_SIGNING_MODE: ${{ vars.MACOS_SIGNING_MODE || 'self-signed' }}
+          WEBCODEX_MACOS_CERTIFICATE_SHA1: ${{ vars.MACOS_CERTIFICATE_SHA1 }}
+          APPLE_CERTIFICATE: ${{ secrets.MACOS_SIGNING_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: bash scripts/macos_ci_signing_setup.sh
+
+      - name: Probe native DMG services before compiling Desktop
+        run: bash scripts/macos_finalize_dmg.sh --preflight
 
       - name: Install Desktop dependencies
         run: |
@@ -242,7 +272,7 @@ jobs:
         run: |
           set -euo pipefail
           stage="$RUNNER_TEMP/webcodex-desktop-$PLATFORM-bundle"
-          signing_mode=adhoc
+          signing_mode="$WEBCODEX_MACOS_SIGNING_MODE"
           python3 scripts/prepare_desktop_bundle_macos.py \
             --bin-dir "$RUNTIME_DIR" \
             --version "$VERSION" \
@@ -263,12 +293,19 @@ jobs:
         shell: bash
         env:
           CI: "true"
+          WEBCODEX_MACOS_CERTIFICATE_SHA1: ${{ vars.MACOS_CERTIFICATE_SHA1 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
-          export APPLE_SIGNING_IDENTITY="-"
+          if [ "$WEBCODEX_MACOS_SIGNING_MODE" != developer-id ]; then
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
           export CARGO_TARGET_DIR="$RUNNER_TEMP/webcodex-desktop-$PLATFORM-tauri"
-          npm exec tauri -- build \
+          tauri_identity="$APPLE_SIGNING_IDENTITY"
+          if [ "$WEBCODEX_MACOS_SIGNING_MODE" = self-signed ]; then tauri_identity=-; fi
+          env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID APPLE_SIGNING_IDENTITY="$tauri_identity" npm exec tauri -- build \
             --bundles dmg \
             --config "${{ steps.desktop_bundle.outputs.config }}" \
             --ci -- --locked
@@ -280,6 +317,7 @@ jobs:
             exit 1
           fi
           desktop="$RUNNER_TEMP/webcodex-desktop-v$VERSION-$PLATFORM.dmg"
+          bash ../../scripts/macos_finalize_dmg.sh "${candidates[0]}" "$WEBCODEX_MACOS_SIGNING_MODE" "$APPLE_SIGNING_IDENTITY"
           cp "${candidates[0]}" "$desktop"
           digest="$(shasum -a 256 "$desktop" | awk '{print $1}')"
           printf '%s  %s\n' "$digest" "$(basename "$desktop")" > "$desktop.sha256"
@@ -287,6 +325,15 @@ jobs:
             echo "path=$desktop"
             echo "checksum=$desktop.sha256"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Preserve native DMG stage diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: intel-dmg-diagnostics-${{ github.run_attempt }}
+          path: target/dmg-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Smoke macOS Intel Desktop DMG and signing evidence
         shell: bash
@@ -301,6 +348,14 @@ jobs:
             --stage-metadata "${{ steps.desktop_bundle.outputs.metadata }}" \
             --signing-mode "${{ steps.desktop_bundle.outputs.signing_mode }}" \
             --evidence "$RUNNER_TEMP/webcodex-desktop-v$VERSION-$PLATFORM.dmg.evidence.json"
+
+      - name: Clean ephemeral signing material
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${WEBCODEX_SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$WEBCODEX_SIGNING_KEYCHAIN"
+          fi
 
       - name: Reconcile immutable supplemental Release assets
         shell: bash

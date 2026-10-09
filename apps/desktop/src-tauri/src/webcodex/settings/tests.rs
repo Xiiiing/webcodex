@@ -230,6 +230,43 @@ fn file_access_empty_configuration_reports_home_default_and_rejects_missing_root
     assert_eq!(read(path).unwrap(), before);
 }
 
+#[test]
+fn file_access_can_remove_stale_roots_one_at_a_time() {
+    let f = Fixture::new();
+    let path = f.runtime.runner_config.as_ref().unwrap();
+    let stale_a = f.dir.join("removed-a").to_string_lossy().into_owned();
+    let stale_b = f.dir.join("removed-b").to_string_lossy().into_owned();
+
+    let original = read(path).unwrap();
+    let mut doc = original.parse::<DocumentMut>().unwrap();
+    doc["policy"]["allowed_roots"] = toml_edit::value(
+        vec![stale_a.clone(), stale_b.clone()]
+            .into_iter()
+            .collect::<Array>(),
+    );
+    let seeded = doc.to_string();
+    persist_text(path, &original, &seeded).unwrap();
+
+    let projection = inspect(&f.runtime, false).unwrap();
+    assert_eq!(
+        projection.file_access.configured_roots,
+        vec![stale_a.clone(), stale_b.clone()]
+    );
+
+    stage_allowed_roots_update(
+        &f.runtime,
+        AllowedRootsUpdate {
+            target: target(&f.runtime).unwrap(),
+            expected: vec![stale_a, stale_b.clone()],
+            roots: vec![stale_b.clone()],
+        },
+    )
+    .expect("removing one stale root must not revalidate an unchanged stale survivor");
+
+    let projection = inspect(&f.runtime, false).unwrap();
+    assert_eq!(projection.file_access.configured_roots, vec![stale_b]);
+}
+
 #[cfg(windows)]
 #[test]
 fn file_access_accepts_existing_windows_drive_root() {
@@ -310,4 +347,55 @@ fn settings_refuse_symlink_and_write_private_permissions() {
     symlink(path, &link).unwrap();
     f.runtime.runner_config = Some(link);
     assert!(inspect(&f.runtime, false).is_err());
+}
+
+#[test]
+fn job_concurrency_save_preserves_config_and_requires_exact_saved_value() {
+    let f = Fixture::new();
+    assert_eq!(inspect(&f.runtime, true).unwrap().max_concurrent_jobs, None);
+    let request = |expected, limit| JobConcurrencyUpdate {
+        target: target(&f.runtime).unwrap(),
+        expected,
+        limit,
+    };
+    save_job_concurrency(&f.runtime, request(None, 12)).unwrap();
+    assert_eq!(
+        inspect(&f.runtime, true).unwrap().max_concurrent_jobs,
+        Some(12)
+    );
+    let text = read(f.runtime.runner_config.as_ref().unwrap()).unwrap();
+    for preserved in [
+        "# keep this comment",
+        "token = 'fixture-secret'",
+        "allowed_roots = ['/exact']",
+        "args = ['fixture-secret']",
+    ] {
+        assert!(text.contains(preserved));
+    }
+    assert!(save_job_concurrency(&f.runtime, request(None, 8)).is_err());
+    for limit in [0, 65] {
+        assert!(save_job_concurrency(&f.runtime, request(Some(12), limit)).is_err());
+    }
+    let mut wrong = request(Some(12), 8);
+    wrong.target.client_id = "other".into();
+    assert!(save_job_concurrency(&f.runtime, wrong).is_err());
+    assert_eq!(
+        read(f.runtime.runner_config.as_ref().unwrap()).unwrap(),
+        text
+    );
+    for limit in [1, 64] {
+        let expected = inspect(&f.runtime, true).unwrap().max_concurrent_jobs;
+        save_job_concurrency(&f.runtime, request(expected, limit)).unwrap();
+    }
+}
+
+#[test]
+fn malformed_saved_job_concurrency_is_not_treated_as_default() {
+    let f = Fixture::new();
+    let path = f.runtime.runner_config.as_ref().unwrap();
+    let original = read(path).unwrap();
+    for value in ["0", "65", "-1", "1.5", "'4'"] {
+        std::fs::write(path, format!("max_concurrent_jobs = {value}\n{original}")).unwrap();
+        assert!(inspect(&f.runtime, true).is_err());
+    }
 }

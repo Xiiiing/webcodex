@@ -664,7 +664,10 @@ async fn go_project_validation_is_fenced_again_at_job_admission() {
             assert!(result.is_ok(), "{result:?}");
         } else {
             let error = result.unwrap_err();
+            assert!(error.starts_with("capability_unavailable:"), "{error}");
+            assert!(error.contains(&format!("Runner `{CLIENT_ID}`")), "{error}");
             assert!(error.contains("project_go_single_module_v1"), "{error}");
+            assert!(error.contains("upgrade that Runner"), "{error}");
             assert!(registry.list_jobs(Some(10)).await.is_empty());
         }
     }
@@ -692,7 +695,11 @@ async fn project_test_options_are_fenced_again_at_job_admission() {
         let result = registry.start_job_with_metadata(start_request("validation"), "tester".into(), metadata).await;
         if supported { assert!(result.is_ok(), "{result:?}"); }
         else {
-            assert!(result.unwrap_err().contains("project_validation_test_options_v1"));
+            let error = result.unwrap_err();
+            assert!(error.starts_with("capability_unavailable:"), "{error}");
+            assert!(error.contains(&format!("Runner `{CLIENT_ID}`")), "{error}");
+            assert!(error.contains("project_validation_test_options_v1"), "{error}");
+            assert!(error.contains("upgrade that Runner"), "{error}");
             assert!(registry.list_jobs(Some(10)).await.is_empty());
         }
     }
@@ -2862,6 +2869,45 @@ fn job_inventory_accepts_bash_login_shell_context() {
     validate_job_inventory(CLIENT_ID, &[project_summary()], &inventory).unwrap();
 }
 
+#[tokio::test]
+async fn job_inventory_recovers_python_script_without_changing_semantic_identity() {
+    let mut snapshot = standalone_snapshot("python-reconnect", "running");
+    snapshot.context.shell = Some("python".to_string());
+    snapshot.context.structured_execution = Some(
+        crate::runner_protocol::ShellJobStructuredExecutionMetadata {
+            execution_source: "run_script".to_string(),
+            language: Some(ShellScriptLanguage::Python),
+            script_bytes: Some(24),
+            arg_count: 0,
+            stdin_present: false,
+            validation_identity: None,
+            validation_tool: None,
+            assertion_name: None,
+        },
+    );
+    let inventory = ShellJobInventory {
+        active_complete: true,
+        jobs: vec![snapshot.clone()],
+    };
+    validate_job_inventory(CLIENT_ID, &[project_summary()], &inventory).unwrap();
+    // A fresh Server must accept the retained Python Job at registration,
+    // rather than kill an otherwise healthy Runner on reconnect.
+    register(&RunnerRegistry::default(), INSTANCE_A, inventory).await;
+    for shell in ["python3", "python.exe", "unknown"] {
+        snapshot.context.shell = Some(shell.to_string());
+        let error = validate_job_inventory(
+            CLIENT_ID,
+            &[project_summary()],
+            &ShellJobInventory {
+                active_complete: true,
+                jobs: vec![snapshot.clone()],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("shell is invalid"), "{error}");
+    }
+}
+
 #[test]
 fn job_inventory_accepts_javascript_structured_script_context() {
     let mut javascript = standalone_snapshot("javascript-running", "running");
@@ -3853,3 +3899,93 @@ async fn sweep_only_transitions_expired_jobs_and_leaves_recent_recovering() {
 
 #[path = "job_receipts.rs"]
 mod job_receipts;
+
+#[tokio::test]
+async fn project_validation_python_pytest_capability_rechecked_at_job_admission() {
+    use webcodex_core::project_validation::*;
+    for supported in [false, true] {
+        let registry = RunnerRegistry::default();
+        let mut registration = register_request(INSTANCE_A, empty_inventory());
+        registration.capabilities.project_validation_v1 = true;
+        registration
+            .capabilities
+            .project_validation_python_pytest_v1 = supported;
+        registry.register(registration).await.unwrap();
+        let mut metadata = cargo_validation_start_metadata(Some(true), None, Some(1));
+        let validation = metadata.validation.as_mut().unwrap();
+        validation.tool = "project_validate".into();
+        validation.adapter = "python:pytest:test".into();
+        validation.steps = vec![ShellJobValidationStep {
+            name: "test".into(),
+            program: "python".into(),
+            args: ["-m", "pytest", "--color=no", "-rA"]
+                .map(str::to_string)
+                .to_vec(),
+            env: vec![],
+        }];
+        validation.project_validation = Some(ProjectValidationProvenance {
+            request: ProjectValidationRequest {
+                project_id: "demo".into(),
+                cwd: None,
+                action: ProjectValidationAction::Test,
+                adapter: ProjectValidationAdapter::Auto,
+                scope: None,
+                dependency_policy: None,
+                test: None,
+            },
+            backend: "python".into(),
+            recipe_root: ".".into(),
+            root_digest: "a".repeat(64),
+            manifest_digest: "b".repeat(64),
+            invocation_digest: "c".repeat(64),
+        });
+        assert!(validation.is_valid());
+        metadata.validation_steps = validation.steps.clone();
+        let result = registry
+            .start_job_with_metadata(start_request("validation"), "tester".into(), metadata)
+            .await;
+        if supported {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.starts_with("capability_unavailable:"), "{error}");
+            assert!(error.contains(&format!("Runner `{CLIENT_ID}`")), "{error}");
+            assert!(error.contains("project_validation_python_pytest_v1"), "{error}");
+            assert!(error.contains("upgrade that Runner"), "{error}");
+            assert!(registry.list_jobs(Some(10)).await.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn project_validation_ruff_admission_requires_ruff_capability_even_with_pytest() {
+    use webcodex_core::project_validation::*;
+    for action in [ProjectValidationAction::Check, ProjectValidationAction::FormatCheck] {
+        for supported in [false, true] {
+            let registry = RunnerRegistry::default();
+            let mut registration = register_request(INSTANCE_A, empty_inventory());
+            registration.capabilities.project_validation_v1 = true;
+            registration.capabilities.project_validation_python_pytest_v1 = !supported;
+            registration.capabilities.project_validation_python_ruff_v1 = supported;
+            registry.register(registration).await.unwrap();
+            let mut metadata = cargo_validation_start_metadata(None, None, None);
+            let validation = metadata.validation.as_mut().unwrap();
+            validation.tool = "project_validate".into();
+            validation.adapter = format!("python:ruff:{}", action.kind());
+            validation.kind = action.kind().into();
+            validation.steps = vec![ShellJobValidationStep::python_ruff(action.kind()).unwrap()];
+            validation.project_validation = Some(ProjectValidationProvenance {
+                request: ProjectValidationRequest { project_id: "demo".into(), cwd: None, action, adapter: ProjectValidationAdapter::Auto, scope: None, dependency_policy: None, test: None },
+                backend: "python".into(), recipe_root: ".".into(), root_digest: "a".repeat(64), manifest_digest: "b".repeat(64), invocation_digest: "c".repeat(64),
+            });
+            assert!(validation.is_valid());
+            metadata.validation_steps = validation.steps.clone();
+            let result = registry.start_job_with_metadata(start_request("validation"), "tester".into(), metadata).await;
+            if supported { assert!(result.is_ok(), "{result:?}"); }
+            else {
+                assert!(result.unwrap_err().contains("project_validation_python_ruff_v1"));
+                assert!(registry.list_jobs(Some(10)).await.is_empty());
+            }
+        }
+    }
+}

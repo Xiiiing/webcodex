@@ -6,12 +6,15 @@ This guide describes the unified installer workflow being developed on this bran
 
 Get published files from [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases). The tracked [`download/`](../download/README.md) directory contains only the static page source; its generated `manifest.json` is intentionally not committed. The [download-page workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) builds a manifest-based GitHub Actions artifact after a release, but does not host or deploy it. To preview a source revision before installer release, follow [Linux source preview](DESKTOP_DEVELOPMENT.md#linux-source-preview-against-an-existing-server).
 
+For Linux machines without Desktop, see [Runtime installation and CLI join](runtime-installation.md) for the Runtime package, protected pairing input and the shared headless update/recovery entry point.
+
+
 ## One computer
 
 The following workflow applies when a validated installer for your platform is available; source previews are documented separately above.
 
 1. Install the platform package and open WebCodex Desktop.
-2. Choose **Use WebCodex on this computer**, keep **Allow AI to work on this computer** enabled, and confirm setup. No project selection is required. Disable local work only for an intentional Server-only machine.
+2. Choose **Create main node** and confirm setup. This creates independent Server and local Runner services even if you skip the optional initial Project. **Advanced** retains intentional Server-only setup; existing environments keep their saved role.
 3. Confirm Server, Runner, and project status in Desktop. Desktop, CLI, and the web runtime use the same Server-authorized view. Open `SERVER_URL/runtime` in a browser and use an existing user credential to view authorized Runners, projects, and status.
 4. Configure the existing ChatGPT MCP/Tunnel connection through the Server. ChatGPT remains connected to the central Server. A remote project path belongs to its Runner machine; it is not a local path on the Server computer.
 
@@ -19,9 +22,11 @@ Desktop closing does not stop persistent services. The GUI helper runs only in t
 
 ## Several computers
 
-Install the same package on each computer. Decide which machine hosts the central Server, and which machines own the repositories. A Server-only central machine can show projects on remote machines B and C when their Runners connect.
+Create the same complete main node as the single-computer flow. Other computers join it as additional Runners; the main node keeps its own local Runner and Projects. Install the appropriate OS/architecture package on each machine. Advanced Server-only and viewer-only capabilities remain available.
 
-On the central Server, create short-lived Runner invitation codes with `webcodex environment invite`. Displayed codes are secrets: deliver one only to the intended machine, and do not place it in command-line arguments or logs.
+On the main node, use **Projects → Add device**, supply a Server URL reachable from the additional machine, and explicitly click **Create invitation**. Install WebCodex there and choose **Join main node**; enter that direct URL and the one-time code in the protected input. The initial Project is optional and the Runner stays enabled. The CLI alternative remains `webcodex environment invite`. Codes are secrets; never put them in command-line arguments or logs.
+
+ChatGPT reaches the central Server through OpenAI Tunnel; additional Runners use the separate direct Server URL. A loopback or OpenAI URL is not a remote Runner endpoint. Check listener, firewall, DNS or private networking if the address is unreachable. The dialog does not change these settings. Invitation creation does not prove device connection; refresh the authorized devices and Projects view afterwards. See [Desktop device instructions](desktop-guide.md#add-another-device).
 
 On the central Server machine, create an environment:
 
@@ -29,13 +34,13 @@ On the central Server machine, create an environment:
 webcodex environment configure --create --project PATH
 ```
 
-Use `--no-project` if that machine has no repository. To enable AI work without choosing a default repository, use `webcodex environment configure --create --runner` instead. A remote machine can likewise use `webcodex environment configure --join https://server.example --runner --code-stdin`. Existing environments retain their saved role; use Desktop's explicit local-work option or the CLI's `add-project` transition to enable a viewer's first Runner. On each repository machine, join the Server:
+For a projectless main node in the CLI, use `webcodex environment configure --create --runner`; `--no-project` without `--runner` intentionally keeps the advanced Server-only role. A remote machine can likewise use `webcodex environment configure --join https://server.example --runner --code-stdin`. Existing environments retain their saved role; use Desktop's explicit local-work option or the CLI's `add-project` transition to enable a viewer's first Runner. On each repository machine, join the Server:
 
 ```text
 webcodex environment configure --join https://server.example --project PATH
 ```
 
-Use `--no-project` to join as a viewer without configuring a local Server or Runner. Desktop separates create/join from whether this computer permits local work. In the CLI, `--runner` enables a Runner without an initial project, while legacy `--project PATH` still enables a Runner and registers that explicit project. The selected flow requests the Server address, authentication, and any required system authorization. Joining as a viewer uses the user's personal access token, entered through secure hidden input or a protected `--token-file`; it does not use a pairing code. For example, import an existing user API credential from a protected file:
+Use `--no-project` to join as a viewer without configuring a local Server or Runner. Ordinary Desktop Create/Join enables local work; Advanced keeps explicit role alternatives. In the CLI, `--runner` enables a Runner without an initial project, while legacy `--project PATH` still enables a Runner and registers that explicit project. The selected flow requests the Server address, authentication, and any required system authorization. Joining as a viewer uses the user's personal access token, entered through secure hidden input or a protected `--token-file`; it does not use a pairing code. For example, import an existing user API credential from a protected file:
 
 ```text
 webcodex environment configure --join https://server.example --no-project --token-file PATH
@@ -57,36 +62,30 @@ Inspect setup state with `webcodex environment status --json` or `webcodex envir
 
 Passing `--token-file` to ordinary `resume` supplies the credential needed to continue setup; it does not rotate a saved user credential. To replace a lost or invalid saved Server user credential, use `webcodex environment repair-user-credential [--token-file PATH]`. Without `--token-file`, the CLI requests it through hidden terminal input.
 
-## Migrate an existing Linux CLI service
+## Upgrade from v0.4.6
 
-Linux provides explicit migration commands for the supported legacy CLI templates. They preserve the existing identity and do not issue a new pairing code. Source review is complete, but these commands have not passed native package/service acceptance. Do not treat M2f migration as natively accepted for these paths.
+v0.4.6 already includes Environment. Keep its existing Environment directory,
+service owner/scope, Runtime selection, private credentials and recovery records;
+ordinary upgrades do not require deleting configuration or re-pairing Runners.
+After moving to v0.5, refresh the MCP connection's tool schema and reopen old App
+readers so they use the new canonical tools. See the
+[compatibility policy](compatibility-policy.md) for the published-data boundaries,
+older installation paths, and explicit reconciliation of a Desktop Tunnel profile
+that was saved but never configured in Environment.
 
-For a legacy user-owned Runner, run as its original owner and provide that owner's private user credential file:
+## Upgrade installations older than v0.4.6
 
-```bash
-webcodex environment migrate-legacy-runner \
-  --join https://server.example \
-  --project /home/alice/src/repo \
-  --token-file /home/alice/.config/webcodex/webcodex-user-token
-```
+v0.5 uses the published v0.4.6 Environment release as its minimum direct upgrade source. Pre-Environment Linux installations and the official Windows v0.4.3 package are no longer migrated directly by v0.5. Upgrade or migrate those installations to v0.4.6 first, verify that the Environment owns the intended Server/Runner identity and services, and then upgrade that Environment to v0.5.
 
-Add `--profile NAME` only for a named profile. The migration accepts a known owner-bearing Runner configuration and its generated user unit, reuses its Runner identity, project IDs, and user credential, and does not re-pair. It will not infer ownerless shared-key configurations or custom units.
-
-For the fixed root-owned system Server unit/socket pair, run the explicit migration with the original Server username, that user's private API credential file, and the exact old listen address:
-
-```bash
-webcodex environment migrate-legacy-server \
-  --user alice \
-  --token-file /home/alice/.config/webcodex/webcodex-user-token \
-  --listen 0.0.0.0:8080 \
-  --server-url http://127.0.0.1:8080
-```
-
-`--server-url` is optional; when omitted, the CLI derives a local URL from the original listener. This command targets only the known systemd unit/socket and fixed environment/data locations. It transfers the Server only. An independently configured legacy Tunnel remains with its existing owner/profile and is not imported into Core by this migration. The command does not guess custom units, paths, or owners. Keep the credential file private and do not use the Server bootstrap token in place of the original user's API credential.
+This keeps one tested bridge for historical installation shapes instead of carrying their systemd handoff and v0.4.3 package classifier into every later release. Do not delete or recreate credentials when crossing the bridge; v0.4.6 is responsible for importing the older identity, while v0.5 preserves the resulting Environment data.
 
 ## Tunnel profiles
 
-Configure a named Tunnel profile with `webcodex environment configure-tunnel PROFILE --credentials-file PATH`. The protected JSON file contains `tunnel_id` and `api_key`; alternatively, the CLI accepts the credentials through hidden terminal input. Inspect or remove a profile with `webcodex environment tunnel-status PROFILE` and `webcodex environment remove-tunnel PROFILE`. Control one profile with `webcodex environment start tunnel --profile PROFILE`, `stop tunnel --profile PROFILE`, or `restart tunnel --profile PROFILE`. Keep the credential file private and remove it after use.
+For a persistent local Server, create the recommended Server-owned profile directly with `webcodex environment configure-tunnel work --host embedded --credentials-file /secure/work.json`. The protected JSON contains only `tunnel_id` and `api_key`; hidden terminal input is also supported. This saves the exact profile and private local-MCP binding in `EnvironmentStore`, never installs or starts a standalone Tunnel service, and never hot-reloads or restarts a running Server. JSON output reports `server_restart_required` and `next_action`; configure several profiles first, then run one explicit `webcodex environment restart server` when requested. Desktop exposes the same choice as **Run with WebCodex Server (recommended)** and shows the same explicit restart action.
+
+Use `--host standalone` when a separate per-profile service is intentionally required. Its existing `start|stop|restart tunnel --profile PROFILE` lifecycle remains unchanged. Changing the owner of an existing profile still requires the explicit `tunnel-host PROFILE --host ...` flow after a clean stop and standalone uninstall; configuration never auto-adopts a foreign or legacy service. Inspect or remove profiles with `tunnel-status PROFILE` and `remove-tunnel PROFILE`.
+
+In persistent mode, `EnvironmentStore` is the canonical profile catalog for both CLI and Desktop. The historical Desktop `secrets/tunnel-config.json` remains only for legacy/non-persistent runtimes; if it coexists with a persistent Environment it is a fail-closed profile/Tunnel identity fence, not a second writable catalog. Its stale API-key bytes never override or block a revision-fenced EnvironmentStore key rotation. Keep credential files private and remove them after use.
 
 ## Services and credentials
 

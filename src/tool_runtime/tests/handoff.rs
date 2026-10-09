@@ -4,9 +4,9 @@ use super::super::*;
 use super::support::*;
 use crate::auth::AuthContext;
 use crate::runner_protocol::RunnerCapabilities;
-use crate::tool_runtime::handoff::{
-    apply_compact_workflow_outcomes, VALIDATION_IDENTITY_REUSE_ACTION,
-};
+use crate::tool_runtime::closeout_facts::{Observation, WorkspaceFacts};
+use crate::tool_runtime::closeout_projection::{closeout_facts, install_closeout_decision};
+use crate::tool_runtime::handoff::VALIDATION_IDENTITY_REUSE_ACTION;
 use crate::tool_runtime::kernel::{ToolCallContext, ToolCallRequest, ToolTransport};
 use crate::tool_runtime::sessions::SessionTransport;
 use crate::tool_runtime::validation_events::validation_summary_for_session;
@@ -39,7 +39,19 @@ fn closeout_projection_classifies_workspace_conflicts_as_hard_blockers() {
         "suggested_next_actions": []
     });
 
-    apply_compact_workflow_outcomes(&mut output, true, None);
+    let facts = closeout_facts(
+        Observation::Observed(WorkspaceFacts {
+            clean: Some(false),
+            conflicts: Some(1),
+            non_git: false,
+        }),
+        None,
+        &output["jobs"],
+        &output["validation"],
+        &output["tool_failures"],
+        &output["review_evidence"],
+    );
+    install_closeout_decision(&mut output, &facts, &[]);
 
     assert!(output["hard_blockers"]
         .as_array()
@@ -75,6 +87,8 @@ async fn session_handoff_summary_is_known_and_in_specs() {
     let runtime = test_runtime();
     let manifest = runtime
         .dispatch(ToolCall::ToolManifest {
+            query: None,
+            limit: None,
             tool_name: None,
             category: Some("session".to_string()),
             intent: None,
@@ -1158,21 +1172,31 @@ async fn public_failure_expectation_preserves_raw_cargo_failure_as_expected_vali
         let project = project.clone();
         let sid = sid.clone();
         async move {
-            call_typed_tool_with_metadata(
-                &runtime,
-                "cargo_test",
-                json!({
-                    "project": project,
-                    "session_id": sid,
-                    "filter": "failing",
-                    "timeout_secs": 55,
-                    "sync_wait_secs": 55,
-                    "result_expectation": "failure",
-                    "assertion_name": assertion_name
-                }),
-                Some(&auth),
-            )
-            .await
+            runtime
+                .call_tool_with_context(
+                    ToolCallRequest {
+                        tool_name: "cargo_test".into(),
+                        arguments: json!({
+                            "project": project,
+                            "session_id": sid,
+                            "filter": "failing",
+                            "timeout_secs": 55,
+                            "sync_wait_secs": 55,
+                            "result_expectation": "failure",
+                            "assertion_name": assertion_name
+                        }),
+                    },
+                    ToolCallContext {
+                        transport: ToolTransport::Mcp,
+                        session_id: None,
+                        auth: Some(&auth),
+                        window: None,
+                        record_oauth_scope_denials: false,
+                        host_file_import_trust:
+                            crate::tool_runtime::kernel::HostFileImportTrust::Untrusted,
+                    },
+                )
+                .await
         }
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1200,7 +1224,12 @@ async fn public_failure_expectation_preserves_raw_cargo_failure_as_expected_vali
         "",
     )
     .await;
-    let result = task.await.unwrap();
+    let outcome = task.await.unwrap();
+    assert_eq!(
+        outcome.correlation.failure_expectation_result.as_deref(),
+        Some("matched_expected_failure")
+    );
+    let result = outcome.result.unwrap();
     assert!(!result.success, "raw ToolResult must remain a failure");
     assert_eq!(result.output["exit_code"], 101);
     assert_eq!(result.output["passed"], false);

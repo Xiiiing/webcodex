@@ -55,14 +55,33 @@ pub struct PluginToolCall {
     #[schemars(regex(pattern = "^wc_pbind_[A-Za-z0-9_-]{21}[AQgw]$"))]
     #[serde(default)]
     pub binding: Option<String>,
+    /// Exact Project required by projectBound on describe; calls recheck write authority and root, not a sandbox.
+    #[schemars(length(min = 1, max = 512))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// Plugin tool arguments matching the schema observed by describe; encoded payload is bounded to
     /// 65536 bytes.
     #[serde(default)]
     pub arguments: Option<Value>,
 }
 
+#[cfg(test)]
+#[path = "plugin_project_tests.rs"]
+mod plugin_project_tests;
+
 impl PluginToolCall {
     fn validate(&self) -> Result<(), String> {
+        if let Some(project) = self.project.as_deref() {
+            if self.action != PluginToolAction::Describe
+                || project.trim().is_empty()
+                || project.len() > 512
+                || project.chars().any(char::is_control)
+            {
+                return Err(
+                    "project must be an exact bounded Project on action=describe".to_string(),
+                );
+            }
+        }
         let valid_runner = |runner: &str| {
             !runner.trim().is_empty()
                 && runner.len() <= 128
@@ -234,8 +253,20 @@ impl SearchPatternMode {
     }
 }
 
+/// App-only keyset history read in the current authenticated Host Window.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkResultCollaborationRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
+    pub before_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 100))]
+    pub limit: Option<usize>,
+}
+
 /// App-only inspection of a pinned Work Result file snapshot.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkResultFilesRequest {
     #[serde(default)]
@@ -244,6 +275,20 @@ pub struct WorkResultFilesRequest {
     pub offset: usize,
     #[serde(default)]
     pub path: Option<String>,
+    /// Omit for inventory or diff; content/PDF reads require an advertised path and snapshot.
+    #[serde(default)]
+    pub view: Option<WorkResultFileView>,
+    /// Byte position in the immutable final blob, independent of inventory offset.
+    #[serde(default)]
+    pub byte_offset: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkResultFileView {
+    Content,
+    /// PDF bytes: at most 128 KiB per page and 20 MiB per file.
+    Pdf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -264,9 +309,16 @@ pub struct ReadFilesItem {
     /// or manually transfer this value: Runtime places it in parser-ready read_files suggested_call
     /// items when a partial range must continue. If supplied, Runtime rejects the item when that
     /// snapshot is no longer current.
-    #[serde(default, deserialize_with = "deserialize_optional_read_revision")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_read_revision",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub expected_read_revision: Option<u64>,
 }
+
+/// Canonical search context ceiling shared by Runtime normalization and output schemas.
+pub const MAX_SEARCH_CONTEXT_LINES: usize = 80;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -669,6 +721,16 @@ impl BrowserSnapshotModeCall {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrowserObserveToolCall {
     Targets,
+    /// Discover only tabs explicitly shared in the local Chrome extension.
+    Discover { #[schemars(length(min = 1, max = 128))] client_id: String },
+    /// Resolve one exact native window owned by this Browser. Requires Browser
+    /// and Computer read authority; ambiguous windows are not guessed.
+    Surface {
+        #[schemars(length(min = 1, max = 128))]
+        client_id: String,
+        #[schemars(regex(pattern = "^browser_[A-Za-z0-9_-]{16,64}$"))]
+        browser_id: String,
+    },
     Browsers {
         #[schemars(length(min = 1, max = 128))]
         client_id: String,
@@ -700,6 +762,15 @@ pub enum BrowserObserveToolCall {
         #[schemars(range(min = 1, max = 32))]
         #[serde(default)]
         max_depth: Option<u32>,
+        /// Skip this many post-filter semantic nodes before returning the bounded window.
+        /// Each window is a fresh snapshot and therefore stales element ids from prior windows.
+        #[schemars(range(min = 0, max = 4096))]
+        #[serde(default)]
+        node_offset: Option<usize>,
+        /// Filter one bounded source before pagination; all returned ids share a fresh generation.
+        /// AND filters; auto mode keeps semantic text. At most 4352 source nodes are searched.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<webcodex_core::browser_query::BrowserSnapshotQuery>,
     },
     Console {
         #[schemars(length(min = 1, max = 128))]
@@ -754,6 +825,8 @@ impl BrowserObserveToolCall {
         match self {
             Self::Targets => "targets",
             Self::Browsers { .. } => "browsers",
+            Self::Surface { .. } => "surface",
+            Self::Discover { .. } => "discover",
             Self::Pages { .. } => "pages",
             Self::Snapshot { .. } => "snapshot",
             Self::Console { .. } => "console",
@@ -827,6 +900,26 @@ pub enum BrowserBatchOperation {
         #[schemars(length(min = 1, max = 4096))]
         option: String,
     },
+    /// Choose a custom semantic option or a hierarchical path in one operation.
+    SelectChoice {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Exact normalized labels/values, from outermost choice to leaf.
+        #[schemars(length(min = 1, max = 4))]
+        #[schemars(inner(length(min = 1, max = 4096)))]
+        choice_path: Vec<String>,
+    },
+    /// Set a custom date picker, using a backing input or bounded calendar navigation.
+    SetDate {
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Canonical ISO year-month or complete date; calendar validity is checked before effects.
+        #[schemars(length(min = 7, max = 10))]
+        #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}(-[0-9]{2})?$"))]
+        value: String,
+    },
     SetValue {
         #[schemars(length(min = 1, max = 128))]
         #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
@@ -848,9 +941,25 @@ pub enum BrowserBatchOperation {
     },
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserLaunchModeCall { Ephemeral, Managed }
+impl BrowserLaunchModeCall {
+    pub const fn as_str(self) -> &'static str {
+        match self { Self::Ephemeral => "ephemeral", Self::Managed => "managed" }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrowserActToolCall {
+    /// Attach an exact live extension offer. Closing this Browser only detaches.
+    Attach {
+        #[schemars(length(min = 1, max = 128))]
+        client_id: String,
+        #[schemars(regex(pattern = "^attachment_[A-Za-z0-9_-]{16,64}$"))]
+        attachment_id: String,
+    },
     Batch {
         #[schemars(length(min = 1, max = 128))]
         client_id: String,
@@ -865,6 +974,15 @@ pub enum BrowserActToolCall {
     Launch {
         #[schemars(length(min = 1, max = 128))]
         client_id: String,
+        /// Default is the existing headless, temporary Browser. Managed launches
+        /// a visible Browser with a private persistent WebCodex-owned profile.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<BrowserLaunchModeCall>,
+        /// Required only for managed mode. A name, never a profile filesystem path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(min = 1, max = 48))]
+        #[schemars(regex(pattern = "^[a-z0-9][a-z0-9_-]{0,47}$"))]
+        profile: Option<String>,
     },
     NewPage {
         #[schemars(length(min = 1, max = 128))]
@@ -939,6 +1057,42 @@ pub enum BrowserActToolCall {
         /// Exact native option value or trimmed visible option text.
         #[schemars(length(min = 1, max = 4096))]
         option: String,
+    },
+    /// Choose a custom semantic option or a hierarchical path in one operation.
+    SelectChoice {
+        #[schemars(length(min = 1, max = 128))]
+        client_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^browser_[A-Za-z0-9_-]{16,64}$"))]
+        browser_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^page_[A-Za-z0-9_-]{16,64}$"))]
+        page_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Exact normalized labels/values, from outermost choice to leaf.
+        #[schemars(length(min = 1, max = 4))]
+        #[schemars(inner(length(min = 1, max = 4096)))]
+        choice_path: Vec<String>,
+    },
+    /// Set a custom date picker, using a backing input or bounded calendar navigation.
+    SetDate {
+        #[schemars(length(min = 1, max = 128))]
+        client_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^browser_[A-Za-z0-9_-]{16,64}$"))]
+        browser_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^page_[A-Za-z0-9_-]{16,64}$"))]
+        page_id: String,
+        #[schemars(length(min = 1, max = 128))]
+        #[schemars(regex(pattern = "^element_[A-Za-z0-9_-]{16,64}$"))]
+        element_id: String,
+        /// Canonical ISO year-month or complete date; calendar validity is checked before effects.
+        #[schemars(length(min = 7, max = 10))]
+        #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}(-[0-9]{2})?$"))]
+        value: String,
     },
     SetValue {
         #[schemars(length(min = 1, max = 128))]
@@ -1019,12 +1173,15 @@ impl BrowserActToolCall {
     pub const fn action_name(&self) -> &'static str {
         match self {
             Self::Launch { .. } => "launch",
+            Self::Attach { .. } => "attach",
             Self::NewPage { .. } => "new_page",
             Self::Navigate { .. } => "navigate",
             Self::Reload { .. } => "reload",
             Self::Click { .. } => "click",
             Self::InputText { .. } => "input_text",
             Self::SelectOption { .. } => "select_option",
+            Self::SelectChoice { .. } => "select_choice",
+            Self::SetDate { .. } => "set_date",
             Self::SetValue { .. } => "set_value",
             Self::UploadFile { .. } => "upload_file",
             Self::Batch { .. } => "batch",
@@ -1377,7 +1534,7 @@ fn nullable_stdin_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GitReviewScopeInput {
-    /// Review the complete current workspace (tracked, staged, unstaged, and untracked state).
+    /// Net HEAD-to-worktree changes, including staged/untracked contents; not an index-only patch.
     Workspace,
     /// Review one exact committed range, resolved once to a single merge-base.
     Committed {
@@ -1388,4 +1545,25 @@ pub enum GitReviewScopeInput {
         #[schemars(regex(pattern = "^[0-9A-Fa-f]{40}$"))]
         head_commit: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectUnregisterInput {
+    /// Exact canonical Project id, not a fuzzy name or alias.
+    #[schemars(length(min = 1, max = 512))]
+    pub project: String,
+    /// Exact sha256 registration revision from list_projects full output.
+    #[schemars(length(min = 71, max = 71))]
+    #[schemars(regex(pattern = "^sha256:[0-9A-Fa-f]{64}$"))]
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerStatusFilter {
+    Any,
+    Online,
+    Offline,
+    Stale,
 }

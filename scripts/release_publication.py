@@ -30,7 +30,7 @@ PACKAGE = "@yyjeqhc/webcodex"
 NPM_REGISTRY = "https://registry.npmjs.org/"
 BUILD_WORKFLOW_FILE = "release-build.yml"
 BUILD_WORKFLOW_PATH = f".github/workflows/{BUILD_WORKFLOW_FILE}"
-BUILD_STATE_SCHEMA_VERSION = 1
+BUILD_STATE_SCHEMA_VERSION = 3
 BUILD_REQUEST_RE = re.compile(r"^rb_[0-9a-f]{24}$")
 MAX_STATE_BYTES = 64 * 1024
 MAX_RUN_LIST = 100
@@ -619,10 +619,26 @@ def _load_state(path: Path) -> dict:
         "run_conclusion",
         "last_observed_at",
     }
+    schema_version = value.get("schema_version")
+    if schema_version in (2, BUILD_STATE_SCHEMA_VERSION):
+        required.add("include_unified_installers")
+        if schema_version == BUILD_STATE_SCHEMA_VERSION:
+            required.add("include_runtime_installers")
+    elif schema_version != 1:
+        raise PublicationError("unsupported release-build state schema")
     if set(value) != required:
         raise PublicationError("release-build state fields do not match the supported schema")
-    if value.get("schema_version") != BUILD_STATE_SCHEMA_VERSION or value.get("kind") != "release-build":
-        raise PublicationError("unsupported release-build state schema")
+    if value.get("kind") != "release-build":
+        raise PublicationError("unsupported release-build state kind")
+    if schema_version == 1:
+        value["include_unified_installers"] = False
+    if not isinstance(value["include_unified_installers"], bool):
+        raise PublicationError("release-build unified installer selection must be boolean")
+    if schema_version < BUILD_STATE_SCHEMA_VERSION:
+        value["include_runtime_installers"] = False
+    if type(value["include_runtime_installers"]) is not bool or (value["include_runtime_installers"] and not value["include_unified_installers"]):
+        raise PublicationError("Runtime installer selection requires Full selection and must be boolean")
+    value["schema_version"] = BUILD_STATE_SCHEMA_VERSION
     tag = collector.validate_expected_tag(str(value.get("tag", "")))
     source = collector.normalize_source_sha(str(value.get("source_sha", "")))
     request_id = _validate_build_request_id(str(value.get("request_id", "")))
@@ -667,10 +683,17 @@ def _remote_annotated_tag_source(client: collector.GitHubClient, tag: str) -> st
         raise PublicationError("annotated tag target SHA is invalid") from exc
 
 
-def _post_build_dispatch(client: collector.GitHubClient, tag: str, request_id: str) -> None:
+def _post_build_dispatch(client: collector.GitHubClient, tag: str, request_id: str, *, include_unified_installers: bool = False, include_runtime_installers: bool = False) -> None:
     url = client.api_url(f"/actions/workflows/{BUILD_WORKFLOW_FILE}/dispatches")
+    inputs = {"tag": tag, "request_id": request_id}
+    if include_unified_installers:
+        inputs["include_unified_installers"] = True
+    if include_runtime_installers:
+        inputs["include_runtime_installers"] = True
+    # Core-only low-level retries may target older immutable workflows that do
+    # not declare this optional input. The selected false remains in our state.
     data = json.dumps(
-        {"ref": tag, "inputs": {"tag": tag, "request_id": request_id}},
+        {"ref": tag, "inputs": inputs},
         separators=(",", ":"),
     ).encode("utf-8")
     request = client._request(url)
@@ -778,7 +801,13 @@ def start_build(
     state_file: Path,
     timeout: float,
     resolve_secs: int,
+    include_unified_installers: bool = False,
+    include_runtime_installers: bool = False,
 ) -> tuple[dict, int]:
+    if not isinstance(include_unified_installers, bool):
+        raise PublicationError("release-build unified installer selection must be boolean")
+    if type(include_runtime_installers) is not bool or (include_runtime_installers and not include_unified_installers):
+        raise PublicationError("Runtime installer selection requires explicit Full selection")
     source = collector.normalize_source_sha(source_sha)
     release_tag = collector.validate_expected_tag(tag)
     if resolve_secs < 0 or resolve_secs > 120:
@@ -792,6 +821,8 @@ def start_build(
     request_id = f"rb_{secrets.token_hex(12)}"
     state = {
         "schema_version": BUILD_STATE_SCHEMA_VERSION,
+        "include_unified_installers": include_unified_installers,
+        "include_runtime_installers": include_runtime_installers,
         "kind": "release-build",
         "repo": repo,
         "tag": release_tag,
@@ -812,7 +843,7 @@ def start_build(
     }
     _write_state(state_path, state)
     try:
-        _post_build_dispatch(client, release_tag, request_id)
+        _post_build_dispatch(client, release_tag, request_id, include_unified_installers=include_unified_installers, include_runtime_installers=include_runtime_installers)
     except DispatchRejected:
         state["dispatch_state"] = "rejected"
         _write_state(state_path, state)
@@ -877,7 +908,7 @@ def _read_release_build(bundle_dir: Path) -> dict:
     return value
 
 
-def verify_bundle(bundle_dir: Path, repo: str) -> dict:
+def verify_bundle(bundle_dir: Path, repo: str, *, require_unified_installers: bool = False, require_runtime_installers: bool = False) -> dict:
     root = bundle_dir.absolute()
     metadata = _read_release_build(root)
     try:
@@ -897,6 +928,8 @@ def verify_bundle(bundle_dir: Path, repo: str) -> dict:
             expected_source_sha=source,
             expected_tag=tag,
             artifact_name=f"{archive_stem}-bundle",
+            require_unified_installers=require_unified_installers,
+            require_runtime_installers=require_runtime_installers,
         )
     except collector.CollectionError as exc:
         raise PublicationError(str(exc)) from exc
@@ -948,11 +981,13 @@ def stage_npm(
     bundle_dir: Path,
     source_root: Path,
     output_dir: Path,
+    require_unified_installers: bool = False,
+    require_runtime_installers: bool = False,
 ) -> dict:
     bundle = bundle_dir.absolute()
     source = source_root.absolute()
     destination = output_dir.absolute()
-    summary = verify_bundle(bundle, repo)
+    summary = verify_bundle(bundle, repo, require_unified_installers=require_unified_installers, require_runtime_installers=require_runtime_installers)
     if summary.get("build_kind") != "release":
         raise PublicationError("npm staging requires a real release bundle")
     _require_exact_clean_root(source, str(summary["source_sha"]))
@@ -1007,9 +1042,9 @@ def _github_asset_digest(asset: dict) -> str:
     return digest
 
 
-def verify_draft_assets(*, repo: str, bundle_dir: Path, timeout: float) -> dict:
+def verify_draft_assets(*, repo: str, bundle_dir: Path, timeout: float, require_unified_installers: bool = False, require_runtime_installers: bool = False) -> dict:
     bundle = bundle_dir.absolute()
-    summary = verify_bundle(bundle, repo)
+    summary = verify_bundle(bundle, repo, require_unified_installers=require_unified_installers, require_runtime_installers=require_runtime_installers)
     if summary.get("build_kind") != "release":
         raise PublicationError("draft verification requires a real release bundle")
     tag = str(summary["tag"])
@@ -1024,7 +1059,7 @@ def verify_draft_assets(*, repo: str, bundle_dir: Path, timeout: float) -> dict:
     if not isinstance(release_url, str) or not release_url.startswith("https://github.com/"):
         raise PublicationError("GitHub draft release URL is invalid")
     assets = release.get("assets")
-    if not isinstance(assets, list) or len(assets) > 32:
+    if not isinstance(assets, list) or len(assets) > 33:
         raise PublicationError("GitHub draft asset listing is malformed or too large")
 
     expected_files = {"SHA256SUMS"}
@@ -1032,8 +1067,12 @@ def verify_draft_assets(*, repo: str, bundle_dir: Path, timeout: float) -> dict:
         expected_files.add("webcodex-release-manifest.json")
     expected_files.update(f"{summary['archive_stem']}-{platform}.tar.gz" for platform in collector.PLATFORMS)
     installer_artifacts = summary.get("installer_artifacts")
-    if installer_artifacts is not None:
-        if not isinstance(installer_artifacts, dict) or set(installer_artifacts) != set(collector.INSTALLER_TARGETS):
+    if "installer_artifacts" in summary:
+        targets = set(collector.INSTALLER_TARGETS)
+        if "installer_manifest_v2" in summary:
+            targets.update(collector.runtime_contract.RUNTIME_TARGETS)
+            expected_files.add("manifest-v2.json")
+        if not isinstance(installer_artifacts, dict) or set(installer_artifacts) != targets:
             raise PublicationError("retained bundle unified installer summary is invalid")
         expected_files.add("manifest.json")
         expected_files.update(item["filename"] for item in installer_artifacts.values())

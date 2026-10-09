@@ -105,6 +105,16 @@ fn experimental_code_mode_effectful_has_conservative_e2a_envelope() {
         .iter()
         .any(|spec| spec.name == "execute_effectful_code_mode"));
     assert_eq!(definition.category, TOOL_CATEGORY_RUNTIME);
+    let description = definition
+        .model_spec
+        .expect("execute_effectful_code_mode model spec")
+        .description;
+    assert!(description.contains("project_validate"));
+    assert!(description.contains("Plugin/MCP gateways"));
+    assert!(
+        description.chars().count() <= MODEL_TOOL_DESCRIPTION_MAX_CHARS,
+        "execute_effectful_code_mode canonical description budget"
+    );
 }
 
 #[cfg(feature = "experimental-code-mode")]
@@ -146,6 +156,17 @@ fn experimental_code_mode_mutating_has_conservative_e2c_combined_authority_envel
     assert!(is_adaptive_runtime_direct_tool(
         "execute_mutating_code_mode"
     ));
+    let description = definition
+        .model_spec
+        .expect("execute_mutating_code_mode model spec")
+        .description;
+    assert!(description.contains("project_validate"));
+    assert!(description.contains("successful no-op"));
+    assert!(description.contains("Plugin/MCP gateways"));
+    assert!(
+        description.chars().count() <= MODEL_TOOL_DESCRIPTION_MAX_CHARS,
+        "execute_mutating_code_mode canonical description budget"
+    );
 }
 
 #[cfg(feature = "experimental-code-mode")]
@@ -174,7 +195,12 @@ fn code_mode_composition_policy_is_canonical_closed_and_independent_from_fronten
         assert_eq!(metadata.risk, ToolRisk::Read, "{name}");
     }
 
-    for name in ["cargo_check", "cargo_test", "edit_project_files"] {
+    for name in [
+        "project_validate",
+        "cargo_check",
+        "cargo_test",
+        "edit_project_files",
+    ] {
         assert_eq!(
             runtime_tool_composition_policy(name),
             ToolCompositionPolicy::Sequential,
@@ -907,6 +933,8 @@ fn adaptive_runtime_direct_declarations_are_visible_ranked_and_unique() {
         ("run_script", 74),
         ("run_shell", 75),
         ("observe_jobs", 80),
+        ("project_build", 94),
+        ("project_validate", 95),
     ] {
         let definition = derived
             .iter()
@@ -943,6 +971,8 @@ fn adaptive_runtime_direct_declarations_are_visible_ranked_and_unique() {
         "upload_artifact_chunk",
         "finish_artifact_upload",
         "abort_artifact_upload",
+        "cargo_check",
+        "cargo_test",
         "go_test",
         "read_git_diff_hunks",
         "read_git_review_summary",
@@ -1008,7 +1038,7 @@ fn adaptive_runtime_direct_declarations_are_visible_ranked_and_unique() {
         .expect("read_git_review_summary ToolSpec");
     assert!(git_review
         .description
-        .contains("Specialist exact committed-range review map"));
+        .contains("Summarize an exact committed Git range"));
     assert!(git_review
         .description
         .contains("Ordinary review uses review_changes"));
@@ -1312,7 +1342,7 @@ fn code_mode_discovery_ranks_inspection_before_specialized_effects_without_chang
     assert!(position("execute_code_mode") < position("execute_mutating_code_mode"));
     assert!(position("edit_project_files") < position("execute_mutating_code_mode"));
     assert!(position("execute_code_mode") < position("execute_effectful_code_mode"));
-    assert!(position("cargo_test") < position("execute_effectful_code_mode"));
+    assert!(position("project_validate") < position("execute_effectful_code_mode"));
     for name in [
         "execute_code_mode",
         "execute_effectful_code_mode",
@@ -1450,12 +1480,16 @@ fn readiness_tool_is_sequential_outer_only() {
 }
 
 #[test]
-fn project_build_is_gateway_visible_but_not_adaptive_direct() {
+fn project_build_is_adaptive_direct_and_keeps_typed_build_contract() {
     let definition = lookup_tool_definition("project_build").expect("project_build definition");
     assert!(definition.visibility.is_model_visible());
     assert_eq!(definition.category, TOOL_CATEGORY_EXECUTION);
-    assert_eq!(definition.adaptive_runtime_direct_rank(), None);
-    assert!(!is_adaptive_runtime_direct_tool("project_build"));
+    assert_eq!(definition.adaptive_runtime_direct_rank(), Some(94));
+    assert_eq!(
+        definition.adaptive_runtime_direct_reason(),
+        Some(ToolDirectReason::CoreWorkflow)
+    );
+    assert!(is_adaptive_runtime_direct_tool("project_build"));
     let requirement = runtime_tool_runner_capability("project_build")
         .expect("project_build must require its typed Runner capability");
     assert_eq!(requirement, RunnerCapabilityRequirement::ProjectBuild);
@@ -1469,4 +1503,34 @@ fn project_build_is_gateway_visible_but_not_adaptive_direct() {
         definition.audit_policy().execution,
         ToolAuditExecutionPolicy::DIRECT_ARGV_TEXT
     );
+}
+
+#[test]
+fn spreadsheet_presentation_is_one_direct_readonly_tool_with_no_session() {
+    use crate::tool_definition::ToolDirectReason;
+    let definition = lookup_tool_definition("present_spreadsheet").unwrap();
+    assert_eq!(
+        definition.adaptive_runtime_direct_reason(),
+        Some(ToolDirectReason::Presentation)
+    );
+    let specification = registered_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == "present_spreadsheet")
+        .unwrap();
+    assert_eq!(specification.annotations["readOnlyHint"], true);
+    assert_eq!(specification.annotations["destructiveHint"], false);
+    assert!(specification.input_schema["properties"]
+        .get("session_id")
+        .is_none());
+    let call = ToolCall::from_tool_name(
+        "present_spreadsheet",
+        json!({"project":"agent:reader:demo", "path":"budget.xlsx"}),
+    )
+    .unwrap();
+    assert!(matches!(call, ToolCall::PresentSpreadsheet { .. }));
+    assert!(ToolCall::from_tool_name(
+        "present_spreadsheet",
+        json!({"project":"agent:reader:demo"})
+    )
+    .is_err());
 }

@@ -116,6 +116,8 @@ pub struct WindowWorkflowLinkRecord {
 /// Payload-safe durable Window activity row used by Runtime Console queries.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowActivityEventRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_expectation_result: Option<String>,
     pub event_id: String,
     pub client_window_key: String,
     pub client_window_source: String,
@@ -381,6 +383,9 @@ pub struct OAuthClientRecord {
 /// validation. `resource` is reserved for MCP audience binding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthAuthorizationCodeRecord {
+    /// Internal grant-time authority; never part of the public OAuth scope string.
+    #[serde(default)]
+    pub admin_authority: bool,
     pub id: String,
     /// SHA-256 hash of the code. Plaintext never stored.
     pub code_hash: String,
@@ -413,6 +418,9 @@ pub struct OAuthAuthorizationCodeRecord {
 /// stored; the plaintext is returned to the client once at creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthAccessTokenRecord {
+    /// Internal grant-time authority; never part of the public OAuth scope string.
+    #[serde(default)]
+    pub admin_authority: bool,
     pub id: String,
     /// SHA-256 hash of the token. Plaintext never stored.
     pub token_hash: String,
@@ -440,6 +448,9 @@ pub struct OAuthAccessTokenRecord {
 /// `rotated_from_id`. Only the SHA-256 hash is stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthRefreshTokenRecord {
+    /// Internal grant-time authority; never part of the public OAuth scope string.
+    #[serde(default)]
+    pub admin_authority: bool,
     pub id: String,
     /// SHA-256 hash of the token. Plaintext never stored.
     pub token_hash: String,

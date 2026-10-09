@@ -18,7 +18,7 @@ import type { DesktopState } from "../models/topology";
 import type { DiagnosticSnapshot, RuntimeSettings, RuntimeCandidate } from "../models/runtime-shell";
 import type { WindowDetail } from "../models/workspace";
 
-const api = vi.hoisted(() => ({ updateTunnelProxy: vi.fn(), runnerSettings: vi.fn(), runtimeSettings: vi.fn(), probeRuntime: vi.fn(), recheckRuntime: vi.fn(), switchRuntime: vi.fn(), getState: vi.fn(), diagnostics: vi.fn(), setToolRequestTracing: vi.fn(), copyDiagnosticReport: vi.fn(), copyRuntimeConsoleCredential: vi.fn(), exportSupportBundle: vi.fn(), openDiagnosticResource: vi.fn(), restorePreviousConfiguration: vi.fn(), environmentServiceAction: vi.fn(), repairEnvironmentUserCredential: vi.fn(), computerPermissions: vi.fn(), desktopBuildInfo: vi.fn(), getLaunchAtLogin: vi.fn(), setLaunchAtLogin: vi.fn(), checkForUpdates: vi.fn(), remindUpdateLater: vi.fn(), openLatestRelease: vi.fn() }));
+const api = vi.hoisted(() => ({ pathInventory: vi.fn(), updateTunnelProxy: vi.fn(), runnerSettings: vi.fn(), runtimeSettings: vi.fn(), probeRuntime: vi.fn(), recheckRuntime: vi.fn(), switchRuntime: vi.fn(), getState: vi.fn(), diagnostics: vi.fn(), setToolRequestTracing: vi.fn(), copyDiagnosticReport: vi.fn(), copyRuntimeConsoleCredential: vi.fn(), exportSupportBundle: vi.fn(), openDiagnosticResource: vi.fn(), restorePreviousConfiguration: vi.fn(), environmentServiceAction: vi.fn(), repairEnvironmentUserCredential: vi.fn(), computerPermissions: vi.fn(), desktopBuildInfo: vi.fn(), getLaunchAtLogin: vi.fn(), setLaunchAtLogin: vi.fn(), checkForUpdates: vi.fn(), remindUpdateLater: vi.fn(), openLatestRelease: vi.fn() }));
 const dialog = vi.hoisted(() => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("../lib/desktop-api", () => ({ desktopApi: api }));
 vi.mock("@tauri-apps/plugin-dialog", () => dialog);
@@ -39,6 +39,7 @@ const diagnostic = { schema_version: 1, observed_at_ms: Date.now(), trace: { con
 function wrap(child: React.ReactNode) { return <LocaleProvider><DesktopMantineProvider>{child}</DesktopMantineProvider></LocaleProvider>; }
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.clear(); localStorage.setItem("webcodex.desktop.locale", "en-US");
+  api.pathInventory.mockResolvedValue({ schema_version: 1, observed_at_ms: 1, environment_id: null, local_server: true, local_runner: true, service_scope: null, revision: "fixture", roots: [], entries: [], issues: [], builds: [] });
   api.runnerSettings.mockResolvedValue({ target: { client_id: "fixture", config_path: "/fixture/runner.toml", server_url: "http://127.0.0.1:1" }, paths: { instruction_files: [], skill_roots: [] }, file_access: { configured_roots: [], effective_roots: ["/Users/fixture"], using_default_roots: true, allow_cwd_anywhere: false }, plugin_ids: [], can_restart: true });
   api.runtimeSettings.mockResolvedValue(structuredClone(settings)); api.getState.mockResolvedValue(state);
   api.probeRuntime.mockResolvedValue({ ...settings, candidate }); api.recheckRuntime.mockResolvedValue(settings);
@@ -86,17 +87,33 @@ describe("Runtime candidate and ownership semantics", () => {
     expect(screen.getByText(/系統拒絕了存取/)).toBeVisible();
     expect(screen.getByText(/相容性仍未確認/)).toBeVisible();
   });
-  it("previews mixed revisions/versions without mutation and only activates after explicit confirmation", async () => {
+  it("selects and validates a compatible folder in one action without redundant approval", async () => {
     render(wrap(<RuntimePanel state={state} onState={vi.fn()} />));
     await screen.findByRole("heading", { name: "Current Runtime" });
-    fireEvent.click(await screen.findByRole("button", { name: "Select Runtime folder…" }));
-    const previewHeading = await screen.findByRole("heading", { name: "Candidate Runtime" });
-    const preview = previewHeading.parentElement as HTMLElement;
+    expect(api.probeRuntime).not.toHaveBeenCalled();
     expect(api.switchRuntime).not.toHaveBeenCalled();
-    expect(within(preview).getByText("Compatible")).toBeInTheDocument();
-    expect(within(preview).getByText("Different versions")).toBeInTheDocument();
-    fireEvent.click(within(preview).getByRole("button", { name: "Use this Runtime" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Select Runtime folder…" }));
+    await waitFor(() => expect(api.probeRuntime).toHaveBeenCalledExactlyOnceWith({ kind: "custom", directory: "/fixture/custom" }));
     await waitFor(() => expect(api.switchRuntime).toHaveBeenCalledExactlyOnceWith({ candidate_id: "candidate-fence", expected_selection_revision: 3, confirm_interrupt: false }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+  it("reloads the remembered development folder without opening the directory picker", async () => {
+    api.runtimeSettings.mockResolvedValue({ ...settings, source: candidate.source, selected: candidate });
+    render(wrap(<RuntimePanel state={state} onState={vi.fn()} />));
+    expect(await screen.findByText(/Compatible updates are accepted/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "webcodex" })).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Reload selected folder" }));
+    await waitFor(() => expect(api.probeRuntime).toHaveBeenCalledExactlyOnceWith(candidate.source));
+    await waitFor(() => expect(api.switchRuntime).toHaveBeenCalledOnce());
+    expect(dialog.open).not.toHaveBeenCalled();
+  });
+  it("requires interruption confirmation when the Job count is unknown", async () => {
+    api.probeRuntime.mockResolvedValue({ ...settings, candidate, active_jobs: null });
+    render(wrap(<RuntimePanel state={state} onState={vi.fn()} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Select Runtime folder…" }));
+    const confirm = await screen.findByRole("dialog", { name: "Runtime restart warning" });
+    expect(within(confirm).getByText("Job count is not confirmed.")).toBeVisible();
+    expect(api.switchRuntime).not.toHaveBeenCalled();
   });
   it("rejects incompatible candidates while the selected Runtime remains visible", async () => {
     api.probeRuntime.mockResolvedValue({ ...settings, candidate: { ...candidate, compatibility: "incompatible", error_code: "runtime_contract_incompatible" } });
@@ -111,7 +128,6 @@ describe("Runtime candidate and ownership semantics", () => {
     api.probeRuntime.mockResolvedValue({ ...settings, candidate, active_jobs: 2 });
     render(wrap(<RuntimePanel state={state} onState={vi.fn()} />));
     fireEvent.click(await screen.findByRole("button", { name: "Use bundled Runtime" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Use this Runtime" }));
     const confirm = await screen.findByRole("dialog", { name: "Runtime restart warning" });
     expect(within(confirm).getByText("Active Jobs: 2")).toBeInTheDocument(); expect(api.switchRuntime).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
@@ -122,6 +138,19 @@ describe("Runtime candidate and ownership semantics", () => {
     await waitFor(() => expect(switchButton).toBeEnabled());
     fireEvent.click(switchButton);
     await waitFor(() => expect(api.switchRuntime).toHaveBeenCalledWith(expect.objectContaining({ confirm_interrupt: true })));
+  });
+  it("asks for consent when native preflight discovers Jobs after the preview", async () => {
+    api.switchRuntime.mockRejectedValueOnce({ code: "runtime_switch_jobs_confirmation_required", message: "Jobs changed", next_action: "Confirm interruption" });
+    render(wrap(<RuntimePanel state={state} onState={vi.fn()} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Select Runtime folder…" }));
+    const confirm = await screen.findByRole("dialog", { name: "Runtime restart warning" });
+    expect(api.switchRuntime).toHaveBeenCalledTimes(1);
+    expect(within(confirm).getByText("Job count is not confirmed.")).toBeVisible();
+    const retry = within(confirm).getByRole("button", { name: "Switch anyway" });
+    await waitFor(() => expect(retry).toBeEnabled());
+    fireEvent.click(retry);
+    await waitFor(() => expect(api.switchRuntime).toHaveBeenCalledTimes(2));
+    expect(api.switchRuntime).toHaveBeenLastCalledWith({ candidate_id: "candidate-fence", expected_selection_revision: 3, confirm_interrupt: true });
   });
   it("reports rolled-back activation rather than claiming a successful switch", async () => {
     const outcome = { outcome: "rolled_back", reason_code: "server_start_failed", rollback_reason_code: null, selection_revision: 3, restart_required: false };
@@ -373,11 +402,17 @@ it("opens requested recovery categories and supports keyboard category navigatio
   view.rerender(wrap(<SettingsPanel state={state} onState={vi.fn()} initialSection="runtime" />));
   const runtimeTab = screen.getByRole("tab", { name: "Runtime & services" });
   expect(runtimeTab).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(runtimeTab, { key: "ArrowDown" });
+  const configurationTab = screen.getByRole("tab", { name: "Configuration & data" });
+  expect(configurationTab).toHaveFocus();
+  await screen.findByRole("button", { name: "Export path inventory" });
+  fireEvent.keyDown(configurationTab, { key: "ArrowDown" });
+  expect(screen.getByRole("tab", { name: "Troubleshooting" })).toHaveFocus();
   fireEvent.keyDown(runtimeTab, { key: "Home" });
   expect(screen.getByRole("tab", { name: "General" })).toHaveFocus();
   fireEvent.keyDown(screen.getByRole("tab", { name: "General" }), { key: "ArrowDown" });
   expect(screen.getByRole("tab", { name: "Files & permissions" })).toHaveFocus();
-  expect(screen.getByRole("button", { name: "Add folder" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Authorize folder" })).toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("tab", { name: "Files & permissions" }), { key: "End" });
   expect(screen.getByRole("tab", { name: "About & updates" })).toHaveFocus();
 });

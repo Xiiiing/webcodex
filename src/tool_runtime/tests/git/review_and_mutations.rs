@@ -17,7 +17,9 @@ async fn review_snapshot_identity_fences_index_only_changes() {
     );
     assert_eq!(unstaged, observe_review_source(&runtime, &project).await);
     git_test_command_ok(tmp.path(), "git add a.txt");
+    let staged_index = fs::read(tmp.path().join(".git/index")).unwrap();
     let staged = observe_review_source(&runtime, &project).await;
+    assert_eq!(staged_index, fs::read(tmp.path().join(".git/index")).unwrap());
     assert_eq!(unstaged["head_commit"], staged["head_commit"]);
     assert_eq!(unstaged["frozen_tree"], staged["frozen_tree"]);
     assert_ne!(
@@ -179,29 +181,16 @@ async fn review_snapshot_continuation_rechecks_source_after_diff() {
     assert!(first.success, "{first:?}");
     let continuation = first.output["continuation"].as_str().unwrap().to_string();
     let next = start_review_page(&runtime, &project, Some(continuation));
-    let before = wait_for_patch_agent_request(&runtime, client).await;
-    assert!(before
-        .script
-        .as_ref()
-        .unwrap()
-        .script
-        .contains("WEBCODEX_WORKSPACE_STATUS="));
-    complete_agent_request_by_running_locally(&runtime, client, before).await;
-    let diff = wait_for_patch_agent_request(&runtime, client).await;
-    let (exit_code, stdout, stderr) = run_runner_shell_request_locally(&diff);
-    assert_eq!(exit_code, 0, "{stderr}");
-    // Change only the branch after the page was produced, before its response
-    // reaches Runtime. Neither the worktree nor the inner diff cursor changes.
-    git_test_command_ok(tmp.path(), "git switch -c review-concurrent-branch");
-    complete_patch_agent_request(
-        &runtime,
-        client,
-        &diff.request_id,
-        exit_code,
-        &stdout,
-        &stderr,
-    )
-    .await;
+    let mut diff = wait_for_patch_agent_request(&runtime, client).await;
+    let script = &mut diff.script.as_mut().unwrap().script;
+    // The immutable page and trailing live identity check now share one Runner
+    // request. Inject the branch change between those stages, not after the
+    // entire observation has already finished on the Runner.
+    let marker = "printf 'WEBCODEX_REVIEW_FINAL_FENCE";
+    assert!(script.contains(marker));
+    *script = script.replacen(marker,
+        "git switch -c review-concurrent-branch >/dev/null 2>&1\nprintf 'WEBCODEX_REVIEW_FINAL_FENCE", 1);
+    complete_agent_request_by_running_locally(&runtime, client, diff).await;
     let result = collect_review_task(&runtime, client, next).await;
     assert!(!result.success, "{result:?}");
     assert_eq!(result.output["reason_code"], "snapshot_stale");

@@ -6,12 +6,15 @@
 
 已发布文件请从 [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases)获取。仓库 [`download/`](../download/README.md) 目录仅包含静态页面源文件；生成的 `manifest.json` 不提交到仓库。[下载页 workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) 会在 Release 发布后构建基于 manifest 的 GitHub Actions artifact，但不会托管或部署网页。安装包发布前如需预览特定源码修订，请看 [Linux 源码预览](DESKTOP_DEVELOPMENT.zh-CN.md#linux-源码预览与已有-server)。
 
+无需 Desktop 的 Linux 电脑，请参见 [Runtime 安装与 CLI 加入主节点](runtime-installation.zh-CN.md)，了解 Runtime 软件包、受保护的配对输入，以及共享的无界面更新/恢复入口。
+
+
 ## 一台电脑
 
 以下流程适用于对应平台的安装包已经验收并发布之后；源码预览请使用上文单独列出的开发流程。
 
 1. 安装对应平台的安装包并打开 WebCodex Desktop。
-2. 选择**在此电脑使用 WebCodex**，保留**允许 AI 在此电脑上工作**并确认配置，无需选择项目。只有明确仅运行 Server 时才取消允许本机工作。
+2. 选择**创建主节点**并确认配置。Server 与本机 Runner 为两个独立服务，跳过可选初始项目仍启用 Runner。**高级**保留明确的 Server-only 设置；既有环境保持原角色。
 3. 在 Desktop 确认 Server、Runner 和项目状态。Desktop、CLI 与网页使用同一 Server 的授权视图。浏览器打开 `SERVER_URL/runtime`，使用现有用户凭据查看获授权的 Runner、项目和状态。
 4. 通过 Server 配置现有 ChatGPT MCP/Tunnel 连接。ChatGPT 始终连接中心 Server。远程项目路径属于 Runner 所在机器，不是 Server 机器上的本地路径。
 
@@ -19,9 +22,11 @@
 
 ## 多台电脑
 
-在每台电脑安装相同平台安装包。先确定哪台机器承载中心 Server，哪些机器持有代码仓库。只运行 Server 的中心机器也可以显示远程 B、C 机器上的项目，只要这些机器的 Runner 已连接。
+先按单机流程创建相同的完整主节点，保留中心 Server 与本机 Runner。其他机器作为追加 Runner 接入；主节点也能操作自己的项目。在每台机器安装适配系统和架构的安装包。高级 Server-only 和 viewer-only 能力仍然保留。
 
-在中心 Server 上使用 `webcodex environment invite` 创建 Runner 短期邀请 code。显示出的 code 属于密钥，只交给目标机器，不要放入命令行参数或日志。
+在主节点打开**项目 → 添加设备**，填写其他机器可访问的 Server 地址，再明确点击**创建邀请**。在追加机器安装 WebCodex，选择**加入主节点**，输入直接地址并通过受保护输入提供一次性配对码。初始项目可跳过，Runner 仍保持启用。CLI 仍可使用 `webcodex environment invite`；配对码属于密钥，不要放入命令行参数或日志。
+
+ChatGPT 通过 OpenAI Tunnel 连接中心 Server；追加 Runner 使用独立的直接 Server 地址。环回地址或 OpenAI 地址不能用作额外机器的接入口。无法访问时需检查监听地址、防火墙、域名或私有网络，窗口不会修改这些设置。邀请已创建不等于设备已接入，随后通过现有授权设备和项目清单刷新查看。参见[Desktop 添加设备说明](desktop-guide.zh-CN.md#添加其他设备)。
 
 在中心 Server 机器创建环境：
 
@@ -29,13 +34,13 @@
 webcodex environment configure --create --project PATH
 ```
 
-如果该机器没有仓库，使用 `--no-project`。如果希望允许 AI 工作但不选默认仓库，改用 `webcodex environment configure --create --runner`；远程机器可用 `webcodex environment configure --join https://server.example --runner --code-stdin`。既有环境保留原角色；首次为 viewer 启用 Runner 时，通过 Desktop 明确勾选允许本机工作，或使用 CLI 的 `add-project` 转换。在每台仓库机器加入 Server：
+CLI 无项目主节点使用 `webcodex environment configure --create --runner`；仅使用 `--no-project` 而不指定 `--runner` 会明确保留高级 Server-only 角色。远程机器可用 `webcodex environment configure --join https://server.example --runner --code-stdin`。既有环境保留原角色；首次为 viewer 启用 Runner 时，通过 Desktop 明确勾选允许本机工作，或使用 CLI 的 `add-project` 转换。在每台仓库机器加入 Server：
 
 ```text
 webcodex environment configure --join https://server.example --project PATH
 ```
 
-使用 `--no-project` 可仅作为查看端加入，不配置本机 Server 或 Runner。Desktop 将创建/加入与是否允许本机工作分开。CLI 的 `--runner` 可启用 Runner 而不选默认项目；兼容的 `--project PATH` 仍表示启用 Runner 并注册该明确项目。随后按所选流程收集 Server 地址、认证信息和必要的系统授权。以 viewer 身份加入时，使用用户个人访问 token，通过隐藏输入或受保护的 `--token-file` 提供；不使用 pairing code。例如，从受保护文件导入已有用户 API 凭据：
+使用 `--no-project` 可仅作为查看端加入，不配置本机 Server 或 Runner。普通 Desktop 创建/加入默认允许本机工作；高级保留明确的角色选项。CLI 的 `--runner` 可启用 Runner 而不选默认项目；兼容的 `--project PATH` 仍表示启用 Runner 并注册该明确项目。随后按所选流程收集 Server 地址、认证信息和必要的系统授权。以 viewer 身份加入时，使用用户个人访问 token，通过隐藏输入或受保护的 `--token-file` 提供；不使用 pairing code。例如，从受保护文件导入已有用户 API 凭据：
 
 ```text
 webcodex environment configure --join https://server.example --no-project --token-file PATH
@@ -57,36 +62,28 @@ pairing code 从 stdin 读取，不能放进命令行参数。由中心 Server �
 
 普通 `resume` 使用 `--token-file` 是为了继续配置，不会轮换已保存的用户凭据。若已保存的 Server 用户凭据丢失或失效，请运行 `webcodex environment repair-user-credential [--token-file PATH]`；不提供 `--token-file` 时，CLI 会通过隐藏终端输入安全读取凭据。
 
-## 迁移现有 Linux CLI 服务
+## 从 v0.4.6 升级
 
-Linux 为受支持的旧 CLI 服务提供显式迁移命令。迁移会保留既有身份，不会签发新的配对码。源码审查已完成，但这些命令尚未通过原生安装包/服务验收；不要将这些路径视为已完成 M2f 原生验收。
+v0.4.6 已经包含 Environment。请保留原 Environment 目录、服务所有者和 scope、
+Runtime 选择、私有凭据以及恢复记录；普通升级不需要删除配置或重新配对 Runner。
+升级到 v0.5 后，刷新 MCP 连接的工具 schema，并重新打开旧 App 阅读器，以使用新的
+规范工具名称。具体保留边界、旧安装迁移，以及“Desktop 已保存但 Environment 尚未
+配置”的 Tunnel profile 如何显式补齐，见[兼容性政策](compatibility-policy.md)。
+该 CLI 补齐路径会安装并启动 standalone 服务，不是仅保存配置的导入操作。
 
-对于用户所有的旧 Runner，请由原用户运行，并提供该用户私有的 user credential 文件：
+## 从 v0.4.6 之前的安装升级
 
-```bash
-webcodex environment migrate-legacy-runner \
-  --join https://server.example \
-  --project /home/alice/src/repo \
-  --token-file /home/alice/.config/webcodex/webcodex-user-token
-```
+v0.5 将正式发布的 v0.4.6 Environment 版本作为最低直接升级来源。pre-Environment Linux 安装以及官方 Windows v0.4.3 包不再由 v0.5 直接迁移。请先升级或迁移到 v0.4.6，确认 Environment 已正确接管原 Server/Runner 身份和服务，再从该 Environment 升级到 v0.5。
 
-只有命名 profile 才添加 `--profile NAME`。迁移只接受已知、带 owner 的 Runner 配置及其生成的用户 unit，复用现有 Runner 身份、项目 ID 和用户凭据，不会重新配对。不会推测无 owner 的 shared-key 配置或自定义 unit。
-
-对于 root 所有的固定 system Server unit/socket，请用原 Server 用户名、该用户私有的 API credential 文件和旧监听地址执行显式迁移：
-
-```bash
-webcodex environment migrate-legacy-server \
-  --user alice \
-  --token-file /home/alice/.config/webcodex/webcodex-user-token \
-  --listen 0.0.0.0:8080 \
-  --server-url http://127.0.0.1:8080
-```
-
-`--server-url` 可选；省略时 CLI 会从原监听地址推导本机 URL。此命令只迁移 Server，目标仅限已知的 systemd unit/socket 以及固定的环境和数据目录。独立配置的旧 Tunnel 仍归原 owner/profile 管理，不会由此迁入 Core。命令不会猜测自定义 unit、路径或 owner。妥善保护 credential 文件，不要用 Server bootstrap token 替代原用户的 API credential。
+这样历史安装形态只需要经过一个已发布的桥版本，不必让后续每个版本继续携带旧 systemd handoff 和 v0.4.3 package classifier。跨桥升级时不要删除或重建凭据；旧身份由 v0.4.6 负责导入，v0.5 只保留并升级生成后的 Environment 数据。
 
 ## Tunnel 配置
 
-使用 `webcodex environment configure-tunnel PROFILE --credentials-file PATH` 配置命名 Tunnel profile。受保护的 JSON 文件包含 `tunnel_id` 和 `api_key`；CLI 也支持通过隐藏终端输入提供凭据。使用 `webcodex environment tunnel-status PROFILE` 查看状态，或使用 `webcodex environment remove-tunnel PROFILE` 删除 profile。通过 `webcodex environment start tunnel --profile PROFILE`、`stop tunnel --profile PROFILE` 或 `restart tunnel --profile PROFILE` 管理指定 profile。请妥善保护凭据文件，并在使用后删除。
+持久本机 Server 推荐在创建时直接选择 Server owner：`webcodex environment configure-tunnel work --host embedded --credentials-file /secure/work.json`。受保护 JSON 只包含 `tunnel_id` 和 `api_key`，也可使用隐藏终端输入。该命令把精确 profile 与私有 local-MCP binding 写入 `EnvironmentStore`，绝不安装或启动 standalone Tunnel 服务，也不会 hot reload 或暗中重启正在工作的 Server。JSON 结果会返回 `server_restart_required` 和 `next_action`；可连续配置多个 profile，最后按提示只执行一次 `webcodex environment restart server`。Desktop 中对应 **Run with WebCodex Server (recommended)**，并显示同一个显式重启操作。
+
+只有明确需要独立 per-profile 服务时才使用 `--host standalone`；原有 `start|stop|restart tunnel --profile PROFILE` 生命周期保持不变。已有 profile 改 owner 仍必须在干净停止并卸载 standalone 服务后显式执行 `tunnel-host PROFILE --host ...`；配置流程不会自动接管 foreign 或 legacy 服务。使用 `tunnel-status PROFILE` 查看状态，使用 `remove-tunnel PROFILE` 删除 profile。
+
+持久模式下，CLI 与 Desktop 都以 `EnvironmentStore` 为唯一 profile catalog。历史 Desktop `secrets/tunnel-config.json` 只服务 legacy/non-persistent runtime；若它与持久 Environment 同时存在，只作为 fail-closed profile/Tunnel identity 栅栏，不再是第二套可写 catalog。历史 API-key 字节不会覆盖或阻止带 revision 栅栏的 EnvironmentStore key rotation。请妥善保护凭据文件，并在使用后删除。
 
 ## 服务与凭据
 

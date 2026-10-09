@@ -25,9 +25,9 @@ WebCodex 可以在已注册的项目范围内读取和修改文件、执行命�
    下载与当前机器架构匹配的 Windows installer 或 DMG。当前 macOS 构建
    未经过 notarization；如果被拦截，进入**系统设置 → 隐私与安全 → 仍要打开**，
    不要全局关闭 Gatekeeper。
-2. **选择项目。**选择 **Local Full Runtime / 在此电脑使用 WebCodex**，再选择
-   真正的代码仓库目录，等待 **Service**、**Runner** 和 **Project** 全部 Ready。
-   WebCodex Desktop 是本机 Runtime 控制器，不是聊天界面。
+2. **创建主节点。**选择**创建主节点**，配置独立的 Server 和本机 Runner。
+   初始项目可以跳过，Runner 仍保持启用。等待设置完成并检查两个服务。
+   **加入主节点**把本机 Runner 接入已有 Server；参见[添加设备说明](desktop-guide.zh-CN.md#添加其他设备)。
 3. **创建 OpenAI Tunnel 凭据。**在 [OpenAI Tunnels 页面](https://platform.openai.com/settings/organization/tunnels)
    创建 Tunnel，记录完整且准确的 Tunnel ID；再到 [API keys 页面](https://platform.openai.com/settings/organization/api-keys)
    创建 API key。建议使用 Restricted key，只授予 Tunnel 所需权限，包括
@@ -70,7 +70,7 @@ WebCodex 可以在已注册的项目范围内读取和修改文件、执行命�
 - **Windows：**按主机架构选择 x64 或 ARM64 installer；Windows ARM64 Desktop 从 v0.4.2+ release build path 开始提供。
 - **macOS：**按 Mac 架构选择 Intel 或 Apple Silicon DMG。
 
-已发布的 v0.4.3 macOS 构建使用 ad-hoc 签名且没有 notarization，因此 Gatekeeper 可能要求在**系统设置 → 隐私与安全 → 仍要打开**中确认。macOS TCC 签名修复之后，正式 release pipeline 要求 Developer ID Application 签名和 notarization；本地源码/dogfood 构建仍可使用 ad-hoc 签名。不要全局关闭 Gatekeeper。
+macOS 签名明确分为三种模式：`self-signed` 是当前 public release 和长期 dogfood 的持久 fallback；Apple 凭据可用时可显式选择 `developer-id`，使用 Developer ID Application 并完成 notarization/stapling；`adhoc` 仅用于一次性 CI/本地验证，不承诺 TCC 升级连续性。必须跨 build/upgrade 长期保留**同一张 self-signed certificate 及其 private key**；同名重建证书也会改变身份。Desktop（`dev.webcodex.desktop`）和 bundled Runner（`dev.webcodex.runner`）都使用不含 binary cdhash 的证书锚定 designated requirement，并在 Tauri nested signing 后验证最终 app/DMG。历史 ad-hoc 授权不会因此自动迁移，首次改用持久身份时可能需要重新授权。Self-signed 不等同于 Apple notarization；如 Gatekeeper 要求，请使用**系统设置 → 隐私与安全 → 仍要打开**，不要全局关闭 Gatekeeper。
 
 安装完成后启动 WebCodex Desktop。
 
@@ -113,43 +113,42 @@ Tunnel 名称可以自定义；记录自己的 Tunnel ID。API key 建议使用 
 
 ## 3. 在 Desktop 内保存 Tunnel 配置（推荐）
 
-打开 **连接 → Tunnel 连接配置**。普通 Tunnel 运行中或停止后，编辑区始终可见：
+打开 **连接** 页面并新增 ChatGPT connection。对于持久本机 Environment：
 
-1. 在 **Tunnel ID** 输入框填写自己的 Tunnel ID。
-2. 在 **Tunnel API key** 密码输入框填写可用于该 Tunnel 的 API key。
-3. 点击 **保存配置**。看到“当前来源：本机配置文件（优先）”后即可启动连接，**不需要重启 Desktop**。
+1. 填写 profile 名称和精确的 **Tunnel ID**。
+2. 在 write-only 密码输入框填写已授权 API key。
+3. 推荐选择 **Run with WebCodex Server (recommended)**；只有明确需要独立服务生命周期时才选择 **Separate Tunnel service (advanced)**。
+4. 保存 profile。保存绝不会暗中重启正在工作的 Server。可以继续添加其余 profile，最后仅在 Desktop 提示尚未应用运行时状态时，执行一次显式 **Restart Server**。
 
-Desktop 会把 API key **以未加密形式**保存在当前用户的本机应用数据目录中。
-不要把它放入项目、Git、工单、截图或共享备份。
+Server-owned profile 写入当前 `EnvironmentStore`，只在 Server 启动时装载，绝不会创建 standalone Tunnel 服务。Separate-service profile 保留逐 profile 的 Start、Stop、Restart 控件。普通编辑器不能改变已有 owner；必须先干净停止并卸载旧 owner，再使用显式 ownership-transfer 流程。
 
-**成功时：**配置来源显示为本机文件，两项检测都通过。接下来选择真正要给
-ChatGPT 使用的项目。
+Desktop 不会把 API key 读回表单。编辑时留空表示保留该 profile 已保存的 key；替换 key 必须通过当前 profile revision 栅栏。密钥仍以未加密形式保存在 owner-private binding 中，因此必须妥善保护 Environment 数据、支持包、工单、截图和备份。
 
-### 可选：已保存配置的行为与存储位置
+**成功时：**每张卡片独立显示名称、Tunnel ID、owner 和 readiness；Server-owned profile 另外显示自己的随 Server 启动选择。Server-owned profile 在完成一次显式重启前可能显示 **Restart Server**。保存配置与观察到 Tunnel 已连接是两个不同结果。
 
-这两个字段也可以在首次本机配置的可选 Tunnel 区域填写。已有保存的密钥时，API key 留空表示保留原密钥；界面不会取回密钥值，提交后输入框会清空。保存失败时会保留 Tunnel ID，并要求重新输入尚未保存的密钥。
+### Profile authority 与 legacy 存储
 
-**优先级：完整的已保存配置 → Desktop 进程继承的环境变量。** 不会混用文件中的 Tunnel ID 和环境中的 API key。保存不会修改系统环境。本应用管理的普通 Tunnel 正在运行时，会使用新配置替换该 Tunnel，不重启 Server 或 Runner；原先停止的 Tunnel 保持停止。OpenAI Quick Share 在下次启动时使用新值。保存成功和连接恢复是两个结果：替换失败时保留新配置，并明确提示重试连接。
+持久 Environment 下，CLI 与 Desktop 都以 `EnvironmentStore` 为 canonical authority：`tunnel.json` 保存 catalog，`server/tunnels/<profile>/webcodex.env` 保存私有 binding。CLI 新增的 profile 会出现在 Desktop Connections 页面；Desktop 保存后，CLI `tunnel-status` 也会看到同一份状态。
 
-配置保存在 Desktop 的本机应用数据目录中，相对路径为 `secrets/tunnel-config.json`：
+历史 Desktop `secrets/tunnel-config.json` 在持久模式下不再是第二套可写 catalog，只作为 fail-closed identity reconciliation 栅栏：profile/Tunnel identity 一致即可共存；identity 缺失或不同会阻止 mutation，而不会静默覆盖、导入或删除任意一侧。authority 转移后不再比较历史 API-key 字节，因为 key rotation 只属于带 revision 栅栏的 EnvironmentStore binding。
+
+Legacy/non-persistent Desktop runtime 继续使用本机应用数据目录内的 `secrets/tunnel-config.json`：
 
 - macOS：`~/Library/Application Support/dev.webcodex.desktop/secrets/tunnel-config.json`。
 - Windows：`%LOCALAPPDATA%\dev.webcodex.desktop\secrets\tunnel-config.json`。
 
-macOS/Unix 写入权限为当前用户读写（`0600`）；Windows 继承本机用户应用数据目录的访问权限。保存采用原子替换，不会为密钥文件保留旧值备份。`secrets` 目录受 WebCodex 现有敏感路径策略保护。普通 `desktop-state.json` 仍只保存非密钥运行状态。
+macOS/Unix 写入权限为 owner-only（`0600`）；Windows 继承当前用户应用数据目录权限。保存使用带原内容检查的原子替换，不保留旧 secret 备份；无效、不可读、symlink 或超限文件都会 fail closed。
 
-点击 **清除已保存配置，改用环境变量** 会清除保存的一组值，恢复环境变量回退；文件中记录为 `null`。已有文件无效或无法读取时不会自动改用环境变量，请在界面重新保存，或者清除配置。手工编辑文件后需重新启动 Desktop；界面保存无需重启。
+### 可选：仅在 legacy 模式继续使用环境变量
 
-### 可选：继续使用环境变量
-
-没有保存配置时，Desktop 使用当前进程继承的：
+没有保存 legacy/non-persistent 配置时，Desktop 可使用当前进程继承的：
 
 ```text
 CONTROL_PLANE_TUNNEL_ID
 CONTROL_PLANE_API_KEY
 ```
 
-无需额外设置 `OPENAI_ADMIN_KEY` 或 `OPENAI_API_KEY`。首次启动 OpenAI Secure Tunnel 时，WebCodex 会自动下载并校验固定版本的 `tunnel-client`；通常不用手动安装。下载失败时检查网络或代理，高级用户可指定 `WEBCODEX_TUNNEL_CLIENT_BIN`。
+无需额外设置 `OPENAI_ADMIN_KEY` 或 `OPENAI_API_KEY`。环境变量不是持久 multi-profile 格式，也不会与已保存数据按字段混用。OpenAI Secure Tunnel 使用内置 Rust client，无需下载或安装额外 tunnel-client。启动失败时请检查连接健康状态和 control-plane 路由；若 WebCodex 提示上次工作未确认，先处理该状态，再恢复同一个 Tunnel identity。
 
 Windows 用户可以设置当前用户的持久环境变量。macOS 从 Finder / Dock 启动不会读取 `~/.zshrc`；需要从已加载变量的 Terminal 启动应用，或者配置登录会话环境。如果选择这种高级方式，修改变量后须通过托盘 **退出 WebCodex**，再重新启动。关闭窗口只是隐藏，不会更新进程环境。**重新检测配置** 不会执行 shell 启动脚本，也不会读取手工修改的配置文件。
 
@@ -161,20 +160,21 @@ Windows 用户可以设置当前用户的持久环境变量。macOS 从 Finder /
 
 ## 4. 启动本机运行环境并添加项目
 
-首次启动后，选择 **Local Full Runtime / 在此电脑使用 WebCodex**，再选择真正
-要让 ChatGPT 使用的代码仓库目录。WebCodex 只会访问你明确添加的项目，不会
-自动获得其他目录或整块磁盘的访问权限。
+首次启动后选择**创建主节点**，初始代码仓库可以选择或跳过，之后再添加；
+两种情况都保持本机 Runner 启用。Runner 文件访问策略仍是权限边界，项目注册
+不会授予策略之外的目录访问权。**高级**保留 Server-only、viewer-only 和 Quick Share；
+重新打开设置保持已保存的角色。
 
 在首页展开**查看运行诊断**，确认：
 
 - Service：运行中 / Ready；
 - Runner：已连接 / Ready；
-- Project：Ready，而且显示的是你刚选择的目录。
+- 如果选择了初始项目，Project：Ready，且目录准确。项目为空不会停止 Server 或 Runner。
 
-以后要使用其他代码仓库，可进入**项目**页面，点击**选择其他项目**或
-**添加项目**。
+之后可在**项目**页面添加本机项目，复用已有 Runner 身份和 Server 连接。
 
-**成功时你应该看到：**Service、Runner、Project 同时 Ready，Project 路径与实际目录一致。
+**成功时你应该看到：**Server 和本机 Runner 就绪。注册项目后核对准确的目录与所属
+Runner；ChatGPT 的真实项目读取仍用于单独确认整条连接。
 
 **失败时：**点击**重新激活项目**；仍然失败时再查看错误和**活动**详情。不要
 通过扩大项目访问范围来绕过错误。

@@ -3,7 +3,9 @@ use crate::models::{
     OAuthAccessTokenRecord, OAuthAuthorizationCodeRecord, OAuthClientRecord,
     OAuthRefreshTokenRecord,
 };
-use rusqlite::params;
+use crate::public_ingress::{self, GrantBinding};
+use crate::PublicIngressFence;
+use rusqlite::{params, Connection, TransactionBehavior};
 
 fn validate_shared_key_owner_hash(value: &str) -> anyhow::Result<()> {
     if value.len() == 64
@@ -255,7 +257,7 @@ impl Database {
     ) -> anyhow::Result<Option<(bool, usize, usize, usize)>> {
         let changed = expected_allowed_scopes != allowed_scopes;
         let mut conn = self.lock_connection(crate::StoreDomain::OAuth);
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let updated = tx.execute(
             "UPDATE oauth_clients SET allowed_scopes = ?3
              WHERE client_id = ?1 AND allowed_scopes = ?2 AND revoked_at IS NULL",
@@ -367,33 +369,44 @@ impl Database {
         code_hash: &str,
     ) -> anyhow::Result<()> {
         validate_oauth_authorization_code_subject(record)?;
-        let conn = self.lock_connection(crate::StoreDomain::OAuth);
-        conn.execute(
-            "INSERT INTO oauth_authorization_codes (
-                id, code_hash, client_id, subject_kind, subject_id, user_id,
-                redirect_uri, scopes, code_challenge, code_challenge_method,
-                resource, shared_key_hash, created_at, expires_at, used_at, revoked_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-            params![
-                record.id,
-                code_hash,
-                record.client_id,
-                record.subject_kind,
-                record.subject_id,
-                record.user_id,
-                record.redirect_uri,
-                record.scopes,
-                record.code_challenge,
-                record.code_challenge_method,
-                record.resource,
-                record.shared_key_hash,
-                record.created_at,
-                record.expires_at,
-                record.used_at,
-                record.revoked_at,
-            ],
-        )?;
+        let mut conn = self.lock_connection(crate::StoreDomain::OAuth);
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        public_ingress::require_unbound_client(&tx, &record.client_id)?;
+        insert_authorization_code(&tx, record, code_hash)?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Issue a code and its exact entry/epoch binding in one writer transaction.
+    pub fn insert_public_ingress_oauth_authorization_code(
+        &self,
+        record: &OAuthAuthorizationCodeRecord,
+        code_hash: &str,
+        fence: &PublicIngressFence,
+    ) -> anyhow::Result<bool> {
+        validate_oauth_authorization_code_subject(record)?;
+        let mut conn = self.lock_connection(crate::StoreDomain::OAuth);
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(entry) = public_ingress::active_entry_for_fence(&tx, fence)? else {
+            return Ok(false);
+        };
+        let binding = GrantBinding {
+            entry_id: entry.entry_id,
+            auth_epoch: entry.auth_epoch,
+        };
+        if !public_ingress::binding_is_current(
+            &tx,
+            &binding,
+            &record.client_id,
+            record.user_id.as_deref(),
+            record.resource.as_deref(),
+        )? {
+            return Ok(false);
+        }
+        insert_authorization_code(&tx, record, code_hash)?;
+        public_ingress::insert_binding(&tx, "oauth_public_ingress_codes", &record.id, &binding)?;
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn get_oauth_authorization_code_by_hash(
@@ -404,7 +417,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, code_hash, client_id, subject_kind, subject_id, user_id,
                     redirect_uri, scopes, code_challenge, code_challenge_method,
-                    resource, shared_key_hash, created_at, expires_at, used_at, revoked_at
+                    resource, shared_key_hash, created_at, expires_at, used_at, revoked_at, admin_authority
              FROM oauth_authorization_codes
              WHERE code_hash = ?1 AND revoked_at IS NULL",
         )?;
@@ -463,7 +476,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, code_hash, client_id, subject_kind, subject_id, user_id,
                     redirect_uri, scopes, code_challenge, code_challenge_method,
-                    resource, shared_key_hash, created_at, expires_at, used_at, revoked_at
+                    resource, shared_key_hash, created_at, expires_at, used_at, revoked_at, admin_authority
              FROM oauth_authorization_codes
              WHERE code_hash = ?1",
         )?;
@@ -520,7 +533,7 @@ impl Database {
         // re-acquire the lock.
         {
             let mut conn = self.lock_connection(crate::StoreDomain::OAuth);
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
             // 1. Consume the authorization code atomically.
             let changed = tx.execute(
@@ -541,7 +554,7 @@ impl Database {
                 let mut stmt = tx.prepare(
                     "SELECT id, code_hash, client_id, subject_kind, subject_id, user_id,
                             redirect_uri, scopes, code_challenge, code_challenge_method,
-                            resource, shared_key_hash, created_at, expires_at, used_at, revoked_at
+                            resource, shared_key_hash, created_at, expires_at, used_at, revoked_at, admin_authority
                      FROM oauth_authorization_codes
                      WHERE code_hash = ?1",
                 )?;
@@ -553,6 +566,11 @@ impl Database {
                 }
             };
             validate_oauth_authorization_code_subject(&code_record)?;
+            if access_token_record.admin_authority != code_record.admin_authority
+                || refresh_token_record.admin_authority != code_record.admin_authority
+            {
+                anyhow::bail!("OAuth exchange authority mismatch");
+            }
             validate_oauth_subjects_match(
                 &code_record.subject_kind,
                 &code_record.subject_id,
@@ -560,13 +578,27 @@ impl Database {
                 &access_token_record.subject_id,
             )?;
 
+            let binding =
+                public_ingress::grant_binding(&tx, "oauth_public_ingress_codes", &code_record.id)?;
+            if !validate_issuance_binding(
+                &tx,
+                binding.as_ref(),
+                &code_record.client_id,
+                code_record.user_id.as_deref(),
+                code_record.resource.as_deref(),
+                access_token_record,
+                refresh_token_record,
+            )? {
+                return Ok(None);
+            }
+
             // 2. Insert access token.
             tx.execute(
                 "INSERT INTO oauth_access_tokens (
                     id, token_hash, client_id, subject_kind, subject_id, user_id,
                     scopes, resource, shared_key_hash, created_at, expires_at,
-                    revoked_at, last_used_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    revoked_at, last_used_at, admin_authority
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     access_token_record.id,
                     access_token_record.token_hash,
@@ -581,6 +613,7 @@ impl Database {
                     access_token_record.expires_at,
                     access_token_record.revoked_at,
                     access_token_record.last_used_at,
+                    access_token_record.admin_authority,
                 ],
             )?;
 
@@ -589,8 +622,8 @@ impl Database {
                 "INSERT INTO oauth_refresh_tokens (
                     id, token_hash, client_id, subject_kind, subject_id, user_id,
                     scopes, resource, shared_key_hash, created_at, expires_at,
-                    revoked_at, last_used_at, rotated_from_id
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    revoked_at, last_used_at, rotated_from_id, admin_authority
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     refresh_token_record.id,
                     refresh_token_record.token_hash,
@@ -606,9 +639,24 @@ impl Database {
                     refresh_token_record.revoked_at,
                     refresh_token_record.last_used_at,
                     refresh_token_record.rotated_from_id,
+                    refresh_token_record.admin_authority,
                 ],
             )?;
 
+            if let Some(binding) = &binding {
+                public_ingress::insert_binding(
+                    &tx,
+                    "oauth_public_ingress_access",
+                    &access_token_record.id,
+                    binding,
+                )?;
+                public_ingress::insert_binding(
+                    &tx,
+                    "oauth_public_ingress_refresh",
+                    &refresh_token_record.id,
+                    binding,
+                )?;
+            }
             tx.commit()?;
         } // MutexGuard dropped here.
 
@@ -620,13 +668,15 @@ impl Database {
 
     pub fn insert_oauth_access_token(&self, record: &OAuthAccessTokenRecord) -> anyhow::Result<()> {
         validate_oauth_access_token_subject(record)?;
-        let conn = self.lock_connection(crate::StoreDomain::OAuth);
-        conn.execute(
+        let mut conn = self.lock_connection(crate::StoreDomain::OAuth);
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        public_ingress::require_unbound_client(&tx, &record.client_id)?;
+        tx.execute(
             "INSERT INTO oauth_access_tokens (
                 id, token_hash, client_id, subject_kind, subject_id, user_id,
                 scopes, resource, shared_key_hash, created_at, expires_at,
-                revoked_at, last_used_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                revoked_at, last_used_at, admin_authority
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 record.id,
                 record.token_hash,
@@ -641,8 +691,10 @@ impl Database {
                 record.expires_at,
                 record.revoked_at,
                 record.last_used_at,
+                record.admin_authority,
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -654,7 +706,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, token_hash, client_id, subject_kind, subject_id, user_id,
                     scopes, resource, shared_key_hash, created_at, expires_at,
-                    revoked_at, last_used_at
+                    revoked_at, last_used_at, admin_authority
              FROM oauth_access_tokens
              WHERE token_hash = ?1 AND revoked_at IS NULL",
         )?;
@@ -710,13 +762,15 @@ impl Database {
         record: &OAuthRefreshTokenRecord,
     ) -> anyhow::Result<()> {
         validate_oauth_refresh_token_subject(record)?;
-        let conn = self.lock_connection(crate::StoreDomain::OAuth);
-        conn.execute(
+        let mut conn = self.lock_connection(crate::StoreDomain::OAuth);
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        public_ingress::require_unbound_client(&tx, &record.client_id)?;
+        tx.execute(
             "INSERT INTO oauth_refresh_tokens (
                 id, token_hash, client_id, subject_kind, subject_id, user_id,
                 scopes, resource, shared_key_hash, created_at, expires_at,
-                revoked_at, last_used_at, rotated_from_id
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                revoked_at, last_used_at, rotated_from_id, admin_authority
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 record.id,
                 record.token_hash,
@@ -732,8 +786,10 @@ impl Database {
                 record.revoked_at,
                 record.last_used_at,
                 record.rotated_from_id,
+                record.admin_authority,
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -745,7 +801,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, token_hash, client_id, subject_kind, subject_id, user_id,
                     scopes, resource, shared_key_hash, created_at, expires_at,
-                    revoked_at, last_used_at, rotated_from_id
+                    revoked_at, last_used_at, rotated_from_id, admin_authority
              FROM oauth_refresh_tokens
              WHERE token_hash = ?1 AND revoked_at IS NULL",
         )?;
@@ -806,7 +862,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, token_hash, client_id, subject_kind, subject_id, user_id,
                     scopes, resource, shared_key_hash, created_at, expires_at,
-                    revoked_at, last_used_at, rotated_from_id
+                    revoked_at, last_used_at, rotated_from_id, admin_authority
              FROM oauth_refresh_tokens
              WHERE token_hash = ?1",
         )?;
@@ -854,14 +910,14 @@ impl Database {
         // Scope the transaction so the MutexGuard is dropped after commit.
         {
             let mut conn = self.lock_connection(crate::StoreDomain::OAuth);
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
             // 1. Look up old refresh token (including revoked/expired).
             let old = {
                 let mut stmt = tx.prepare(
                     "SELECT id, token_hash, client_id, subject_kind, subject_id, user_id,
                             scopes, resource, shared_key_hash, created_at, expires_at,
-                            revoked_at, last_used_at, rotated_from_id
+                            revoked_at, last_used_at, rotated_from_id, admin_authority
                      FROM oauth_refresh_tokens
                      WHERE token_hash = ?1",
                 )?;
@@ -889,12 +945,31 @@ impl Database {
             }
 
             validate_oauth_refresh_token_subject(&old)?;
+            if access_token_record.admin_authority != old.admin_authority
+                || new_refresh_token_record.admin_authority != old.admin_authority
+            {
+                anyhow::bail!("OAuth rotation authority mismatch");
+            }
             validate_oauth_subjects_match(
                 &old.subject_kind,
                 &old.subject_id,
                 &access_token_record.subject_kind,
                 &access_token_record.subject_id,
             )?;
+
+            let binding =
+                public_ingress::grant_binding(&tx, "oauth_public_ingress_refresh", &old.id)?;
+            if !validate_issuance_binding(
+                &tx,
+                binding.as_ref(),
+                &old.client_id,
+                old.user_id.as_deref(),
+                old.resource.as_deref(),
+                access_token_record,
+                new_refresh_token_record,
+            )? {
+                return Ok(RotateResult::Revoked);
+            }
 
             // 5. Revoke old token.
             let changed = tx.execute(
@@ -914,8 +989,8 @@ impl Database {
                 "INSERT INTO oauth_access_tokens (
                     id, token_hash, client_id, subject_kind, subject_id, user_id,
                     scopes, resource, shared_key_hash, created_at, expires_at,
-                    revoked_at, last_used_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    revoked_at, last_used_at, admin_authority
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     access_token_record.id,
                     access_token_record.token_hash,
@@ -930,6 +1005,7 @@ impl Database {
                     access_token_record.expires_at,
                     access_token_record.revoked_at,
                     access_token_record.last_used_at,
+                    access_token_record.admin_authority,
                 ],
             )?;
 
@@ -938,8 +1014,8 @@ impl Database {
                 "INSERT INTO oauth_refresh_tokens (
                     id, token_hash, client_id, subject_kind, subject_id, user_id,
                     scopes, resource, shared_key_hash, created_at, expires_at,
-                    revoked_at, last_used_at, rotated_from_id
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    revoked_at, last_used_at, rotated_from_id, admin_authority
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     new_refresh_token_record.id,
                     new_refresh_token_record.token_hash,
@@ -955,9 +1031,24 @@ impl Database {
                     new_refresh_token_record.revoked_at,
                     new_refresh_token_record.last_used_at,
                     new_refresh_token_record.rotated_from_id,
+                    new_refresh_token_record.admin_authority,
                 ],
             )?;
 
+            if let Some(binding) = &binding {
+                public_ingress::insert_binding(
+                    &tx,
+                    "oauth_public_ingress_access",
+                    &access_token_record.id,
+                    binding,
+                )?;
+                public_ingress::insert_binding(
+                    &tx,
+                    "oauth_public_ingress_refresh",
+                    &new_refresh_token_record.id,
+                    binding,
+                )?;
+            }
             tx.commit()?;
 
             // Save old record metadata before the block ends (old is moved
@@ -1007,6 +1098,7 @@ fn row_to_oauth_authorization_code(
     row: &rusqlite::Row,
 ) -> rusqlite::Result<OAuthAuthorizationCodeRecord> {
     Ok(OAuthAuthorizationCodeRecord {
+        admin_authority: row.get(16)?,
         id: row.get(0)?,
         code_hash: row.get(1)?,
         client_id: row.get(2)?,
@@ -1028,6 +1120,7 @@ fn row_to_oauth_authorization_code(
 
 fn row_to_oauth_access_token(row: &rusqlite::Row) -> rusqlite::Result<OAuthAccessTokenRecord> {
     Ok(OAuthAccessTokenRecord {
+        admin_authority: row.get(13)?,
         id: row.get(0)?,
         token_hash: row.get(1)?,
         client_id: row.get(2)?,
@@ -1046,6 +1139,7 @@ fn row_to_oauth_access_token(row: &rusqlite::Row) -> rusqlite::Result<OAuthAcces
 
 fn row_to_oauth_refresh_token(row: &rusqlite::Row) -> rusqlite::Result<OAuthRefreshTokenRecord> {
     Ok(OAuthRefreshTokenRecord {
+        admin_authority: row.get(14)?,
         id: row.get(0)?,
         token_hash: row.get(1)?,
         client_id: row.get(2)?,
@@ -1061,4 +1155,79 @@ fn row_to_oauth_refresh_token(row: &rusqlite::Row) -> rusqlite::Result<OAuthRefr
         last_used_at: row.get(12)?,
         rotated_from_id: row.get(13)?,
     })
+}
+
+fn insert_authorization_code(
+    conn: &Connection,
+    record: &OAuthAuthorizationCodeRecord,
+    code_hash: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+            "INSERT INTO oauth_authorization_codes (
+                id, code_hash, client_id, subject_kind, subject_id, user_id,
+                redirect_uri, scopes, code_challenge, code_challenge_method,
+                resource, shared_key_hash, created_at, expires_at, used_at, revoked_at, admin_authority
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                record.id,
+                code_hash,
+                record.client_id,
+                record.subject_kind,
+                record.subject_id,
+                record.user_id,
+                record.redirect_uri,
+                record.scopes,
+                record.code_challenge,
+                record.code_challenge_method,
+                record.resource,
+                record.shared_key_hash,
+                record.created_at,
+                record.expires_at,
+                record.used_at,
+                record.revoked_at,
+                record.admin_authority,
+            ],
+        )?;
+    Ok(())
+}
+
+fn validate_issuance_binding(
+    conn: &Connection,
+    binding: Option<&GrantBinding>,
+    source_client_id: &str,
+    source_user_id: Option<&str>,
+    source_resource: Option<&str>,
+    access: &OAuthAccessTokenRecord,
+    refresh: &OAuthRefreshTokenRecord,
+) -> anyhow::Result<bool> {
+    let Some(binding) = binding else {
+        public_ingress::require_unbound_client(conn, source_client_id)?;
+        public_ingress::require_unbound_client(conn, &access.client_id)?;
+        public_ingress::require_unbound_client(conn, &refresh.client_id)?;
+        return Ok(true);
+    };
+    if access.client_id != source_client_id || refresh.client_id != source_client_id {
+        return Ok(false);
+    }
+    // Check the canonical epoch even when the OAuth resource parameter is
+    // omitted. Outgoing tokens cannot change owner or ingress origin either.
+    Ok(public_ingress::binding_is_current(
+        conn,
+        binding,
+        source_client_id,
+        source_user_id,
+        source_resource,
+    )? && public_ingress::binding_is_current(
+        conn,
+        binding,
+        &access.client_id,
+        access.user_id.as_deref(),
+        access.resource.as_deref(),
+    )? && public_ingress::binding_is_current(
+        conn,
+        binding,
+        &refresh.client_id,
+        refresh.user_id.as_deref(),
+        refresh.resource.as_deref(),
+    )?)
 }

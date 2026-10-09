@@ -46,6 +46,94 @@ fn source_fence_handoff_and_generation_exhaustion_cannot_manufacture_quiescence(
     );
 }
 
+#[test]
+fn presentation_completion_does_not_manufacture_validation_quiescence() {
+    let registry = ValidationSourceRegistry::default();
+    registry
+        .begin("p")
+        .unwrap()
+        .finish(&crate::tool_runtime::ToolResult::ok(
+            serde_json::json!({"job_id":"wc_job_0123456789abcdef","execution_state":"pending"}),
+        ));
+    let pending = registry.capture_presentation("p").unwrap();
+    assert_eq!(pending.pending_jobs.len(), 1);
+    assert!(!registry.capture("p").unwrap().quiescent);
+    assert!(registry.resolve_presentation_jobs("p", &pending));
+    assert!(registry
+        .capture_presentation("p")
+        .unwrap()
+        .pending_jobs
+        .is_empty());
+    assert!(!registry.capture("p").unwrap().quiescent);
+    let old = registry.capture_presentation("p").unwrap();
+    let active = registry.begin("p").unwrap();
+    assert!(registry.capture_presentation("p").is_none());
+    assert!(!registry.resolve_presentation_jobs("p", &old));
+    drop(active);
+    assert!(registry.capture_presentation("p").is_none());
+}
+
+#[test]
+fn completion_proof_preserves_nonnull_job_markers_and_ignores_business_success() {
+    use serde_json::{json, Value};
+    for success in [false, true] {
+        for job in [
+            None,
+            Some(Value::Null),
+            Some(json!("")),
+            Some(json!(false)),
+            Some(json!(7)),
+            Some(json!({})),
+            Some(json!("wc_job_0123456789abcdef")),
+        ] {
+            for (proof, known) in [
+                (json!({"state_changed":false}), true),
+                (json!({"command_completed":true}), true),
+                (json!({"command_started":false}), true),
+                (json!({"state_changed":null}), false),
+                (json!({"execution_state":"completed"}), false),
+                (
+                    json!({"execution_state":"outcome_unknown","state_changed":false}),
+                    false,
+                ),
+                (
+                    json!({"failure_kind":"outcome_unknown","state_changed":false}),
+                    false,
+                ),
+                // Not additional completion restrictions in this domain.
+                (
+                    json!({"execution_state":"pending","state_changed":false}),
+                    true,
+                ),
+                (
+                    json!({"error_kind":"outcome_unknown","state_changed":false}),
+                    true,
+                ),
+            ] {
+                let mut output = proof;
+                if let Some(job) = &job {
+                    output["job_id"] = job.clone();
+                }
+                let expected = known && job.as_ref().is_none_or(Value::is_null);
+                let registry = ValidationSourceRegistry::default();
+                registry
+                    .begin("p")
+                    .unwrap()
+                    .finish(&crate::tool_runtime::ToolResult {
+                        success,
+                        output: output.clone(),
+                        error: None,
+                    });
+                assert_eq!(
+                    registry.capture("p").unwrap().quiescent,
+                    expected,
+                    "success={success}: {output}"
+                );
+            }
+        }
+    }
+}
+
 fn noop() -> crate::tool_runtime::ToolResult {
     crate::tool_runtime::ToolResult::ok(serde_json::json!({"state_changed": false}))
 }

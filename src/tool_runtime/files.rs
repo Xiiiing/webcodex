@@ -15,7 +15,7 @@ use super::helpers::{
     validate_project_relative_path,
 };
 use super::project_resolution::ResolvedProject;
-use super::read_revisions::{ReadRevisionLookupError, ReadRevisionTarget, MAX_JSON_SAFE_INTEGER};
+use super::read_revisions::{ReadRevisionLookupError, MAX_JSON_SAFE_INTEGER};
 use super::shell::{dispatch_uncertainty_lifecycle, runner_command_lifecycle};
 use super::tool_inputs::{
     ApplyFileChangeInput, ApplyFileChangeKind, ApplyTextEditInput, ApplyTextEditKind,
@@ -42,6 +42,7 @@ mod artifacts;
 mod inspection;
 mod mutations;
 mod search;
+mod spreadsheet;
 
 pub(crate) use artifacts::{
     artifact_upload_begin_failure_is_definite, artifact_upload_failure_is_definite,
@@ -56,6 +57,7 @@ pub(crate) use artifacts::{MAX_PROJECT_ARTIFACT_BYTES, MAX_READ_PROJECT_ARTIFACT
 pub(crate) use inspection::LIST_TRACKED_STDERR_MAX_CHARS;
 pub(crate) use inspection::{
     effective_read_file_range, slice_read_file_result, slice_read_file_success_output,
+    ProjectFileReader,
 };
 #[cfg(test)]
 pub(crate) use inspection::{

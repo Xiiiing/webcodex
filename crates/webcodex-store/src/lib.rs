@@ -22,9 +22,14 @@ mod trace_query;
 pub use trace_query::{ToolTraceCallRecord, ToolTraceQueryFilter};
 mod communication;
 mod connection_observation;
+mod history_budget;
+pub use history_budget::HistoryReadBudget;
+
 mod external_observations;
 #[cfg(test)]
 mod external_observations_tests;
+mod optional_projection;
+mod store_primitives;
 pub use external_observations::{
     ExternalObservation, ExternalObservationError, MAX_EXTERNAL_OBSERVATIONS_PER_SESSION,
 };
@@ -43,15 +48,24 @@ mod memory;
 mod model_reference;
 pub mod models;
 mod oauth;
+mod public_ingress;
+pub use public_ingress::{
+    PublicIngressEntry, PublicIngressEntrySpec, PublicIngressFence, PublicIngressMode,
+};
 mod peer_collaboration;
+#[cfg(test)]
+mod public_ingress_tests;
 mod window_collaboration;
 #[cfg(test)]
 mod window_collaboration_tests;
+mod window_history;
 pub use window_collaboration::*;
 mod project_reference;
 mod schema;
 mod server_instance;
 mod window_activity;
+mod window_inventory;
+pub use window_inventory::{WindowInventoryPage, WindowInventoryQuery, WindowInventoryRow};
 
 pub use self::admin_project_lifecycle::{AdminProjectAudit, AdminProjectIdempotencyRecord};
 pub use self::agent_continuation_reference::AgentContinuationReferenceRecord;
@@ -91,14 +105,13 @@ pub use self::artifact_handoff::{
 };
 pub use self::communication::{
     AgentEndpointLifecycle, AgentEndpointMutation, AgentEndpointRecord, AgentIdentityMutation,
-    AgentIdentityPage, AgentInboxItem, AgentInboxPage, AgentProfilePatch, CommunicationPrincipal,
-    CommunicationStoreError, ConversationAccess, ConversationDetailRecord, ConversationLifecycle,
-    ConversationMessageMutation, ConversationMessageRecord, ConversationMutation, ConversationPage,
+    AgentIdentityPage, AgentInboxItem, AgentInboxPage, AgentProfilePatch, ConversationAccess,
+    ConversationDetailRecord, ConversationLifecycle, ConversationMessageMutation,
+    ConversationMessageRecord, ConversationMutation, ConversationPage,
     ConversationParticipantRecord, ConversationSummaryRecord, DeliveryConsumeResult,
     DurableAgentIdentity, McpAppEndpointRecovery, MessageAuthorRecord, MessageDeliveryRecord,
     MessageDeliveryState, NewAgentEndpoint, NewAgentIdentity, NewConversation,
-    NewConversationMessage, COMMUNICATION_PRINCIPAL_DIGEST_PREFIX, MAX_COMMUNICATION_LIST_LIMIT,
-    MAX_DURABLE_AGENTS,
+    NewConversationMessage, MAX_COMMUNICATION_LIST_LIMIT, MAX_DURABLE_AGENTS,
 };
 pub(crate) use self::connection_observation::StoreDomain;
 pub use self::goal::{
@@ -141,10 +154,20 @@ pub use self::peer_collaboration::{
 };
 pub use self::project_reference::{ProjectReferenceRecord, ProjectReferenceStoreError};
 pub use self::server_instance::ServerInstanceGuard;
+pub use self::store_primitives::{
+    CommunicationPrincipal, CommunicationStoreError, COMMUNICATION_PRINCIPAL_DIGEST_PREFIX,
+};
 pub use self::window_activity::{MAX_WINDOW_ACTIVITY_LIMIT, MAX_WINDOW_LINK_LIMIT};
 
 pub struct Database {
     conn: Mutex<Connection>,
+    // Exactly one additional, read-only WAL connection for potentially long history.
+    // Fast authority/reference/receipt reads stay on the canonical writer lane.
+    history_reader: std::sync::OnceLock<Mutex<Connection>>,
+    #[cfg(any(test, feature = "root-test-support"))]
+    window_history_reads: std::sync::atomic::AtomicUsize,
+    #[cfg(any(test, feature = "root-test-support"))]
+    window_inventory_reads: std::sync::atomic::AtomicUsize,
     connection_observer: Arc<dyn StoreConnectionObserver>,
     state_path: PathBuf,
 }
@@ -153,6 +176,11 @@ impl Database {
     fn from_connection(conn: Connection, state_path: PathBuf) -> Self {
         Self {
             conn: Mutex::new(conn),
+            history_reader: std::sync::OnceLock::new(),
+            #[cfg(any(test, feature = "root-test-support"))]
+            window_history_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(any(test, feature = "root-test-support"))]
+            window_inventory_reads: std::sync::atomic::AtomicUsize::new(0),
             connection_observer: Arc::new(TracingStoreConnectionObserver),
             state_path,
         }
@@ -160,6 +188,29 @@ impl Database {
 
     pub(crate) fn lock_connection(&self, domain: StoreDomain) -> StoreConnectionGuard<'_> {
         observed_lock_connection(&self.conn, self.connection_observer.as_ref(), domain)
+    }
+
+    pub(crate) fn open_history_reader(&self) -> anyhow::Result<()> {
+        let connection = Connection::open_with_flags(
+            &self.state_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.execute_batch("PRAGMA query_only=ON; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA cache_size=-2048;")?;
+        self.history_reader
+            .set(Mutex::new(connection))
+            .map_err(|_| anyhow::anyhow!("history reader already initialized"))
+    }
+
+    pub(crate) fn lock_history_connection(
+        &self,
+        domain: StoreDomain,
+    ) -> anyhow::Result<history_budget::HistoryConnectionGuard<'_>> {
+        self.history_connection(
+            self.history_reader
+                .get()
+                .expect("history reader initialized before Database::open returns"),
+            domain,
+        )
     }
 
     pub(crate) fn state_path(&self) -> &Path {
@@ -180,6 +231,14 @@ pub enum PairingConsumeResult {
 impl Database {
     /// Test-only access to the underlying connection so tests can assert on
     /// raw storage (e.g. that a plaintext token is never stored as `key_hash`).
+    pub fn window_read_counts_for_test(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.window_history_reads.load(Relaxed),
+            self.window_inventory_reads.load(Relaxed),
+        )
+    }
+
     pub fn conn_for_tests(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap()
     }

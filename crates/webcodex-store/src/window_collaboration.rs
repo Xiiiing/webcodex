@@ -71,7 +71,9 @@ pub struct WindowOperatorAttention {
     pub projection_rollbacks: Vec<PeerProjectionRollback>,
 }
 
-fn transcript_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WindowCollaborationMessage> {
+pub(super) fn transcript_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<WindowCollaborationMessage> {
     Ok(WindowCollaborationMessage {
         message_id: row.get(0)?,
         source: row.get(1)?,
@@ -152,12 +154,6 @@ impl Database {
             params![message_id,input.principal_kind,input.principal_id,input.recipient_window_key,
                 input.context_session_id,input.context_project,input.kind,input.priority,input.message,
                 serde_json::to_string(&input.tags)?,input.requires_ack,input.created_at_ms,key_hash,payload_hash])?;
-        tx.execute(
-            "DELETE FROM window_operator_messages WHERE rowid IN (
-            SELECT rowid FROM window_operator_messages WHERE principal_kind=?1 AND principal_id=?2
-            ORDER BY created_at_ms DESC, message_id DESC LIMIT -1 OFFSET 512)",
-            params![input.principal_kind, input.principal_id],
-        )?;
         tx.commit()?;
         Ok(WindowOperatorDeliveryOutcome::Delivered {
             message_id,
@@ -241,14 +237,6 @@ impl Database {
                 key_hash,
                 payload_hash
             ],
-        )?;
-        tx.execute(
-            "DELETE FROM window_model_replies WHERE rowid IN (
-                SELECT rowid FROM window_model_replies
-                WHERE principal_kind=?1 AND principal_id=?2
-                ORDER BY created_at_ms DESC, message_id DESC LIMIT -1 OFFSET 512
-             )",
-            params![input.principal_kind, input.principal_id],
         )?;
         tx.commit()?;
         Ok(WindowModelReplyDeliveryOutcome::Delivered {
@@ -344,17 +332,8 @@ impl Database {
         window: &str,
         limit: usize,
     ) -> anyhow::Result<(Vec<WindowCollaborationMessage>, bool)> {
-        let limit = limit.clamp(1, 100);
-        let mut messages =
-            self.list_window_operator_messages(kind, principal, window, limit + 1)?;
-        messages.extend(self.list_window_model_replies(kind, principal, window, limit + 1)?);
-        messages.extend(self.list_window_peer_messages(kind, principal, window, limit + 1)?);
-        messages.sort_by(|a, b| {
-            (a.created_at_ms, &a.message_id).cmp(&(b.created_at_ms, &b.message_id))
-        });
-        let truncated = messages.len() > limit;
-        messages.drain(..messages.len().saturating_sub(limit));
-        Ok((messages, truncated))
+        self.window_collaboration_page(kind, principal, window, limit, None)?
+            .ok_or_else(|| anyhow::anyhow!("unavailable transcript cursor"))
     }
 
     pub fn take_window_operator_attention(
@@ -366,7 +345,32 @@ impl Database {
         now: i64,
         limit: usize,
     ) -> anyhow::Result<WindowOperatorAttention> {
-        let mut conn = self.lock_connection(StoreDomain::Communication);
+        self.project_window_operator_attention(
+            kind,
+            principal,
+            window,
+            ack_ids,
+            now,
+            limit,
+            None,
+            |_| true,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("required projection unavailable"))
+    }
+
+    pub fn project_window_operator_attention(
+        &self,
+        kind: &str,
+        principal: &str,
+        window: &str,
+        ack_ids: &[String],
+        now: i64,
+        limit: usize,
+        deadline: Option<std::time::Instant>,
+        accept: impl FnOnce(&WindowOperatorAttention) -> bool,
+    ) -> anyhow::Result<Option<WindowOperatorAttention>> {
+        let deadline = if ack_ids.is_empty() { deadline } else { None };
+        self.with_projection_connection(StoreDomain::Communication,deadline,|conn| {
         let tx = conn.transaction()?;
         let mut batch = WindowOperatorAttention::default();
         for id in ack_ids.iter().take(8) {
@@ -377,12 +381,7 @@ impl Database {
             }
         }
         {
-            let mut stmt = tx.prepare(&format!(
-                "{OPERATOR_SELECT} WHERE principal_kind=?1 AND principal_id=?2
-                AND recipient_window_key=?3 AND first_ack_observed_at_ms IS NULL
-                AND (first_projected_at_ms IS NULL OR requires_ack=1)
-                ORDER BY (first_projected_at_ms IS NULL) DESC, created_at_ms, message_id LIMIT ?4"
-            ))?;
+            let mut stmt = tx.prepare(include_str!("window_operator_attention.sql"))?;
             batch.messages = stmt
                 .query_map(
                     params![kind, principal, window, limit.clamp(1, 8) as i64],
@@ -390,6 +389,9 @@ impl Database {
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
         }
+        let mut preview=batch.messages.clone();
+        for message in &mut preview { message.first_projected_at_ms.get_or_insert(now); }
+        if !accept(&WindowOperatorAttention { messages:preview, accepted_ack_ids:batch.accepted_ack_ids.clone(), projection_rollbacks:Vec::new() }) { batch.messages.clear(); }
         for message in &mut batch.messages {
             batch.projection_rollbacks.push(tx.query_row(
                 "SELECT last_projected_at_ms, projection_count
@@ -408,8 +410,10 @@ impl Database {
                 last_projected_at_ms=?2, projection_count=projection_count+1 WHERE message_id=?1",params![message.message_id,now])?;
             message.first_projected_at_ms.get_or_insert(now);
         }
+        crate::optional_projection::check_deadline(deadline)?;
         tx.commit()?;
         Ok(batch)
+        })
     }
 
     pub fn rollback_window_operator_attention(

@@ -84,6 +84,17 @@ class PathRiskFixtureTests(unittest.TestCase):
         self.assertEqual(result["needs_macos"], "true")
         self.assertEqual(result["needs_desktop_package"], "false")
 
+    def test_production_warning_gate_script_requires_native_core_lanes(self) -> None:
+        result = classify("scripts/check_production_warnings.py")
+        self.assertEqual(result["needs_windows_core"], "true")
+        self.assertEqual(result["needs_windows_runner"], "false")
+        self.assertEqual(result["needs_windows_package"], "false")
+        self.assertEqual(result["needs_windows_desktop"], "false")
+        self.assertEqual(result["needs_macos"], "true")
+        self.assertEqual(result["needs_macos_desktop"], "false")
+        self.assertEqual(result["needs_full_native"], "false")
+        self.assertIn("production-warning-gate", result["categories"])
+
     def test_runner_plugin_requires_windows_runner_and_macos(self) -> None:
         result = classify("crates/webcodex-runner/src/webcodex_runner/plugin.rs")
         self.assertEqual(result["needs_windows_runner"], "true")
@@ -130,6 +141,9 @@ class PathRiskFixtureTests(unittest.TestCase):
             "plugins/agent-browser/src/plugin.ts",
             "plugins/agent-browser/tests/core.test.mjs",
             "plugins/agent-browser/package-lock.json",
+            "plugins/agent-environment/src/pi.mjs",
+            "plugins/agent-environment/test/pi.integration.mjs",
+            "plugins/agent-environment/package-lock.json",
         ):
             with self.subTest(path=path):
                 result = classify(path)
@@ -216,6 +230,10 @@ class PathRiskFixtureTests(unittest.TestCase):
             "scripts/macos_sign_local_runner.sh",
             "scripts/macos_ci_developer_id_setup.sh",
             "scripts/macos_sign_runner.sh",
+            "scripts/macos_ci_signing_setup.sh",
+            "scripts/macos_sign_self_signed.sh",
+            "scripts/macos_finalize_desktop.sh",
+            "scripts/macos_finalize_dmg.sh",
             "scripts/verify_macos_desktop_identity.sh",
         ):
             with self.subTest(path=path):

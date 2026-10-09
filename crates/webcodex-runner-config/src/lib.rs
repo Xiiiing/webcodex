@@ -101,6 +101,10 @@ pub fn effective_allowed_roots(
 }
 
 pub fn validate_runner_init_options(opts: &RunnerInitOptions) -> Result<(), String> {
+    webcodex_core::runner_protocol::validate_optional_runner_field(
+        &opts.display_name,
+        "display_name",
+    )?;
     if opts.server_url.trim().is_empty() {
         return Err("--server-url is required".to_string());
     }
@@ -200,6 +204,10 @@ struct GeneratedRunnerPolicy {
 }
 
 pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, String> {
+    webcodex_core::runner_protocol::validate_optional_runner_field(
+        &opts.display_name,
+        "display_name",
+    )?;
     let effective_roots = effective_allowed_roots(&opts.allowed_roots, opts.allow_cwd_anywhere)?;
     let cfg = GeneratedRunnerConfig {
         server_url: opts.server_url.trim_end_matches('/').to_string(),
@@ -220,6 +228,7 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             file_write: true,
             // The running binary advertises the internal optimized export read
             // only after installing that request handler.
+            file_list_page: false,
             artifact_export_chunk_read: false,
             // Large export metadata is likewise a running-binary capability;
             // generated config is not authoritative for registration semantics.
@@ -285,7 +294,10 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             // by the running binary, never inferred from generated static config.
             project_go_single_module_v1: false,
             project_validation_package_scope_v1: false,
+            project_all_packages_v1: false,
             project_validation_test_options_v1: false,
+            project_validation_python_pytest_v1: false,
+            project_validation_python_ruff_v1: false,
             // Like JSON parsing, first-class durable go_test support is
             // advertised by the running binary, never by generated static config.
             structured_go_test_tool: false,
@@ -328,7 +340,12 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             browser_control: false,
             browser_element_action_admission: false,
             browser_batch: false,
+            browser_semantic_query: false,
+            browser_complex_controls: false,
             browser_launch: false,
+            browser_managed_profile: false,
+            browser_surface_handoff: false,
+            browser_extension_bridge: false,
             // Desktop observation is a runtime/platform capability and is never
             // claimed by generated static config.
             computer_observe: false,
@@ -577,6 +594,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn runner_name_uses_registration_bounds_before_generation() {
+        let mut opts = init_opts(PathBuf::from("-"));
+        for valid in [None, Some("".into()), Some("😀".repeat(200))] {
+            opts.display_name = valid;
+            validate_runner_init_options(&opts).unwrap();
+            let content = generated_runner_config_toml(&opts).unwrap();
+            let parsed: toml::Value = toml::from_str(&content).unwrap();
+            assert_eq!(
+                parsed.get("display_name").and_then(toml::Value::as_str),
+                opts.display_name.as_deref()
+            );
+        }
+        for invalid in ["😀".repeat(201), "private\0value".into()] {
+            opts.display_name = Some(invalid);
+            assert!(validate_runner_init_options(&opts).is_err());
+            assert!(generated_runner_config_toml(&opts).is_err());
+        }
+    }
     #[test]
     fn polling_capable_init_rejects_interval_beyond_online_window_slack() {
         for transport in [TRANSPORT_POLLING, TRANSPORT_AUTO] {

@@ -57,7 +57,11 @@ impl DesktopCore {
                 },
             );
         }
-        apply_openai_tunnel_configuration(&mut snapshot, &tunnel_config);
+        apply_openai_tunnel_configuration(
+            &mut snapshot,
+            &tunnel_config,
+            config.persistent_environment.is_some(),
+        );
         snapshot.regular_tunnel_available = true;
         snapshot.powershell_runtime = crate::platform::powershell_runtime_snapshot();
         apply_config_projection(&mut snapshot, &config);
@@ -87,8 +91,7 @@ impl DesktopCore {
             .unwrap_or_else(|| resource_dir.join("webcodex-runtime"));
         let mut adapter = WebCodexAdapter::new(Some(runtime_directory));
         adapter.set_runtime_source(config.runtime_binary_source.clone());
-        adapter.set_runtime_approval(config.runtime_binary_fingerprint.clone());
-        Ok(Self {
+        let mut core = Self {
             data_dir,
             config_path,
             config,
@@ -109,7 +112,9 @@ impl DesktopCore {
             supervisor,
             activity,
             published,
-        })
+        };
+        core.publish_snapshot();
+        Ok(core)
     }
 
     pub async fn get_state(&mut self) -> DesktopResult<DesktopStateSnapshot> {
@@ -288,7 +293,11 @@ impl DesktopCore {
         self.project_connections();
         self.snapshot.current_operation = None;
         self.snapshot.activity_sequence = self.activity.latest_sequence();
-        apply_openai_tunnel_configuration(&mut self.snapshot, &self.tunnel_config);
+        apply_openai_tunnel_configuration(
+            &mut self.snapshot,
+            &self.tunnel_config,
+            self.config.persistent_environment.is_some(),
+        );
         self.snapshot.regular_tunnel_available = true;
         self.snapshot.powershell_runtime = crate::platform::powershell_runtime_snapshot();
         apply_config_projection(&mut self.snapshot, &self.config);
@@ -301,135 +310,7 @@ impl DesktopCore {
     }
 
     fn terminalize_failed_start(&mut self, cancelled: bool) {
-        let server = if self.snapshot.readiness.server == ServerReadiness::Starting {
-            if cancelled {
-                ServerReadiness::Stopped
-            } else {
-                ServerReadiness::Error
-            }
-        } else {
-            self.snapshot.readiness.server.clone()
-        };
-        let runner = if self.snapshot.readiness.runner == RunnerReadiness::Connecting {
-            if cancelled {
-                RunnerReadiness::Stopped
-            } else {
-                RunnerReadiness::Error
-            }
-        } else {
-            self.snapshot.readiness.runner.clone()
-        };
-        let exposure = if self.snapshot.readiness.exposure == ExposureReadiness::Starting {
-            if cancelled {
-                ExposureReadiness::Disabled
-            } else {
-                ExposureReadiness::Error
-            }
-        } else {
-            self.snapshot.readiness.exposure.clone()
-        };
-        self.snapshot.readiness = aggregate_readiness(
-            server,
-            runner,
-            exposure,
-            self.snapshot.readiness.project.clone(),
-        );
-    }
-
-    fn reconcile_after_operation_failure(
-        &mut self,
-        kind: DesktopOperationKind,
-        baseline: &ProcessBaseline,
-        cleanup: ProcessCleanup,
-        cancelled: bool,
-    ) {
-        let observed_binaries = self.snapshot.binaries.clone();
-        match kind {
-            DesktopOperationKind::RuntimeResume => {
-                // Resume is a desired-state replay of an already committed setup.
-                // If any step fails or is cancelled, newly owned processes have
-                // already been reclaimed above; restore the last published view
-                // rather than leaving a synthetic "starting" state behind.
-                self.snapshot = baseline.snapshot.clone();
-            }
-            DesktopOperationKind::QuickShareStart => {
-                // Quick Share is intentionally ephemeral. Any failed start has
-                // already stopped (or will have cleanup stop) the newly owned
-                // foreground process, so return the public topology to the
-                // last committed runtime instead of leaving "starting" behind.
-                self.snapshot = baseline.snapshot.clone();
-            }
-            DesktopOperationKind::RegularTunnelStart if cancelled => {
-                // User cancellation is not a tunnel failure. Restore the last
-                // observed full-runtime state after the exact owned tunnel is
-                // reclaimed rather than publishing a synthetic tunnel error.
-                self.snapshot = baseline.snapshot.clone();
-            }
-            DesktopOperationKind::RuntimeRefresh if cancelled => {
-                // A cancelled observation must not partially overwrite the
-                // last published control-plane state.
-                self.snapshot = baseline.snapshot.clone();
-            }
-            DesktopOperationKind::LocalSetup => {
-                let server = if cleanup.local_server {
-                    ServerReadiness::Stopped
-                } else if self.snapshot.readiness.server == ServerReadiness::Starting {
-                    baseline.snapshot.readiness.server.clone()
-                } else {
-                    self.snapshot.readiness.server.clone()
-                };
-                let runner = if cleanup.local_runner {
-                    RunnerReadiness::Stopped
-                } else if self.snapshot.readiness.runner == RunnerReadiness::Connecting {
-                    baseline.snapshot.readiness.runner.clone()
-                } else {
-                    self.snapshot.readiness.runner.clone()
-                };
-                let project = if cleanup.local_server || cleanup.local_runner {
-                    self.snapshot
-                        .project
-                        .as_ref()
-                        .map(|_| ProjectReadiness::Configured)
-                        .unwrap_or(ProjectReadiness::None)
-                } else {
-                    self.snapshot.readiness.project.clone()
-                };
-                self.snapshot.readiness = aggregate_readiness(
-                    server,
-                    runner,
-                    self.snapshot.readiness.exposure.clone(),
-                    project,
-                );
-            }
-            DesktopOperationKind::RemoteSetup => {
-                let runner = if cleanup.local_runner {
-                    RunnerReadiness::Stopped
-                } else if self.snapshot.readiness.runner == RunnerReadiness::Connecting {
-                    baseline.snapshot.readiness.runner.clone()
-                } else {
-                    self.snapshot.readiness.runner.clone()
-                };
-                let project = if cleanup.local_runner {
-                    self.snapshot
-                        .project
-                        .as_ref()
-                        .map(|_| ProjectReadiness::Configured)
-                        .unwrap_or(ProjectReadiness::None)
-                } else {
-                    self.snapshot.readiness.project.clone()
-                };
-                self.snapshot.readiness = aggregate_readiness(
-                    self.snapshot.readiness.server.clone(),
-                    runner,
-                    self.snapshot.readiness.exposure.clone(),
-                    project,
-                );
-            }
-            _ => {}
-        }
-        if observed_binaries.is_some() {
-            self.snapshot.binaries = observed_binaries;
-        }
+        operation_completion::terminalize_failed_start(&mut self.snapshot, cancelled);
     }
 
     pub async fn resume_saved_runtime(
@@ -649,7 +530,6 @@ impl DesktopCore {
         self.get_state().await
     }
 
-    #[cfg(test)]
     pub async fn configure_local_setup(
         &mut self,
         project_path: Option<&str>,

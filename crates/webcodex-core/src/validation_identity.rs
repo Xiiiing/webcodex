@@ -22,6 +22,9 @@ pub enum ToolValidationIdentityKind {
     CargoTest,
     GoTest,
     GoVet,
+    PythonPytest,
+    PythonRuffCheck,
+    PythonRuffFormat,
     Project,
 }
 
@@ -34,6 +37,9 @@ impl ToolValidationIdentityKind {
             Self::CargoTest => Some("cargo_test"),
             Self::GoTest => Some("go_test"),
             Self::GoVet => Some("go_vet"),
+            Self::PythonPytest => Some("python:pytest:test"),
+            Self::PythonRuffCheck => Some("python:ruff:check"),
+            Self::PythonRuffFormat => Some("python:ruff:format"),
         }
     }
 }
@@ -204,6 +210,19 @@ pub fn structured_validation_target_identity(
             }
             semantic
         }
+        ToolValidationIdentityKind::PythonRuffCheck
+        | ToolValidationIdentityKind::PythonRuffFormat => {
+            serde_json::json!({"tool":tool_name,"kind": if kind == ToolValidationIdentityKind::PythonRuffCheck { "check" } else { "format" },"cwd":cwd})
+        }
+        ToolValidationIdentityKind::PythonPytest => {
+            let filter = match obj.get("filter") {
+                None | Some(Value::Null) => None,
+                Some(value) => {
+                    crate::runner_protocol::normalize_pytest_filter(value.as_str()?).ok()?
+                }
+            };
+            serde_json::json!({"tool":tool_name,"kind":"test","cwd":cwd,"filter":filter})
+        }
         ToolValidationIdentityKind::GoVet => {
             if obj.get("packages_present").and_then(Value::as_bool) == Some(true)
                 && obj.get("packages").is_none()
@@ -246,6 +265,7 @@ pub fn structured_validation_target_identity(
 pub enum StructuredValidationExecutionContext {
     GoProjectSingleModuleV1,
     ProjectDependencyLockedV1,
+    ProjectAllPackagesV1,
 }
 
 impl StructuredValidationExecutionContext {
@@ -253,6 +273,7 @@ impl StructuredValidationExecutionContext {
         match self {
             Self::GoProjectSingleModuleV1 => "go_project_single_module_v1",
             Self::ProjectDependencyLockedV1 => "project_dependency_locked_v1",
+            Self::ProjectAllPackagesV1 => "project_all_packages_v1",
         }
     }
 }

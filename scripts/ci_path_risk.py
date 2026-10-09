@@ -204,6 +204,10 @@ def _release_tooling(path: str) -> bool:
             "verify_public_release.py",
             "macos_sign_local_runner.sh",
             "macos_ci_developer_id_setup.sh",
+            "macos_ci_signing_setup.sh",
+            "macos_sign_self_signed.sh",
+            "macos_finalize_desktop.sh",
+            "macos_finalize_dmg.sh",
             "macos_sign_runner.sh",
             "verify_macos_desktop_identity.sh",
         }
@@ -222,6 +226,7 @@ def _classify_path(risk: Risk, path: str) -> None:
         or path.startswith("plugins/repo-context/")
         or path.startswith("plugins/campus-application/")
         or path.startswith("plugins/agent-browser/")
+        or path.startswith("plugins/agent-environment/")
     ):
         risk.needs_plugin_sdk = True
         risk.categories.add(
@@ -230,6 +235,13 @@ def _classify_path(risk: Risk, path: str) -> None:
         return
     if path.startswith("integrations/codex/") and path.endswith(".py"):
         _mark_windows_core(risk, "codex-adapter")
+        return
+    if path == "scripts/check_production_warnings.py":
+        # This gate executes directly in Linux tooling, Windows core and macOS
+        # core. Linux tooling is unconditional, but an owner PR that changes the
+        # gate itself must also exercise both native Python/Cargo environments.
+        _mark_windows_core(risk, "production-warning-gate")
+        _mark_macos(risk, "production-warning-gate")
         return
     if _is_docs_or_text(path):
         risk.categories.add("docs")

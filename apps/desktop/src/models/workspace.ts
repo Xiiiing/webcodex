@@ -22,7 +22,13 @@ export interface RunnerOverview {
   projects: WorkspaceProject[]; projects_truncated: boolean;
   recent_sessions?: { sessions: WorkflowSession[]; truncated: boolean; scan_truncated: boolean };
 }
+export interface ServerRunnerJob {
+  job_id: string; kind: string; status: string; terminal: boolean; created_at: number;
+  started_at?: number; elapsed_secs?: number; project_id?: string; session_id?: string;
+}
 export interface ServerRunnerSummary {
+  jobs?: ServerRunnerJob[]; jobs_truncated?: boolean;
+  job_concurrency_limit?: number | null; jobs_running?: number; jobs_queued?: number;
   client_id: string; connected: boolean; status?: string;
   computer_session_availability?: boolean | null;
 }
@@ -50,8 +56,8 @@ export interface WindowDetail extends WindowSummary {
   sessions_truncated: boolean; activity_truncated: boolean;
 }
 export interface GitSummary {
-  branch?: string; clean?: boolean; git_available: boolean; non_git_project: boolean;
-  files?: { path: string; status?: string }[]; files_total: number; files_truncated: boolean;
+  branch?: string | null; clean?: boolean | null; git_available: boolean; non_git_project: boolean;
+  files?: { path: string; status?: string }[] | null; files_total: number | null; files_truncated: boolean;
 }
 export interface InstructionSummary { source_scope: "runner" | "project"; path: string; fingerprint: string; truncated: boolean; total_lines: number }
 export interface SkillSummary { skill_id: string; name: string; description?: string; source?: string; source_scope?: string; trust?: string; available?: boolean }

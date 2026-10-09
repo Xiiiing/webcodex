@@ -23,9 +23,11 @@ Server API 完成。
 ### 环境配置
 
 个人新安装可执行 `webcodex environment configure --create --runner --scope user`，
-再运行 `webcodex environment configure-tunnel default` 和 `webcodex environment status`。
-同机用户/Runner 凭据由内部生成，无需手动 pairing。Linux 退出登录后的持续运行取决于 linger；
-macOS LaunchAgent 与 Windows 用户计划任务需要该用户保持登录。旧服务不会被自动接管。
+再运行 `webcodex environment configure-tunnel default --host embedded` 和
+`webcodex environment status`。持久环境推荐由 Server 托管：Server 只在启动时装载 profile，
+配置过程不会安装 standalone Tunnel 服务，也不会暗中重启正在工作的 Server。同机用户/Runner
+凭据由内部生成，无需手动 pairing。Linux 退出登录后的持续运行取决于 linger；macOS
+LaunchAgent 与 Windows 用户计划任务需要该用户保持登录。旧服务不会被自动接管。
 [生命周期与兼容边界](implementation/personal-environment-lifecycle.md)。
 
 `webcodex environment` 与 Desktop 调用同一配置核心。该命名空间配置本机持久环境；原有项目级 `webcodex setup` 含义保持不变。安装包供应与原生验收状态见[统一安装指南](unified-installation.zh-CN.md)和[部署验收清单](unified-deployment-validation.md)。
@@ -40,7 +42,10 @@ macOS LaunchAgent 与 Windows 用户计划任务需要该用户保持登录。�
 | `invite` | 在环境的本机 Server 创建 Runner 短期邀请；显示的 code 属于敏感信息。 |
 | `add-project PATH` | 复用已有 Runner 身份；查看端需先完成 Runner 接入。 |
 | `status --json` / `doctor --json` | 查看已保存配置、Server 连通性、Runner/项目就绪状态和结构化诊断。 |
-| `start COMPONENT` / `stop COMPONENT` / `restart COMPONENT` | 显式控制环境所拥有的 `server`、`runner` 或 `tunnel`。 |
+| `start COMPONENT` / `stop COMPONENT` / `restart COMPONENT` | 显式控制环境所拥有的 `server`、`runner` 或 standalone `tunnel`；命名 standalone Tunnel 使用 `--profile NAME`。 |
+| `configure-tunnel [PROFILE] --host embedded\|standalone [--credentials-file PATH]` | 创建时直接选择由 Server 托管或独立服务托管。凭据只允许隐藏输入或受保护文件。 |
+| `tunnel-status [PROFILE]` | 查看精确 profile 身份、owner、就绪状态，以及是否需要显式重启 Server。 |
+| `tunnel-host PROFILE --host embedded\|standalone` | 仅在旧 owner 已干净停止、standalone 服务已卸载后，显式转移已有 profile 的 owner。 |
 | `repair-user-credential [--token-file PATH]` | 核实并替换已保存用户凭据，不配对 Runner 或改变服务状态。 |
 | `repair-credential runner` | 通过隐藏输入修复 Windows SCM 账户凭据。 |
 
@@ -67,13 +72,17 @@ macOS LaunchAgent 与 Windows 用户计划任务需要该用户保持登录。�
 
 Cloudflare Quick Tunnel 的公网 origin 仍然是临时的。如需稳定 HTTPS origin，可使用 `--tunnel none --public-url https://share.example`，并由 operator 自己把该 origin 反向代理/隧道到 loopback WebCodex Server；`--public-url` 只声明外部 origin/issuer，不会创建代理或 tunnel。
 
-`webcodex share --tunnel openai` 是显式 opt-in 的 OpenAI Secure MCP Tunnel provider。它要求 `CONTROL_PLANE_TUNNEL_ID` 与只授予 Tunnels Read + Use 的 Restricted `CONTROL_PLANE_API_KEY`，当前只支持 `--auth bearer`。WebCodex 会从 `WEBCODEX_TUNNEL_CLIENT_BIN`、`PATH` 或经过校验的 managed 下载解析固定 OpenAI `tunnel-client` v0.0.12；启动 daemon 前运行 `doctor`，并等待 `/readyz`。临时 WebCodex Bearer 只写入私有 share 目录，通过 file-backed MCP `Authorization` header 交给 `tunnel-client`，因此 ChatGPT 使用 Connection: Tunnel + No authentication。长驻 daemon 环境会显式移除 `OPENAI_ADMIN_KEY` 与 `OPENAI_API_KEY`；Runtime API key 仍只承担 control-plane authority。
+`webcodex share --tunnel openai` 使用原生 Rust Secure MCP Tunnel client，需要 `CONTROL_PLANE_TUNNEL_ID` 和具有 Tunnels Read + Use 权限的 Restricted `CONTROL_PLANE_API_KEY`，支持 `--auth bearer`。临时本地 Bearer 直接在内存中传递，仅注入固定的本地 MCP 请求；ChatGPT 使用 Connection: Tunnel + No authentication。启动时验证本地 MCP 和成功的控制面 poll，不再下载外部 tunnel-client 或启动 doctor/health 子进程。严格 deadline、有界接收、禁止本地重放及不确定重启标记见 [crate 契约](../crates/webcodex-openai-tunnel/README.md)。
 
 公网 `share` 会 best-effort 复制 MCP URL；默认 Bearer/OAuth 模式仍不会自动把临时 credential 复制进剪贴板。显式 `--auth query-token` 模式则按设计复制含临时 credential 的敏感 URL，并在状态输出中明确提示。Linux/macOS 交互式终端还会提供按 Enter 打开 ChatGPT App 设置的快捷入口。剪贴板/浏览器集成都只是 convenience，失败不会影响已经 ready 的 runtime。使用 `--no-copy-url` 可关闭剪贴板访问。
 
 面向受监督的 machine integration，可使用 `webcodex share --json --stop-on-stdin-eof`。它仍保持原有前台生命周期，但会把 supervising parent 关闭 stdin 视为停止请求，使 Desktop 或其他 structured process owner 可以让 `share` 自己清理临时 Server、Runner 与 Tunnel，而不需要拼 shell signal 命令。该 flag 在非 `--json` 模式下会被拒绝。
 
 `webcodex connect <server> --auth oauth --oauth-redirect-uri <精确回调地址>` 是普通 hosted OAuth 路径。Runner 保持原有 hosted credential，MCP client 使用 OAuth。只有真正需要额外能力时才增加 `--oauth-computer-permissions`、`--oauth-local-mcp` 或 `--oauth-local-ssh`；它们属于显式权限变更，可能要求重新授权。`--oauth-local-ssh` 会授予 MCP client 使用模型侧 `manage_ssh_resource` 接入工具所需的可选 `ssh:local` authority；它不会暴露 SSH credential，也不会绕过工具返回的 Runner restart requirement 让新资源立即生效。Client 设置见 [MCP](MCP.zh-CN.md#oauth2)，安全模型见[认证](AUTH_MODEL.zh-CN.md#oauth2)。
+
+Browser Use 的 shared-key OAuth delegation 需要在 `connect --auth oauth` 时显式指定 `--oauth-browser-permissions`，仅追加 `browser:read`、`browser:control`、`browser:launch`。默认 baseline 不包含 Browser scope；Browser 与 `--oauth-computer-permissions` 相互独立，也不使用 Computer consent checkbox。已有 client 不会自动扩权，历史窄权限仅追加显式选择的类别。scope ceiling 变化会撤销旧 grants 并要求重新授权；复用已启用 Browser 的 profile 时必须继续携带该 flag。
+
+Managed OAuth client 的创建、列举、修改和撤销要求 PAT 持有 `account:manage`（或 super-scope `admin`）；普通 account manager 仍只能管理自己的 client。OAuth access token 不能执行这些 first-party 管理操作。授权范围不得超过 PAT authority；`offline_access` 是 refresh capability，不是 runtime permission。需要 admin diagnostics 时，使用 admin PAT 授权自己拥有的 managed client。升级前的 connection 需要重新授权一次，此后 refresh 保留 grant authority。shared-key `connect --auth oauth` 不授予 admin。参见[认证模型](AUTH_MODEL.zh-CN.md#oauth2)。
 
 高级 managed identity 流程仍保留为 `--auth managed-oauth --oauth-redirect-uri <精确回调地址>`，它才要求先 `webcodex login`；`--user` 也只用于该模式。
 

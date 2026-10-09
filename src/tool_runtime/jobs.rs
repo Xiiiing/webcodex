@@ -10,7 +10,9 @@ use super::helpers::{
     project_relative_runner_cwd, resolve_runner_cwd, validate_raw_shell_command_length,
 };
 use super::tool_result::{RecoveryKind, SuggestedToolCall, ToolResult};
-use super::{ExecutionPurpose, ExecutionShell, ToolRuntime};
+use super::{
+    execution_outcome::ExecutionOutcomeFacts, ExecutionPurpose, ExecutionShell, ToolRuntime,
+};
 use crate::auth::AuthContext;
 use crate::runner_http::{command_preview, ShellJobStartMetadata, COMMAND_PREVIEW_MAX_CHARS};
 use crate::runner_protocol::{
@@ -425,10 +427,12 @@ pub(crate) fn structured_validation_evidence(
     truncated: bool,
 ) -> StructuredValidationEvidence {
     let combined = format!("{stdout}\n{stderr}");
-    let diagnostics = matches!(kind, "check" | "test")
-        .then(|| super::validation_profile::validation_adapter_for_tool(tool))
+    let profile = (matches!(kind, "check" | "test")
+        || (kind == "format" && tool == "python:ruff:format"))
+        .then(|| super::validation_profile::validation_evidence_profile_for_tool(tool))
         .flatten()
-        .map(|adapter| adapter.parse(stdout, stderr, truncated));
+        .filter(|adapter| adapter.validation_kind() == kind);
+    let diagnostics = profile.map(|adapter| adapter.parse(stdout, stderr, truncated));
     let mut evidence = StructuredValidationEvidence {
         diagnostics,
         tests_detected: None,
@@ -440,8 +444,28 @@ pub(crate) fn structured_validation_evidence(
         warnings_count: None,
         errors_count: None,
     };
-    match kind {
-        "test" if tool == "go_test" => {
+    match profile.map(|adapter| adapter.tool_identity()) {
+        Some("python:pytest:test") => {
+            let summary = evidence
+                .diagnostics
+                .as_ref()
+                .and_then(|d| d.test_summary.as_ref());
+            evidence.tests_detected = Some(summary.is_some());
+            evidence.test_count_evidence_reason = Some(if truncated {
+                "output_truncated"
+            } else if summary.is_some() {
+                "complete_summary"
+            } else {
+                "no_complete_summary"
+            });
+            if !truncated {
+                evidence.tests_passed = summary.and_then(|s| s.passed);
+                evidence.tests_failed = summary.and_then(|s| s.failed);
+                evidence.tests_run_count = summary.and_then(|s| s.passed?.checked_add(s.failed?));
+                evidence.zero_tests_run = evidence.tests_run_count.map(|count| count == 0);
+            }
+        }
+        Some("go_test") => {
             let test_summary = evidence
                 .diagnostics
                 .as_ref()
@@ -460,7 +484,7 @@ pub(crate) fn structured_validation_evidence(
                 evidence.zero_tests_run = evidence.tests_run_count.map(|count| count == 0);
             }
         }
-        "test" => {
+        Some("cargo_test") => {
             let metadata = super::cargo::parse_cargo_test_run_metadata(&combined);
             evidence.tests_detected = Some(metadata.tests_detected);
             evidence.test_count_evidence_reason = Some(if truncated {
@@ -475,7 +499,9 @@ pub(crate) fn structured_validation_evidence(
                 evidence.zero_tests_run = metadata.zero_tests_run;
             }
         }
-        "check" if !truncated => {
+        // Preserve the existing check counter projection for known Cargo/Go
+        // adapters; unknown check identities must not inherit Rustc parsing.
+        Some("cargo_check" | "go_vet") if !truncated => {
             evidence.warnings_count =
                 Some(super::cargo::count_rustc_diagnostics(&combined, "warning:") as u64);
             evidence.errors_count =
@@ -526,11 +552,8 @@ pub(crate) fn validation_job_projection_with_policy(
     no_run: Option<bool>,
 ) -> Option<Value> {
     let tool = tool?;
-    let kind = kind.unwrap_or(match tool {
-        "cargo_test" | "go_test" => "test",
-        "cargo_fmt" => "format",
-        _ => "check",
-    });
+    let profile = super::validation_profile::validation_evidence_profile_for_tool(tool);
+    let kind = kind.unwrap_or_else(|| profile.map_or("check", |profile| profile.validation_kind()));
     let lifecycle = RunnerJobLifecycle::from_wire(status).ok();
     if !lifecycle.is_some_and(RunnerJobLifecycle::is_terminal) {
         let mut value = json!({
@@ -588,7 +611,7 @@ pub(crate) fn validation_job_projection_with_policy(
     }
     let process_passed = lifecycle == Some(RunnerJobLifecycle::Completed) && exit_code == Some(0);
     let mut evidence = structured_validation_evidence(tool, kind, stdout, stderr, truncated);
-    if tool == "cargo_test" {
+    if tool == "cargo_test" && kind == "test" {
         if let Some(authoritative) = authoritative_test_count.filter(|evidence| evidence.is_valid())
         {
             evidence.tests_detected = Some(authoritative.tests_detected);
@@ -597,7 +620,48 @@ pub(crate) fn validation_job_projection_with_policy(
             evidence.test_count_evidence_reason = Some(authoritative.status.reason_code());
         }
     }
-    let mut passed = process_passed;
+    let pytest_contradictory = if tool == "python:pytest:test" {
+        match (
+            evidence.tests_run_count,
+            evidence.tests_failed,
+            exit_code,
+            lifecycle,
+        ) {
+            (None, _, _, _) => false,
+            (Some(_), Some(0), Some(0), Some(RunnerJobLifecycle::Completed)) => false,
+            (Some(_), Some(failed), Some(1), Some(RunnerJobLifecycle::Failed)) if failed > 0 => {
+                false
+            }
+            (Some(0), Some(0), Some(5), Some(RunnerJobLifecycle::Failed)) => false,
+            _ => true,
+        }
+    } else {
+        false
+    };
+    if pytest_contradictory {
+        evidence.tests_run_count = None;
+        evidence.tests_passed = None;
+        evidence.tests_failed = None;
+        evidence.zero_tests_run = None;
+        evidence.tests_detected = Some(false);
+        evidence.test_count_evidence_reason = Some("no_complete_summary");
+        if let Some(diagnostics) = evidence.diagnostics.as_mut() {
+            diagnostics.test_summary = None;
+            diagnostics.available = false;
+            diagnostics.reason = Some("pytest summary contradicts process outcome");
+        }
+    }
+    let profile_mismatch = profile.is_some_and(|profile| profile.validation_kind() != kind);
+    // Canonical Ruff check disables fixes and exit-code overrides: a reported
+    // lint violation cannot agree with a successful native check.
+    let ruff_contradictory = tool == "python:ruff:check"
+        && process_passed
+        && evidence
+            .diagnostics
+            .as_ref()
+            .is_some_and(|diagnostics| !diagnostics.diagnostics.is_empty());
+    let mut passed =
+        process_passed && !pytest_contradictory && !ruff_contradictory && !profile_mismatch;
     let mut value = json!({
         "tool": tool,
         "kind": kind,
@@ -615,37 +679,39 @@ pub(crate) fn validation_job_projection_with_policy(
             value["tests_passed"] = json!(evidence.tests_passed);
             value["tests_failed"] = json!(evidence.tests_failed);
             value["zero_tests_run"] = json!(evidence.zero_tests_run);
-            if matches!(tool, "cargo_test" | "go_test") && process_passed {
-                if let Some(minimum_tests) = minimum_tests {
-                    let (status, reason_code) = match evidence.tests_run_count {
-                        Some(actual) if actual >= minimum_tests => ("passed", "minimum_satisfied"),
-                        Some(_) => {
-                            passed = false;
-                            ("failed", "minimum_not_met")
-                        }
-                        None => {
-                            passed = false;
-                            ("unproven", "test_count_unproven")
-                        }
-                    };
-                    value["passed"] = json!(passed);
-                    value["test_count_assertion"] = json!({
-                        "minimum_tests": minimum_tests,
-                        "actual_tests_run": evidence.tests_run_count,
-                        "status": status,
-                        "reason_code": reason_code,
-                        "evidence_reason_code": evidence
-                            .test_count_evidence_reason
-                            .unwrap_or("no_complete_summary"),
-                    });
-                }
-            }
         }
         "check" => {
             value["warnings_count"] = json!(evidence.warnings_count);
             value["errors_count"] = json!(evidence.errors_count);
         }
         _ => {}
+    }
+    // A requested minimum requires proven counts, including for unknown tools
+    // or mismatched kinds. Unknown tools without a minimum retain process success.
+    if process_passed {
+        if let Some(minimum_tests) = minimum_tests {
+            let (status, reason_code) = match evidence.tests_run_count {
+                Some(actual) if actual >= minimum_tests => ("passed", "minimum_satisfied"),
+                Some(_) => {
+                    passed = false;
+                    ("failed", "minimum_not_met")
+                }
+                None => {
+                    passed = false;
+                    ("unproven", "test_count_unproven")
+                }
+            };
+            value["passed"] = json!(passed);
+            value["test_count_assertion"] = json!({
+                "minimum_tests": minimum_tests,
+                "actual_tests_run": evidence.tests_run_count,
+                "status": status,
+                "reason_code": reason_code,
+                "evidence_reason_code": evidence
+                    .test_count_evidence_reason
+                    .unwrap_or("no_complete_summary"),
+            });
+        }
     }
     apply_cargo_test_execution_policy(&mut value, tool, require_tests, no_run);
     Some(value)
@@ -657,7 +723,7 @@ fn apply_cargo_test_execution_policy(
     require_tests: Option<bool>,
     no_run: Option<bool>,
 ) {
-    if tool != "cargo_test" {
+    if !matches!(tool, "cargo_test" | "python:pytest:test") {
         return;
     }
     if let Some(require_tests) = require_tests {
@@ -879,7 +945,7 @@ impl ToolRuntime {
         let kind = metadata
             .map(|metadata| metadata.kind.as_str())
             .or_else(|| {
-                super::validation_profile::validation_adapter_for_tool(tool)
+                super::validation_profile::validation_evidence_profile_for_tool(tool)
                     .map(|adapter| adapter.validation_kind())
             })
             .or(job.purpose.as_deref());
@@ -988,31 +1054,27 @@ pub(crate) fn observe_job_details_call(job_id: &str) -> Value {
 /// The continuation retains durable identity; Job lifecycle/bookkeeping stays in canonical
 /// Session/registry state.
 pub(super) fn sparsify_job_handoff_model_result(result: &mut ToolResult) {
-    if !result.success {
-        return;
-    }
-    let Some(output) = result.output.as_object_mut() else {
-        return;
+    let (job_id, token) = {
+        let facts = ExecutionOutcomeFacts::from_result(result);
+        if !facts.has_job_handoff() {
+            return;
+        }
+        (
+            facts
+                .job_id()
+                .expect("handoff identity was checked")
+                .to_string(),
+            facts.observation_token().map(str::to_string),
+        )
     };
-    if !matches!(
-        output.get("execution_state").and_then(Value::as_str),
-        Some("queued" | "running" | "started" | "pending")
-    ) {
-        return;
-    }
-    let Some(job_id) = output
-        .get("job_id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-    else {
+    let Some(output) = result.output.as_object_mut() else {
         return;
     };
     let call = &output["continuation"];
     if call["tool"] != "observe_jobs" || call["arguments"]["items"][0]["job_id"] != job_id {
         return;
     }
-    let token = output.get("observation_token").and_then(Value::as_str);
-    if call["arguments"]["items"][0]["after_observation_token"].as_str() != token {
+    if call["arguments"]["items"][0]["after_observation_token"].as_str() != token.as_deref() {
         return;
     }
     let continuation = call.clone();
@@ -1865,6 +1927,7 @@ impl ToolRuntime {
                 status.as_deref(),
                 project.as_deref(),
                 session_id.as_deref(),
+                None,
                 auth,
             )
             .await
@@ -2110,6 +2173,7 @@ impl ToolRuntime {
             .runner_registry
             .list_jobs_for_auth_filtered(
                 crate::runner_http::runner_access_from_auth(auth).as_ref(),
+                None,
                 project,
                 None,
             )
@@ -2583,6 +2647,58 @@ mod recovery_projection_tests {
             failing_tests.get("test_count_assertion").is_none(),
             "executed-test evidence must not overwrite Cargo process failure"
         );
+    }
+
+    #[test]
+    fn pytest_unknown_counts_preserve_native_opt_out_but_never_prove_minimum() {
+        for (stdout, truncated) in [
+            ("progress without summary", false),
+            ("1 passed in 0.01s", true),
+        ] {
+            for minimum in [None, Some(1)] {
+                let value = validation_job_projection_with_policy(
+                    Some("python:pytest:test"),
+                    Some("test"),
+                    "completed",
+                    Some(0),
+                    stdout,
+                    "",
+                    truncated,
+                    None,
+                    minimum,
+                    Some(false),
+                    None,
+                )
+                .unwrap();
+                assert_eq!(value["passed"], minimum.is_none(), "{value}");
+                assert!(value["tests_run_count"].is_null());
+                assert!(value["zero_tests_run"].is_null());
+                if minimum.is_some() {
+                    assert_eq!(
+                        value["test_count_assertion"]["reason_code"],
+                        "test_count_unproven"
+                    );
+                }
+            }
+        }
+        for (status, exit) in [("failed", Some(2)), ("timed_out", None)] {
+            let value = validation_job_projection_with_policy(
+                Some("python:pytest:test"),
+                Some("test"),
+                status,
+                exit,
+                "1 passed in 0.01s",
+                "",
+                false,
+                None,
+                None,
+                Some(false),
+                None,
+            )
+            .unwrap();
+            assert!(value["tests_run_count"].is_null(), "{value}");
+            assert_ne!(value["passed"], true);
+        }
     }
 
     #[test]

@@ -56,33 +56,38 @@ pub(super) fn validate_runner_job_context_operation(
     }) {
         return Err("job recovery context purpose is invalid".to_string());
     }
-    if context.shell.as_deref().is_some_and(|shell| {
-        !matches!(
-            shell,
-            "sh" | "bash"
-                | "bash_login"
-                | "powershell"
-                | "python"
-                | "javascript"
-                | "typescript"
-                | "configured"
-                | "custom"
-                | "remote"
-                | "direct_argv"
-        )
-    }) {
+    if context
+        .shell
+        .as_deref()
+        .is_some_and(|shell| !ShellJobContext::is_valid_shell(shell))
+    {
         return Err("job recovery context shell is invalid".to_string());
     }
 
     let validation_steps = match operation {
         RunnerJobOperation::StartValidation(operation) => {
+            let project_all_packages = operation
+                .context
+                .validation
+                .as_ref()
+                .and_then(|metadata| metadata.project_validation.as_ref())
+                .and_then(|provenance| provenance.request.scope.as_ref())
+                .is_some_and(
+                    webcodex_core::project_validation::ProjectValidationScope::selects_all_packages,
+                );
             let names = operation
                 .steps
                 .iter()
                 .map(|step| step.name.clone())
                 .collect::<Vec<_>>();
             if !(1..=3).contains(&operation.steps.len())
-                || operation.steps.iter().any(|step| !step.is_canonical())
+                || operation.steps.iter().any(|step| {
+                    if project_all_packages {
+                        !step.is_canonical_project_step()
+                    } else {
+                        !step.is_canonical()
+                    }
+                })
                 || operation.steps.iter().enumerate().any(|(index, step)| {
                     operation.steps[..index]
                         .iter()
@@ -374,7 +379,9 @@ impl JobManager {
             };
             let queue_locally = immediate_failure.is_none() && reserved >= self.max_concurrent;
             let slot_reserved = immediate_failure.is_none() && !queue_locally;
-            let now = chrono::Utc::now().timestamp();
+            let now = chrono::Utc::now()
+                .timestamp()
+                .max(start.metadata.created_at);
             let terminal = immediate_failure.is_some();
             jobs.insert(
                 job_id.clone(),

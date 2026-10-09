@@ -477,9 +477,10 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
         "get_work_result_state" => {
             let mut schema = wrapped_output_schema(vec![("work_result", open_object_schema("Lightweight card state."))]);
             let output = &mut schema["properties"]["output"];
-            output["properties"]["work_result_files"] = open_object_schema("Explicit bounded immutable file page or per-file diff; identity reauthorized on every request.");
+            output["properties"]["work_result_files"] = open_object_schema("Immutable inventory, diff, UTF-8 content or PDF page for an advertised path. Content: view=content, project/session_id/snapshot_id/path, byte_offset, bytes_total, content, next_byte_offset, complete, limited; 32 KiB/page, 256 KiB/file. PDF: view=pdf, same identity/offset/size/continuation, complete; 128 KiB/page, 20 MiB/file. Runtime content_base64 is moved to private MCP App metadata webcodex/pdfChunk, never structured/text content. Unsupported files return unavailable_reason. Identity reauthorized per request.");
             output.as_object_mut().expect("output object").remove("required");
-            output["oneOf"] = json!([{ "required": ["work_result"] }, { "required": ["work_result_files"] }]);
+            output["properties"]["work_result_collaboration"] = open_object_schema("Authorized current-Window history page; at most 100 chronological messages, next_before cursor and history_scope cache partition. No attention consumption or workspace observation.");
+            output["oneOf"] = json!([{ "required": ["work_result"] }, { "required": ["work_result_files"] }, { "required": ["work_result_collaboration"] }]);
             Some(schema)
         },
         "present_work_result" => Some(wrapped_output_schema(vec![(

@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::AuthContext;
 
-#[cfg(test)]
 use super::git_committed::CommittedGitScope;
 use super::session_context::workflow_session_authority_fingerprint;
 use super::{ToolResult, ToolRuntime};
@@ -16,30 +15,28 @@ const MAX_REVIEW_SNAPSHOTS: usize = 32;
 const MAX_REVIEW_SNAPSHOTS_PER_CALLER: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GitReviewScope {
-    Workspace,
-    Committed {
-        requested_base: String,
-        requested_head: String,
-        merge_base: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GitReviewSourceIdentity {
     Workspace {
         head_commit: Option<String>,
         frozen_tree: String,
         status_fingerprint: String,
     },
-    Committed {
-        requested_base: String,
-        requested_head: String,
-        merge_base: String,
-    },
+    Committed(CommittedGitScope),
 }
 
 impl GitReviewSourceIdentity {
+    pub(crate) fn is_workspace(&self) -> bool {
+        matches!(self, Self::Workspace { .. })
+    }
+
+    pub(crate) fn scope_value(&self) -> Value {
+        if self.is_workspace() {
+            json!({"kind":"workspace"})
+        } else {
+            self.presentation_value()
+        }
+    }
+
     pub(crate) fn presentation_value(&self) -> Value {
         match self {
             Self::Workspace {
@@ -52,15 +49,11 @@ impl GitReviewSourceIdentity {
                 "frozen_tree": frozen_tree,
                 "status_fingerprint": status_fingerprint,
             }),
-            Self::Committed {
-                requested_base,
-                requested_head,
-                merge_base,
-            } => json!({
+            Self::Committed(scope) => json!({
                 "kind": "committed",
-                "requested_base": requested_base,
-                "requested_head": requested_head,
-                "merge_base": merge_base,
+                "requested_base": scope.requested_base,
+                "requested_head": scope.requested_head,
+                "merge_base": scope.merge_base,
             }),
         }
     }
@@ -72,7 +65,6 @@ pub(crate) struct GitReviewSnapshot {
     pub(crate) caller_fingerprint: String,
     pub(crate) project: String,
     pub(crate) session_id: Option<String>,
-    pub(crate) scope: GitReviewScope,
     pub(crate) source: GitReviewSourceIdentity,
     pub(crate) projection_identity: Value,
     pub(crate) summary: Value,
@@ -88,7 +80,6 @@ impl GitReviewSnapshot {
         caller_fingerprint: String,
         project: String,
         session_id: Option<String>,
-        scope: GitReviewScope,
         source: GitReviewSourceIdentity,
         projection_identity: Value,
         summary: Value,
@@ -109,7 +100,6 @@ impl GitReviewSnapshot {
             caller_fingerprint,
             project,
             session_id,
-            scope,
             source,
             projection_identity,
             summary,
@@ -144,7 +134,7 @@ impl GitReviewSnapshotRegistry {
         self.snapshots.retain(|snapshot| snapshot.expires_at > now);
     }
 
-    fn insert_or_get(&mut self, snapshot: GitReviewSnapshot) -> GitReviewSnapshot {
+    pub(super) fn insert_or_get(&mut self, snapshot: GitReviewSnapshot) -> GitReviewSnapshot {
         self.prune();
         if let Some(index) = self.snapshots.iter().position(|existing| {
             existing.snapshot_id == snapshot.snapshot_id
@@ -179,7 +169,7 @@ impl GitReviewSnapshotRegistry {
         snapshot
     }
 
-    fn get(
+    pub(super) fn get(
         &mut self,
         snapshot_id: &str,
         caller_fingerprint: &str,
@@ -196,7 +186,7 @@ impl GitReviewSnapshotRegistry {
             .cloned()
     }
 
-    fn latest_workspace(
+    pub(super) fn latest_workspace(
         &mut self,
         caller_fingerprint: &str,
         project: &str,
@@ -207,7 +197,7 @@ impl GitReviewSnapshotRegistry {
             .iter()
             .rev()
             .find(|snapshot| {
-                matches!(snapshot.scope, GitReviewScope::Workspace)
+                snapshot.source.is_workspace()
                     && snapshot.matches_identity(caller_fingerprint, project, session_id)
             })
             .cloned()
@@ -237,52 +227,13 @@ fn review_snapshot_id(
     format!("wc_grs_{:x}", hasher.finalize())
 }
 
-#[cfg(test)]
 pub(crate) fn committed_source_identity(scope: &CommittedGitScope) -> GitReviewSourceIdentity {
-    GitReviewSourceIdentity::Committed {
-        requested_base: scope.requested_base.clone(),
-        requested_head: scope.requested_head.clone(),
-        merge_base: scope.merge_base.clone(),
-    }
+    GitReviewSourceIdentity::Committed(scope.clone())
 }
 
 pub(crate) fn caller_fingerprint(auth: Option<&AuthContext>) -> Result<String, ToolResult> {
     workflow_session_authority_fingerprint(auth)
         .map_err(|_| ToolResult::err("git review snapshot authority unavailable"))
-}
-
-impl ToolRuntime {
-    pub(super) fn insert_review_snapshot(&self, snapshot: GitReviewSnapshot) -> GitReviewSnapshot {
-        self.review_snapshots
-            .lock()
-            .expect("Git review snapshot registry mutex poisoned")
-            .insert_or_get(snapshot)
-    }
-
-    pub(super) fn review_snapshot(
-        &self,
-        snapshot_id: &str,
-        caller_fingerprint: &str,
-        project: &str,
-        session_id: Option<&str>,
-    ) -> Option<GitReviewSnapshot> {
-        self.review_snapshots
-            .lock()
-            .expect("Git review snapshot registry mutex poisoned")
-            .get(snapshot_id, caller_fingerprint, project, session_id)
-    }
-
-    pub(super) fn latest_workspace_review_snapshot(
-        &self,
-        caller_fingerprint: &str,
-        project: &str,
-        session_id: Option<&str>,
-    ) -> Option<GitReviewSnapshot> {
-        self.review_snapshots
-            .lock()
-            .expect("Git review snapshot registry mutex poisoned")
-            .latest_workspace(caller_fingerprint, project, session_id)
-    }
 }
 
 pub(crate) fn workspace_snapshot_complete_for_closeout(
@@ -331,7 +282,6 @@ mod tests {
             caller.to_string(),
             project.to_string(),
             Some("wc_sess_test".to_string()),
-            GitReviewScope::Workspace,
             GitReviewSourceIdentity::Workspace {
                 head_commit: Some("a".repeat(40)),
                 frozen_tree: tree.to_string(),
@@ -405,12 +355,13 @@ mod tests {
         let runtime = ToolRuntime::new_for_tests();
         let mut first = snapshot("caller-refresh", "project", &"8".repeat(40));
         first.signals = json!([{"name": "before"}]);
-        let first = runtime.insert_review_snapshot(first);
+        let first = runtime.presentation.insert_review_snapshot(first);
         let mut refreshed = snapshot("caller-refresh", "project", &"8".repeat(40));
         assert_eq!(first.snapshot_id, refreshed.snapshot_id);
         refreshed.signals = json!([{"name": "after"}]);
-        let refreshed = runtime.insert_review_snapshot(refreshed);
+        let refreshed = runtime.presentation.insert_review_snapshot(refreshed);
         let loaded = runtime
+            .presentation
             .review_snapshot(
                 &refreshed.snapshot_id,
                 "caller-refresh",
@@ -426,8 +377,13 @@ mod tests {
         let runtime = ToolRuntime::new_for_tests();
         let clone = runtime.clone();
         let independent = ToolRuntime::new_for_tests();
-        let stored = runtime.insert_review_snapshot(snapshot("caller", "project", &"5".repeat(40)));
+        let stored = runtime.presentation.insert_review_snapshot(snapshot(
+            "caller",
+            "project",
+            &"5".repeat(40),
+        ));
         assert!(clone
+            .presentation
             .review_snapshot(
                 &stored.snapshot_id,
                 "caller",
@@ -436,6 +392,7 @@ mod tests {
             )
             .is_some());
         assert!(independent
+            .presentation
             .review_snapshot(
                 &stored.snapshot_id,
                 "caller",
@@ -444,9 +401,10 @@ mod tests {
             )
             .is_none());
         assert!(independent
+            .presentation
             .latest_workspace_review_snapshot("caller", "project", Some("wc_sess_test"))
             .is_none());
-        let weak = std::sync::Arc::downgrade(&runtime.review_snapshots);
+        let weak = std::sync::Arc::downgrade(&runtime.presentation);
         drop(runtime);
         assert!(weak.upgrade().is_some());
         drop(clone);
@@ -456,9 +414,13 @@ mod tests {
     #[test]
     fn registry_is_authority_and_session_fenced() {
         let runtime = ToolRuntime::new_for_tests();
-        let stored =
-            runtime.insert_review_snapshot(snapshot("caller-a", "project", &"4".repeat(40)));
+        let stored = runtime.presentation.insert_review_snapshot(snapshot(
+            "caller-a",
+            "project",
+            &"4".repeat(40),
+        ));
         assert!(runtime
+            .presentation
             .review_snapshot(
                 &stored.snapshot_id,
                 "caller-a",
@@ -467,6 +429,7 @@ mod tests {
             )
             .is_some());
         assert!(runtime
+            .presentation
             .review_snapshot(
                 &stored.snapshot_id,
                 "caller-b",
@@ -475,6 +438,7 @@ mod tests {
             )
             .is_none());
         assert!(runtime
+            .presentation
             .review_snapshot(
                 &stored.snapshot_id,
                 "caller-a",

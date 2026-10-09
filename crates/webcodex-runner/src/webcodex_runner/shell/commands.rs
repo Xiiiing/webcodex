@@ -1,6 +1,7 @@
 //! Shell/process command construction and executable resolution.
 
 use super::*;
+use webcodex_core::runner_protocol::ShellJobValidationStep;
 
 /// POSIX sh single-quote escaping.
 pub(crate) fn shell_quote(value: &str) -> String {
@@ -184,6 +185,107 @@ pub(crate) fn configured_prepared_shell_job_command(
     // the legacy setsid pre_exec here. ManagedChild creates the private group.
     apply_env_snapshot(&mut cmd, &profile.env_snapshot);
     Ok(cmd)
+}
+
+/// Resolve one existing Python runtime and use that exact executable and profile
+/// environment for both the bounded availability probe and actual pytest spawn.
+/// No shell fallback, environment creation or package installation is permitted.
+pub(crate) fn configured_pytest_job_command(
+    shell: &ShellConfig,
+    profile: Option<&PreparedShellProfile>,
+    args: &[String],
+    cwd: &Path,
+    stop_requested: Option<&AtomicBool>,
+) -> Result<Command, String> {
+    configured_python_module_job_command(shell, profile, args, cwd, stop_requested, false)
+}
+
+pub(crate) fn configured_ruff_job_command(
+    shell: &ShellConfig,
+    profile: Option<&PreparedShellProfile>,
+    step: &ShellJobValidationStep,
+    cwd: &Path,
+    stop_requested: Option<&AtomicBool>,
+) -> Result<Command, String> {
+    if !step.is_structured_ruff() {
+        return Err("invalid Ruff validation step".into());
+    }
+    configured_python_module_job_command(shell, profile, &step.args, cwd, stop_requested, true)
+}
+
+fn configured_python_module_job_command(
+    shell: &ShellConfig,
+    profile: Option<&PreparedShellProfile>,
+    args: &[String],
+    cwd: &Path,
+    stop_requested: Option<&AtomicBool>,
+    ruff: bool,
+) -> Result<Command, String> {
+    let unavailable =
+        || webcodex_core::runner_protocol::VALIDATION_TOOL_UNAVAILABLE_CODE.to_string();
+    let program = if ruff {
+        super::scripts::configured_validation_python_interpreter(shell, profile)
+    } else {
+        super::scripts::configured_script_interpreter(shell, profile, ShellScriptLanguage::Python)
+    }
+    .map_err(|_| unavailable())?;
+    let mut probe = Command::new(&program);
+    const PROBE: &str = "import sys,importlib.util;sys.exit(0 if sys.version_info.major == 3 and importlib.util.find_spec('pytest') else 42)";
+    const RUFF_PROBE: &str = "import sys,importlib.util;sys.exit(0 if sys.version_info.major == 3 and importlib.util.find_spec('ruff') else 42)";
+    if ruff {
+        probe.args(["-I", "-B"]);
+    }
+    // Ruff isolates both probe and spawn from project/PYTHONPATH impersonation.
+    // Pytest preserves the configured module search environment for both.
+    probe
+        .args(["-c", if ruff { RUFF_PROBE } else { PROBE }])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    super::scripts::apply_script_environment(&mut probe, shell, profile)
+        .map_err(|_| unavailable())?;
+    // PYTEST_ADDOPTS is parsed as additional command-line argv before pytest
+    // resolves rootdir/config. Structured validation owns the complete argv, so
+    // ambient profile/shell values must not widen selection or inject flags.
+    if ruff {
+        probe.env_remove("RUFF_OUTPUT_FILE");
+        probe.env("PYTHONDONTWRITEBYTECODE", "1");
+    } else {
+        probe.env_remove("PYTEST_ADDOPTS");
+    }
+    if stop_requested.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err(unavailable());
+    }
+    let mut child = ManagedChild::spawn(&mut probe).map_err(|_| unavailable())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let available = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None)
+                if Instant::now() < deadline
+                    && !stop_requested.is_some_and(|flag| flag.load(Ordering::SeqCst)) =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => break false,
+        }
+    };
+    // Probe descendants must not outlive preflight, including success and timeout.
+    if terminate_child_process_tree(&mut child).is_err() || !available {
+        return Err(unavailable());
+    }
+    let mut command = Command::new(&program);
+    command.args(args);
+    super::scripts::apply_script_environment(&mut command, shell, profile)
+        .map_err(|_| unavailable())?;
+    if ruff {
+        command.env_remove("RUFF_OUTPUT_FILE");
+        command.env("PYTHONDONTWRITEBYTECODE", "1");
+    } else {
+        command.env_remove("PYTEST_ADDOPTS");
+    }
+    Ok(command)
 }
 
 pub(crate) fn configured_validation_job_command(

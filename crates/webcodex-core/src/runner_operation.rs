@@ -357,6 +357,7 @@ runner_file_operations!(
     (Read, "file_read", "read"),
     (Write, "file_write", "write"),
     (List, "file_list", "list"),
+    (ListPage, "file_list_page", "list_page"),
     (ProjectOverview, "file_project_overview", "project_overview"),
     (
         DeleteProjectFiles,
@@ -565,6 +566,10 @@ pub struct RunnerComputerOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunnerBrowserOperationKind {
+    DiscoverExternal,
+    AttachExternal,
+    LaunchManaged,
+    ResolveSurface,
     ListBrowsers,
     ListPages,
     Snapshot,
@@ -580,6 +585,8 @@ pub enum RunnerBrowserOperationKind {
     Click,
     InputText,
     SelectOption,
+    SelectChoice,
+    SetDate,
     SetValue,
     UploadFile,
     Batch,
@@ -599,6 +606,10 @@ impl RunnerBrowserOperationKind {
 
     pub fn wire_kind(self) -> &'static str {
         match self {
+            Self::DiscoverExternal => "browser_discover",
+            Self::AttachExternal => "browser_attach",
+            Self::LaunchManaged => "browser_launch_managed",
+            Self::ResolveSurface => "browser_surface",
             Self::ListBrowsers => "browser_list_browsers",
             Self::ListPages => "browser_list_pages",
             Self::Snapshot => "browser_snapshot",
@@ -614,6 +625,8 @@ impl RunnerBrowserOperationKind {
             Self::Click => "browser_click",
             Self::InputText => "browser_input_text",
             Self::SelectOption => "browser_select_option",
+            Self::SelectChoice => "browser_select_choice",
+            Self::SetDate => "browser_set_date",
             Self::SetValue => "browser_set_value",
             Self::UploadFile => "browser_upload_file",
             Self::Batch => "browser_batch",
@@ -625,6 +638,10 @@ impl RunnerBrowserOperationKind {
 
     pub fn from_wire(kind: &str) -> Option<Self> {
         Some(match kind {
+            "browser_discover" => Self::DiscoverExternal,
+            "browser_attach" => Self::AttachExternal,
+            "browser_launch_managed" => Self::LaunchManaged,
+            "browser_surface" => Self::ResolveSurface,
             "browser_list_browsers" => Self::ListBrowsers,
             "browser_list_pages" => Self::ListPages,
             "browser_snapshot" => Self::Snapshot,
@@ -640,6 +657,8 @@ impl RunnerBrowserOperationKind {
             "browser_click" => Self::Click,
             "browser_input_text" => Self::InputText,
             "browser_select_option" => Self::SelectOption,
+            "browser_select_choice" => Self::SelectChoice,
+            "browser_set_date" => Self::SetDate,
             "browser_set_value" => Self::SetValue,
             "browser_upload_file" => Self::UploadFile,
             "browser_batch" => Self::Batch,
@@ -648,6 +667,26 @@ impl RunnerBrowserOperationKind {
             "browser_close" => Self::CloseBrowser,
             _ => return None,
         })
+    }
+
+    /// Composite widget actions require explicit support, including inside a batch.
+    /// Inspect the canonical operation field only; values never become operation names.
+    pub fn requires_complex_controls(self, payload: &serde_json::Value) -> bool {
+        match self {
+            Self::SelectChoice | Self::SetDate => true,
+            Self::Batch => payload
+                .get("operations")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|operations| {
+                    operations.iter().any(|operation| {
+                        matches!(
+                            operation.get("action").and_then(serde_json::Value::as_str),
+                            Some("select_choice" | "set_date")
+                        )
+                    })
+                }),
+            _ => false,
+        }
     }
 
     pub fn is_large_image(self) -> bool {
@@ -1085,7 +1124,7 @@ fn encode_job_operation(
             wire.job_context = Some(operation.context);
         }
         RunnerJobOperation::StartValidation(operation) => {
-            validate_validation_steps(&operation.steps)?;
+            validate_validation_steps(&operation.steps, operation.context.validation.as_ref())?;
             validate_job_context_coherence(operation.cwd.as_deref(), &operation.context)?;
             let names = operation
                 .steps
@@ -1661,7 +1700,7 @@ fn decode_job_operation(wire: &RunnerRequest) -> Result<RunnerJobOperation, Stri
             }
             let steps = serde_json::from_str::<Vec<ShellJobValidationStep>>(&wire.command)
                 .map_err(|error| format!("invalid validation Job plan: {error}"))?;
-            validate_validation_steps(&steps)?;
+            validate_validation_steps(&steps, context.validation.as_ref())?;
             let names = steps
                 .iter()
                 .map(|step| step.name.clone())
@@ -1950,9 +1989,32 @@ fn validate_structured_text_fields(cwd: Option<&str>, stdin: Option<&str>) -> Re
     Ok(())
 }
 
-fn validate_validation_steps(steps: &[ShellJobValidationStep]) -> Result<(), String> {
+fn validate_validation_steps(
+    steps: &[ShellJobValidationStep],
+    metadata: Option<&crate::runner_protocol::ShellJobValidationMetadata>,
+) -> Result<(), String> {
+    let project_all_packages = metadata.is_some_and(|metadata| {
+        metadata.tool == "project_validate"
+            && metadata.steps.as_slice() == steps
+            && metadata.is_valid()
+            && metadata
+                .project_validation
+                .as_ref()
+                .is_some_and(|provenance| {
+                    provenance.backend == "rust"
+                        && provenance.request.scope.as_ref().is_some_and(
+                            crate::project_validation::ProjectValidationScope::selects_all_packages,
+                        )
+                })
+    });
     if !(1..=3).contains(&steps.len())
-        || steps.iter().any(|step| !step.is_canonical())
+        || steps.iter().any(|step| {
+            if project_all_packages {
+                !step.is_canonical_project_step()
+            } else {
+                !step.is_canonical()
+            }
+        })
         || steps.iter().enumerate().any(|(index, step)| {
             steps[..index]
                 .iter()
@@ -1983,6 +2045,19 @@ fn validate_file_payload(kind: &str, payload: &RunnerFilePayload) -> Result<(), 
     }
     if payload.cwd.as_deref().is_some_and(|cwd| cwd.contains('\0')) {
         return Err("file operation cwd cannot contain NUL".to_string());
+    }
+    if kind == "file_list_page" {
+        let raw = payload
+            .content
+            .as_deref()
+            .filter(|raw| raw.len() <= 256)
+            .ok_or("directory page request missing or oversized")?;
+        serde_json::from_str::<crate::directory_page::DirectoryPageRequest>(raw)
+            .map_err(|_| "invalid directory page request")?
+            .validate()?;
+        if payload.max_bytes.is_some() {
+            return Err("directory page does not accept max_bytes".into());
+        }
     }
     let write = kind == "file_write";
     if !write
@@ -2391,6 +2466,30 @@ mod tests {
     }
 
     #[test]
+    fn skill_resource_structured_execution_metadata_is_valid() {
+        let request = skill_execution_request();
+        let operation = RunnerJobOperation::StartSkillResource(RunnerJobSkillResourceOperation {
+            job_id: "job-skill-resource-metadata".to_string(),
+            cwd: Some("/repo".to_string()),
+            request: request.clone(),
+            timeout_secs: 60,
+            context: structured_job_context(
+                Some("/repo"),
+                "run_skill_resource",
+                None,
+                None,
+                request.args.len(),
+                true,
+            ),
+        });
+        let metadata = operation
+            .expected_structured_execution()
+            .expect("Skill resource jobs retain structured execution metadata");
+        assert_eq!(metadata.execution_source, "run_skill_resource");
+        assert!(metadata.is_valid());
+    }
+
+    #[test]
     fn omitted_v2_kind_keeps_legacy_run_shell_default() {
         let value = serde_json::json!({
             "request_id": "req-1",
@@ -2673,6 +2772,122 @@ mod tests {
     }
 
     #[test]
+    fn project_all_packages_validation_wire_roundtrip_requires_matching_provenance() {
+        use crate::project_validation::{
+            ProjectValidationAction, ProjectValidationAdapter, ProjectValidationProvenance,
+            ProjectValidationRequest, ProjectValidationScope,
+        };
+        use crate::runner_protocol::ShellJobValidationMetadata;
+
+        for action in [
+            ProjectValidationAction::Check,
+            ProjectValidationAction::Test,
+        ] {
+            let kind = action.kind();
+            let args = if action == ProjectValidationAction::Check {
+                vec!["check".into(), "--all-targets".into(), "--workspace".into()]
+            } else {
+                vec!["test".into(), "--workspace".into()]
+            };
+            let step = ShellJobValidationStep {
+                name: kind.into(),
+                program: "cargo".into(),
+                args,
+                env: Vec::new(),
+            };
+            assert!(!step.is_canonical());
+            let provenance = ProjectValidationProvenance {
+                request: ProjectValidationRequest {
+                    project_id: "demo".into(),
+                    cwd: None,
+                    action,
+                    adapter: ProjectValidationAdapter::Rust,
+                    scope: Some(ProjectValidationScope {
+                        packages: Vec::new(),
+                        all_packages: true,
+                    }),
+                    dependency_policy: None,
+                    test: None,
+                },
+                backend: "rust".into(),
+                recipe_root: ".".into(),
+                root_digest: "a".repeat(64),
+                manifest_digest: "b".repeat(64),
+                invocation_digest: "c".repeat(64),
+            };
+            let (require_tests, minimum_tests) = provenance.request.test_requirements();
+            let mut context = job_context(Some("/repo"));
+            context.validation_steps = vec![kind.into()];
+            context.validation = Some(ShellJobValidationMetadata {
+                project_validation: Some(provenance),
+                tool: "project_validate".into(),
+                kind: kind.into(),
+                adapter: if action == ProjectValidationAction::Check {
+                    "cargo_check"
+                } else {
+                    "cargo_test"
+                }
+                .into(),
+                steps: vec![step.clone()],
+                effective_timeout_secs: 60,
+                sync_wait_secs: 10,
+                validation_target_id: None,
+                source_fence: None,
+                minimum_tests,
+                require_tests,
+                no_run: None,
+            });
+            assert!(context.validation.as_ref().unwrap().is_valid());
+            let operation = RunnerJobValidationOperation {
+                job_id: "all-packages-job".into(),
+                cwd: Some("/repo".into()),
+                steps: vec![step],
+                timeout_secs: 60,
+                context,
+            };
+            let wire = RunnerRequest::from_operation(
+                metadata(),
+                RunnerOperation::Job(RunnerJobOperation::StartValidation(operation.clone())),
+            )
+            .unwrap();
+            let RunnerOperation::Job(RunnerJobOperation::StartValidation(decoded)) =
+                wire.decode_operation().unwrap()
+            else {
+                panic!("expected validation job");
+            };
+            assert_eq!(decoded.steps, operation.steps);
+            assert_eq!(decoded.context.validation, operation.context.validation);
+
+            let mut naked = operation.clone();
+            naked.context.validation = None;
+            assert!(RunnerRequest::from_operation(
+                metadata(),
+                RunnerOperation::Job(RunnerJobOperation::StartValidation(naked))
+            )
+            .is_err());
+            for variant in 0..3 {
+                let mut invalid = wire.clone();
+                let metadata = invalid
+                    .job_context
+                    .as_mut()
+                    .unwrap()
+                    .validation
+                    .as_mut()
+                    .unwrap();
+                match variant {
+                    0 => metadata.project_validation = None,
+                    1 => metadata.project_validation.as_mut().unwrap().request.scope = None,
+                    _ => metadata.steps[0].args.retain(|arg| arg != "--workspace"),
+                }
+                assert!(
+                    invalid.decode_operation().is_err(),
+                    "accepted malformed provenance variant {variant}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_current_runner_operation_kind_round_trips_through_v2() {
         use std::collections::BTreeSet;
 
@@ -2926,6 +3141,7 @@ mod tests {
             }),
             RunnerFileOperation::Write(file_payload(Some("body"))),
             RunnerFileOperation::List(file_payload(None)),
+            RunnerFileOperation::ListPage(file_payload(Some(r#"{"offset":0,"limit":20}"#))),
             RunnerFileOperation::ProjectOverview(file_payload(None)),
             RunnerFileOperation::DeleteProjectFiles(file_payload(None)),
             RunnerFileOperation::WriteProjectFile(file_payload(None)),
@@ -3006,6 +3222,7 @@ mod tests {
             "file_read",
             "file_write",
             "file_list",
+            "file_list_page",
             "file_project_overview",
             "file_delete_project_files",
             "file_write_project_file",

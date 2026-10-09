@@ -159,6 +159,7 @@ jobs:
             plugins/repo-context/package-lock.json
             plugins/campus-application/package-lock.json
             plugins/agent-browser/package-lock.json
+            plugins/agent-environment/package-lock.json
       - name: Install frontend dependencies
         if: needs.changes.outputs.needs_frontend == 'true' || needs.changes.outputs.needs_desktop_frontend == 'true'
         run: npm ci --prefix frontend
@@ -186,6 +187,7 @@ jobs:
           npm ci --prefix plugins/repo-context
           npm ci --prefix plugins/campus-application
           npm ci --prefix plugins/agent-browser
+          npm ci --prefix plugins/agent-environment
       - name: Check Plugin SDK contracts and first-party dogfood
         if: needs.changes.outputs.needs_plugin_sdk == 'true'
         run: |
@@ -203,6 +205,8 @@ jobs:
           npm --prefix plugins/campus-application test
           npm --prefix plugins/agent-browser run typecheck
           npm --prefix plugins/agent-browser test
+          npm --prefix plugins/agent-environment test
+          npm --prefix plugins/agent-environment run test:pi
       - name: Verify workspace boundaries
         run: |
           bash scripts/workspace_boundary_check.sh --self-test
@@ -220,11 +224,11 @@ jobs:
       - name: Check test inventory contract
         run: |
           bash scripts/test_inventory.sh --self-test
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_ci_rust_test
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_ci_rust_test scripts.tests.test_ci_aggregate_cancellation
           bash scripts/test_inventory.sh
       - name: Check macOS signing setup and release evidence contracts
         # Fake signing commands and synthetic artifacts only; no Apple credentials.
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_macos_signing_setup scripts.tests.test_macos_release_evidence
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_macos_signing_setup scripts.tests.test_macos_self_signed scripts.tests.test_macos_release_evidence
       - name: Check canonical contracts including optional tool surfaces
         # Root MCP/HTTP integration tests already run in the mandatory server
         # shard. Do not compile the full Server a second time for three filters.
@@ -232,6 +236,11 @@ jobs:
         run: |
           python3 scripts/tests/test_runner_observability_contract.py
           cargo test --locked -p webcodex-tool-contracts --all-features --lib
+          # Name/Serde/schema identity must also hold when either optional surface
+          # is absent. The all-features run above covers their joint presence.
+          cargo test --locked -p webcodex-tool-contracts --no-default-features --lib registration_consistency
+          cargo test --locked -p webcodex-tool-contracts --no-default-features --features workspace-checkpoints --lib registration_consistency
+          cargo test --locked -p webcodex-tool-contracts --no-default-features --features experimental-code-mode --lib registration_consistency
 
   mcp-conformance:
     # Dated MCP wire evidence is independent from ordinary unit/integration tests.
@@ -294,6 +303,15 @@ jobs:
         env:
           CI_RUST_SHARD: ${{ matrix.shard }}
         run: python3 scripts/ci_rust_test.py --report target/ci-test-reports/${{ matrix.shard }}.json -- cargo test --locked ${{ matrix.packages }}
+      - name: Run experimental Code Mode and receipt tests
+        if: matrix.shard == 'server'
+        run: |
+          CI_RUST_SHARD=experimental-code-mode \
+            python3 scripts/ci_rust_test.py --report target/ci-test-reports/experimental-code-mode.json -- \
+            cargo test --locked -p webcodex --features experimental-code-mode code_mode
+          CI_RUST_SHARD=experimental-code-mode-receipts \
+            python3 scripts/ci_rust_test.py --report target/ci-test-reports/experimental-code-mode-receipts.json -- \
+            cargo test --locked -p webcodex --features experimental-code-mode receipt_tests
       - name: Upload bounded Rust test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -332,17 +350,30 @@ jobs:
         run: python3 -m unittest discover -s integrations/codex -p 'test_*.py' -v
       - name: Test configured model API ACP adapter
         run: python3 -m unittest discover -s integrations/model_gateway/tests -p 'test_*.py' -v
+      # Keep the cheap deterministic release gate ahead of the optional full
+      # workspace check so workflow/script drift is reported before a long Cargo pass.
+      - name: Test deterministic release contract and tooling
+        run: bash scripts/release_check.sh --static-only
+      - name: Check Linux workspace production surfaces without warnings
+        run: python3 scripts/check_production_warnings.py
+      - name: Upload Linux production build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-linux-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-build-reports/*.json
+          retention-days: 7
       - name: Check complete workspace production/test targets
         if: github.event_name == 'pull_request' && (github.event.pull_request.user.login != github.repository_owner || contains(github.event.pull_request.labels.*.name, 'run-ci'))
         run: cargo check --locked --workspace --all-targets
-      - name: Test deterministic release contract and tooling
-        run: bash scripts/release_check.sh --static-only
 
   test:
     needs: [contract, changes, test-linux-rust, test-linux-tooling]
     # Preserve the historical aggregate status check and always evaluate upstream
     # results so a failed or unexpectedly skipped Linux lane cannot disappear.
-    if: always()
+    # Workflow cancellation is distinct from needs.<lane>.result. Superseded
+    # runs stop; a required child failure/cancellation is still rejected below.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -468,8 +499,15 @@ jobs:
           test "$(uname -m)" = "$EXPECTED_HOST_ARCH"
           rust_host="$(rustc -vV | sed -n 's/^host: //p')"
           test "$rust_host" = "$EXPECTED_RUST_HOST"
-      - name: Check macOS workspace production surfaces
-        run: cargo check --locked --workspace
+      - name: Check macOS workspace production surfaces without warnings
+        run: python3 scripts/check_production_warnings.py
+      - name: Upload macOS production build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-macos-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-build-reports/*.json
+          retention-days: 7
       - name: Run native macOS Runner and Computer tests
         run: cargo test --locked -p webcodex-runner -p webcodex-lsp -p webcodex-computer --features runner-real-process-tests
 
@@ -511,6 +549,8 @@ jobs:
           test "$(uname -m)" = "$EXPECTED_HOST_ARCH"
           rust_host="$(rustc -vV | sed -n 's/^host: //p')"
           test "$rust_host" = "$EXPECTED_RUST_HOST"
+      - name: Probe native DMG services before compiling Desktop
+        run: bash scripts/macos_finalize_dmg.sh --preflight
       - name: Install shared frontend dependencies
         run: npm ci --prefix frontend
       - name: Install Desktop dependencies
@@ -605,7 +645,9 @@ jobs:
     needs: [contract, changes, test-macos-core, test-macos-desktop]
     # Stable aggregate context: every configured macOS sublane must either succeed
     # when required by policy or be intentionally skipped when not required.
-    if: always()
+    # Workflow cancellation is distinct from needs.<lane>.result. Superseded
+    # runs stop; a required child failure/cancellation is still rejected below.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -662,13 +704,33 @@ jobs:
           "WEBCODEX_TEST_PWSH=$pwsh" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run Windows persistent-shell tests (PowerShell 5.1 + PowerShell 7)
         run: cargo test --locked -p webcodex-persistent-shell
-      - name: Check Windows workspace production surfaces
-        run: cargo check --locked --workspace
+      - name: Check Windows workspace production surfaces without warnings
+        run: python scripts/check_production_warnings.py
+      - name: Upload Windows production build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-windows-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-build-reports/*.json
+          retention-days: 7
       - name: Run Windows library and CLI tests
         run: cargo test --locked -p webcodex-runner-config -p webcodex-process -p webcodex-cli
+      - name: Test user-session task ownership after Windows account normalization
+        run: |
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File scripts/tests/test_windows_user_service_identity.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Windows user-session task ownership regression failed" }
       - name: Run Windows unified upgrade transactions including native v0.4.3 fixture
         run: |
           cargo test --locked -p webcodex-environment --lib upgrade::
+          if ($LASTEXITCODE -ne 0) { throw "Windows upgrade tests failed" }
+          cargo test --locked -p webcodex-environment --lib service::windows::
+          if ($LASTEXITCODE -ne 0) { throw "Windows service tests failed" }
+      - name: Test Computer helper ownership and native Task Scheduler roundtrip
+        run: |
+          cargo test --locked -p webcodex-environment --lib session_service::
+          if ($LASTEXITCODE -ne 0) { throw "Computer helper ownership tests failed" }
+          cargo test --locked -p webcodex-environment --lib windows_helper_task_scheduler_roundtrip_is_owned -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw "Computer helper Task Scheduler roundtrip failed" }
       - name: Test Windows unified installer routing and Desktop build freshness
         run: python -m unittest scripts.tests.test_prepare_windows_unified_installer scripts.tests.test_desktop_runtime_manifest scripts.tests.test_desktop_frontend_build
       - name: Test optional Codex observation adapter on Windows
@@ -841,7 +903,9 @@ jobs:
     needs: [contract, changes, test-windows-core, test-windows-runner, test-windows-package, test-windows-desktop]
     # Preserve the stable Windows aggregate while allowing each heavy lane to be
     # selected independently by the deterministic path-risk classifier.
-    if: always()
+    # Workflow cancellation is distinct from needs.<lane>.result. Superseded
+    # runs stop; a required child failure/cancellation is still rejected below.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -884,7 +948,9 @@ jobs:
     needs: [contract, changes, mcp-conformance, test-docker-server, test-macos, test-windows]
     # Stable branch-protection context: daily native aggregates and the path-aware
     # Server image smoke must resolve according to classifier policy.
-    if: always()
+    # Workflow cancellation is distinct from needs.<lane>.result. Superseded
+    # runs stop; a required child failure/cancellation is still rejected below.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

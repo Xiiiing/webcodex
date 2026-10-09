@@ -18,6 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+mod reaper;
+use reaper::Reaper;
+
 // Keep non-image Browser observations below the Server's ordinary 256 KiB
 // Runner-result retention boundary, with explicit room for the Runner envelope.
 const MAX_BROWSER_OBSERVATION_RESULT_BYTES: usize = 192 * 1024;
@@ -31,9 +34,12 @@ const ACTION_STABILITY_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone)]
 pub struct BrowserSupervisor {
+    // Stop and join the shared worker before the final owner drops Browser state.
+    reaper: Arc<Reaper>,
     inner: Arc<Mutex<SupervisorState>>,
     factory: Arc<dyn BackendFactory>,
     shutting_down: Arc<AtomicBool>,
+    bridge: Option<Arc<crate::bridge::BridgeServer>>,
 }
 
 struct SupervisorState {
@@ -53,6 +59,7 @@ struct ElementIdentity {
     document_id: String,
     snapshot_generation: u64,
     backend_node_id: i64,
+    frame_fence: Option<String>,
     capability: ControlCapability,
 }
 
@@ -84,13 +91,62 @@ impl BrowserSupervisor {
         Self::with_factory(Arc::new(ChromiumFactory))
     }
 
+    /// Runner startup entry. Bridge state is bound once to this process; ordinary
+    /// observations never start a listener or acquire another Runner's lease.
+    pub fn new_with_extension_bridge() -> Self {
+        let mut supervisor = Self::new();
+        supervisor.bridge = crate::bridge::BridgeServer::start().ok().map(Arc::new);
+        supervisor
+    }
+
+    pub fn discover_external(&self) -> BrowserResult<Vec<crate::AttachmentSummary>> {
+        self.reject_if_shutting_down()?;
+        self.bridge.as_ref().map(|bridge| bridge.discover()).ok_or_else(|| BrowserError::not_started(
+            "browser_bridge_unavailable", "The Runner does not own an extension bridge; check its private state and native host installation"))
+    }
+
+    pub fn attach_external(&self, attachment_id: &str) -> BrowserResult<BrowserSummary> {
+        self.reject_if_shutting_down()?;
+        self.reaper.ensure_available()?;
+        self.reap_expired();
+        let mut state = self.operation_state()?;
+        if state.browsers.len() >= MAX_BROWSERS {
+            return Err(BrowserError::not_started(
+                "browser_limit",
+                "Maximum Browser runtimes reached",
+            ));
+        }
+        let bridge = self.bridge.as_ref().ok_or_else(|| {
+            BrowserError::not_started(
+                "browser_bridge_unavailable",
+                "This Runner has no extension bridge owner",
+            )
+        })?;
+        let lease = bridge.attach(attachment_id, Instant::now() + crate::REQUEST_TIMEOUT)?;
+        let browser_id = opaque_id("browser");
+        let runtime = BrowserRuntime::new(crate::cdp::attach_external(lease));
+        let summary = BrowserSummary {
+            browser_id: browser_id.clone(),
+            ownership: runtime.backend.ownership(),
+            profile: None,
+            page_count: 1,
+        };
+        state.browsers.insert(browser_id, runtime);
+        Ok(summary)
+    }
+
     fn with_factory(factory: Arc<dyn BackendFactory>) -> Self {
+        let inner = Arc::new(Mutex::new(SupervisorState {
+            browsers: HashMap::new(),
+        }));
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let reaper = Arc::new(Reaper::start(&inner, &shutting_down));
         Self {
-            inner: Arc::new(Mutex::new(SupervisorState {
-                browsers: HashMap::new(),
-            })),
+            reaper,
+            inner,
             factory,
-            shutting_down: Arc::new(AtomicBool::new(false)),
+            shutting_down,
+            bridge: None,
         }
     }
 
@@ -102,6 +158,7 @@ impl BrowserSupervisor {
         // Shutdown admission must never wait behind a Browser operation that is
         // currently holding the runtime mutex while bounded CDP I/O completes.
         self.shutting_down.store(true, Ordering::Release);
+        self.reaper.stop();
     }
 
     pub fn list_browsers(&self) -> Vec<BrowserSummary> {
@@ -113,13 +170,25 @@ impl BrowserSupervisor {
             .take(MAX_BROWSERS)
             .map(|(id, runtime)| BrowserSummary {
                 browser_id: id.clone(),
+                ownership: runtime.backend.ownership(),
+                profile: runtime.backend.profile_name().map(str::to_owned),
                 page_count: runtime.page_count(),
             })
             .collect()
     }
 
     pub fn launch(&self) -> BrowserResult<BrowserSummary> {
+        self.launch_mode(None)
+    }
+
+    pub fn launch_managed(&self, profile: &str) -> BrowserResult<BrowserSummary> {
+        crate::profiles::validate_profile_id(profile)?;
+        self.launch_mode(Some(profile))
+    }
+
+    fn launch_mode(&self, profile: Option<&str>) -> BrowserResult<BrowserSummary> {
         self.reject_if_shutting_down()?;
+        self.reaper.ensure_available()?;
         self.reap_expired();
         let mut state = self.operation_state()?;
         if state.browsers.len() >= MAX_BROWSERS {
@@ -128,17 +197,38 @@ impl BrowserSupervisor {
                 "maximum owned Browser runtimes reached",
             ));
         }
-        let backend = self.factory.launch()?;
+        let backend = match profile {
+            Some(profile) => self.factory.launch_managed(profile)?,
+            None => self.factory.launch()?,
+        };
         let browser_id = opaque_id("browser");
         let runtime = BrowserRuntime::new(backend);
         let summary = BrowserSummary {
             browser_id: browser_id.clone(),
+            ownership: runtime.backend.ownership(),
+            profile: runtime.backend.profile_name().map(str::to_owned),
             // Chromium is launched with one explicit about:blank target. Keep a
             // conservative count floor until pages observation assigns opaque IDs.
             page_count: runtime.page_count(),
         };
         state.browsers.insert(browser_id, runtime);
         Ok(summary)
+    }
+
+    /// Runner-only handoff. Native process/window identity never becomes a model
+    /// argument or result; keep the Browser operation lock held through resolution.
+    pub fn with_native_window<T>(
+        &self,
+        browser_id: &str,
+        resolve: impl FnOnce(crate::BrowserWindowHint) -> BrowserResult<T>,
+    ) -> BrowserResult<T> {
+        self.touch_current(browser_id)?;
+        let mut state = self.operation_state()?;
+        let runtime = state
+            .browsers
+            .get_mut(browser_id)
+            .ok_or_else(|| stale_browser(browser_id))?;
+        resolve(runtime.backend.live_window_hint()?)
     }
 
     pub fn pages(&self, browser_id: &str, limit: usize) -> BrowserResult<Vec<PageSummary>> {
@@ -249,9 +339,52 @@ impl BrowserSupervisor {
         max_nodes: usize,
         max_depth: u32,
     ) -> BrowserResult<SemanticSnapshot> {
+        self.snapshot_window(browser_id, page_id, mode, max_nodes, max_depth, 0)
+    }
+
+    pub fn snapshot_window(
+        &self,
+        browser_id: &str,
+        page_id: &str,
+        mode: SnapshotMode,
+        max_nodes: usize,
+        max_depth: u32,
+        node_offset: usize,
+    ) -> BrowserResult<SemanticSnapshot> {
+        self.snapshot_query(
+            browser_id,
+            page_id,
+            mode,
+            max_nodes,
+            max_depth,
+            node_offset,
+            None,
+        )
+    }
+
+    /// Query the existing bounded source before windowing, never merge authority
+    /// from successive snapshots. Unreturned matches receive no element identity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn snapshot_query(
+        &self,
+        browser_id: &str,
+        page_id: &str,
+        mode: SnapshotMode,
+        max_nodes: usize,
+        max_depth: u32,
+        node_offset: usize,
+        query: Option<&crate::BrowserSnapshotQuery>,
+    ) -> BrowserResult<SemanticSnapshot> {
+        if query.is_some_and(|query| !query.is_valid()) {
+            return Err(BrowserError::not_started(
+                "invalid_request",
+                "Query filters require 1..128 nonblank characters",
+            ));
+        }
         self.touch_current(browser_id)?;
         let max_nodes = max_nodes.clamp(1, MAX_SNAPSHOT_NODES);
         let max_depth = max_depth.clamp(1, DEFAULT_SNAPSHOT_DEPTH);
+        let node_offset = node_offset.min(crate::MAX_SNAPSHOT_OFFSET);
         let mut state = self.operation_state()?;
         let runtime = state
             .browsers
@@ -259,7 +392,8 @@ impl BrowserSupervisor {
             .ok_or_else(|| stale_browser(browser_id))?;
         let target_id = runtime.page_target(page_id)?;
         let snapshot = runtime.backend.snapshot(&target_id, max_depth)?;
-        let auto_compacted = mode == SnapshotMode::Auto
+        let auto_compacted = query.is_none()
+            && mode == SnapshotMode::Auto
             && should_auto_compact_snapshot(&snapshot.nodes, snapshot.truncated, max_nodes);
         let effective_mode = match mode {
             SnapshotMode::Auto if auto_compacted => SnapshotMode::Interactive,
@@ -275,24 +409,46 @@ impl BrowserSupervisor {
             page.snapshot_generation = generation;
         }
 
+        let form_context_by_backend_id = snapshot.form_context_by_backend_id;
+        let source_incomplete = snapshot.source_incomplete;
+        let source_truncated = snapshot.truncated;
+        // Keep the existing recoverable pagination horizon; do not expand the DOM scan.
+        let scan_limit = crate::MAX_SNAPSHOT_OFFSET + MAX_SNAPSHOT_NODES;
+        let scan_incomplete = query.is_some() && snapshot.nodes.len() > scan_limit;
         let source_nodes = snapshot
             .nodes
             .into_iter()
+            .take(if query.is_some() {
+                scan_limit
+            } else {
+                usize::MAX
+            })
+            .filter(|node| {
+                query.is_none_or(|query| {
+                    let context = node
+                        .backend_node_id
+                        .and_then(|id| form_context_by_backend_id.get(&id));
+                    matches_snapshot_query(node, context, query)
+                })
+            })
             .filter(|node| {
                 effective_mode != SnapshotMode::Interactive
                     || retained_in_interactive_snapshot(node)
             })
             .collect::<Vec<_>>();
+        let source_node_count = source_nodes.len();
         let mut nodes = Vec::new();
         let mut aggregate_bytes = 0usize;
-        let mut truncated = if effective_mode == SnapshotMode::Interactive {
-            source_nodes.len() > max_nodes
-        } else {
-            snapshot.truncated || source_nodes.len() > max_nodes
-        };
+        let window_end = node_offset.saturating_add(max_nodes);
+        let source_projection_truncated =
+            query.is_none() && effective_mode != SnapshotMode::Interactive && source_truncated;
+        let mut truncated = source_incomplete
+            || scan_incomplete
+            || source_projection_truncated
+            || source_node_count > window_end;
         let mut group_ids = HashMap::<String, String>::new();
         let mut next_group_id = 1usize;
-        for node in source_nodes.into_iter().take(max_nodes) {
+        for node in source_nodes.into_iter().skip(node_offset).take(max_nodes) {
             let group_id = node.group_key.as_ref().map(|key| {
                 group_ids
                     .entry(key.clone())
@@ -303,18 +459,35 @@ impl BrowserSupervisor {
                     })
                     .clone()
             });
-            let projected =
-                runtime.project_node(page_id, &snapshot.document_id, generation, node, group_id);
+            let form_context = node
+                .backend_node_id
+                .and_then(|backend_node_id| form_context_by_backend_id.get(&backend_node_id))
+                .cloned();
+            let projected = runtime.project_node(
+                page_id,
+                &snapshot.document_id,
+                generation,
+                node,
+                group_id,
+                form_context,
+            );
             let projected_bytes = serde_json::to_vec(&projected)
                 .map(|value| value.len())
                 .unwrap_or(MAX_SNAPSHOT_BYTES);
             if aggregate_bytes.saturating_add(projected_bytes) > MAX_SNAPSHOT_BYTES {
+                if let Some(id) = &projected.element_id {
+                    runtime.elements.remove(id);
+                }
                 truncated = true;
                 break;
             }
             aggregate_bytes += projected_bytes;
             nodes.push(projected);
         }
+        let next_offset = node_offset.saturating_add(nodes.len());
+        let next_node_offset = (next_offset < source_node_count
+            && next_offset <= crate::MAX_SNAPSHOT_OFFSET)
+            .then_some(next_offset);
         Ok(SemanticSnapshot {
             browser_id: browser_id.to_string(),
             page_id: page_id.to_string(),
@@ -324,6 +497,8 @@ impl BrowserSupervisor {
             max_nodes,
             max_depth,
             node_count: nodes.len(),
+            node_offset,
+            next_node_offset,
             truncated,
             nodes,
         })
@@ -656,6 +831,42 @@ impl BrowserSupervisor {
         )
     }
 
+    pub fn select_choice(
+        &self,
+        browser_id: &str,
+        page_id: &str,
+        element_id: &str,
+        path: &[String],
+    ) -> BrowserResult<BrowserStability> {
+        self.touch_current(browser_id)?;
+        crate::types::validate_choice_path(path)?;
+        self.element_effect(
+            browser_id,
+            page_id,
+            element_id,
+            AdmittedBrowserAction::SelectChoice,
+            |backend, target, node| backend.select_choice(target, node, path),
+        )
+    }
+
+    pub fn set_date(
+        &self,
+        browser_id: &str,
+        page_id: &str,
+        element_id: &str,
+        value: &str,
+    ) -> BrowserResult<BrowserStability> {
+        self.touch_current(browser_id)?;
+        crate::types::validate_date_value(value)?;
+        self.element_effect(
+            browser_id,
+            page_id,
+            element_id,
+            AdmittedBrowserAction::SetDate,
+            |backend, target, node| backend.set_date(target, node, value),
+        )
+    }
+
     pub fn upload_file(
         &self,
         browser_id: &str,
@@ -724,13 +935,14 @@ impl BrowserSupervisor {
 
     pub fn shutdown_until(&self, deadline: Instant) -> BrowserShutdownReport {
         self.begin_shutdown();
+        self.reaper.join_until(deadline);
         let mut state = self.state();
-        let mut report = BrowserShutdownReport {
-            browsers: state.browsers.len(),
-            ..BrowserShutdownReport::default()
-        };
         let browsers = std::mem::take(&mut state.browsers);
         drop(state);
+        // Taking Browser state first fences worker registration of any runtimes
+        // removed before shutdown admission. No further reaping can start.
+        let mut report = self.reaper.take_report();
+        report.browsers = report.browsers.saturating_add(browsers.len());
         for (_, mut runtime) in browsers {
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
@@ -774,18 +986,8 @@ impl BrowserSupervisor {
     }
 
     fn reap_expired(&self) {
-        let now = Instant::now();
         let mut state = self.state();
-        let expired_ids = state
-            .browsers
-            .iter()
-            .filter(|(_, runtime)| runtime.expired(now))
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        let expired = expired_ids
-            .into_iter()
-            .filter_map(|id| state.browsers.remove(&id))
-            .collect::<Vec<_>>();
+        let expired = state.take_expired(Instant::now());
         drop(state);
         for mut runtime in expired {
             let _ = runtime.backend.shutdown(SHUTDOWN_TIMEOUT);
@@ -811,7 +1013,6 @@ impl BrowserSupervisor {
             .get_mut(browser_id)
             .ok_or_else(|| stale_browser(browser_id))?;
         let target = runtime.page_target(page_id)?;
-        let deadline = Instant::now() + Duration::from_secs(20);
         let mut result = BatchResult {
             execution_state: ExecutionState::NotStarted,
             requested_count: operations.len(),
@@ -822,6 +1023,17 @@ impl BrowserSupervisor {
             stability: None,
             error: None,
         };
+        // Intrinsic arguments are independent of page state. Validate the whole
+        // request before dispatch so a malformed later widget cannot mutate an
+        // earlier native field and then fail as a partial batch.
+        for (index, operation) in operations.iter().enumerate() {
+            if let Err(error) = operation.validate() {
+                result.stopped_at_index = Some(index);
+                result.error = Some(error);
+                return Ok(result);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
         for (index, operation) in operations.iter().enumerate() {
             let attempt = (|| {
                 if Instant::now() >= deadline {
@@ -830,7 +1042,6 @@ impl BrowserSupervisor {
                         "batch dispatch budget exhausted",
                     ));
                 }
-                operation.validate()?;
                 let (element_id, action) = operation.authority();
                 let element = runtime.authorized_element(page_id, &target, element_id, action)?;
                 let node = element.backend_node_id;
@@ -844,6 +1055,12 @@ impl BrowserSupervisor {
                     }
                     BatchOperation::SetValue { value, .. } => {
                         runtime.backend.set_value(&target, node, value)
+                    }
+                    BatchOperation::SelectChoice { choice_path, .. } => {
+                        runtime.backend.select_choice(&target, node, choice_path)
+                    }
+                    BatchOperation::SetDate { value, .. } => {
+                        runtime.backend.set_date(&target, node, value)
                     }
                     BatchOperation::UploadFile { path, .. } => {
                         runtime.backend.upload_file(&target, node, path)
@@ -949,6 +1166,21 @@ impl BrowserSupervisor {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl SupervisorState {
+    fn take_expired(&mut self, now: Instant) -> Vec<BrowserRuntime> {
+        let expired_ids = self
+            .browsers
+            .iter()
+            .filter(|(_, runtime)| runtime.expired(now))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        expired_ids
+            .into_iter()
+            .filter_map(|id| self.browsers.remove(&id))
+            .collect()
     }
 }
 
@@ -1073,6 +1305,7 @@ impl BrowserRuntime {
         snapshot_generation: u64,
         node: BackendNode,
         group_id: Option<String>,
+        form_context: Option<crate::FormContext>,
     ) -> SemanticNode {
         let mut element_id = None;
         let actions = node.capability.action_names();
@@ -1087,6 +1320,7 @@ impl BrowserRuntime {
                         document_id: document_id.to_string(),
                         snapshot_generation,
                         backend_node_id,
+                        frame_fence: node.frame_fence,
                         capability: node.capability,
                     },
                 );
@@ -1114,6 +1348,7 @@ impl BrowserRuntime {
             required: node.required,
             disabled: node.disabled,
             read_only: node.read_only,
+            form_context,
             actions: if element_id.is_some() {
                 actions
             } else {
@@ -1148,6 +1383,17 @@ impl BrowserRuntime {
             self.invalidate_elements_for_page(page_id);
             return Err(stale_element());
         }
+        let frame_fence = self
+            .elements
+            .values()
+            .find(|element| element.page_id == page_id && element.frame_fence.is_some())
+            .and_then(|element| element.frame_fence.clone());
+        if let Some(fence) = frame_fence {
+            if let Err(error) = self.backend.validate_frame_fence(target_id, &fence) {
+                self.invalidate_elements_for_page(page_id);
+                return Err(pre_effect_revalidation_error(error));
+            }
+        }
         Ok(())
     }
 }
@@ -1156,7 +1402,16 @@ fn retained_in_interactive_snapshot(node: &BackendNode) -> bool {
     if node.select_choice {
         return true;
     }
-    node.capability.admits_any() && node.backend_node_id.is_some()
+    if node.backend_node_id.is_none() {
+        return false;
+    }
+    // A known disabled or fully read-only control stays visible without an effect.
+    if node.disabled == Some(true)
+        || (node.read_only == Some(true) && !node.capability.admits_any())
+    {
+        return true;
+    }
+    node.capability.admits_any()
 }
 
 fn should_auto_compact_snapshot(
@@ -1288,9 +1543,66 @@ fn opaque_id(prefix: &str) -> String {
     format!("{prefix}_{}", Uuid::new_v4().simple())
 }
 
+fn matches_snapshot_query(
+    node: &BackendNode,
+    context: Option<&crate::FormContext>,
+    query: &crate::BrowserSnapshotQuery,
+) -> bool {
+    fn contains(value: Option<&str>, needle: &str) -> bool {
+        value.is_some_and(|value| value.to_lowercase().contains(&needle.to_lowercase()))
+    }
+    let field = node.capability.custom_choice
+        || node.capability.custom_date
+        || context.is_some_and(|c| matches!(c.dom_tag.as_str(), "input" | "select" | "textarea"))
+        || matches!(
+            node.role.as_str(),
+            "textbox"
+                | "searchbox"
+                | "combobox"
+                | "checkbox"
+                | "listbox"
+                | "radio"
+                | "switch"
+                | "spinbutton"
+                | "slider"
+                | "Date"
+                | "DateTime"
+                | "InputTime"
+                | "ColorWell"
+        );
+    (!query.fields_only || field)
+        && query
+            .role
+            .as_ref()
+            .is_none_or(|role| node.role.eq_ignore_ascii_case(role))
+        && query.text.as_ref().is_none_or(|text| {
+            [
+                node.name.as_deref(),
+                node.description.as_deref(),
+                context.and_then(|c| c.nearby_label.as_deref()),
+                context.and_then(|c| c.placeholder.as_deref()),
+            ]
+            .into_iter()
+            .any(|value| contains(value, text))
+        })
+        && query.group.as_ref().is_none_or(|group| {
+            contains(node.group_label.as_deref(), group)
+                || contains(context.and_then(|c| c.group_label.as_deref()), group)
+        })
+        && query.section.as_ref().is_none_or(|section| {
+            contains(context.and_then(|c| c.section_label.as_deref()), section)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     mod batch;
+    mod campus_e2e;
+    mod fill;
+    mod frames;
+    mod lifecycle;
+    mod query;
+    mod widgets;
     use super::*;
     use crate::cdp::{
         BackendConsoleEntry, BackendDiagnosticsSnapshot, BackendEventSnapshot, BackendFactory,
@@ -1306,6 +1618,7 @@ mod tests {
         capability: ControlCapability,
     ) -> crate::cdp::BackendNode {
         crate::cdp::BackendNode {
+            frame_fence: None,
             role: role.to_string(),
             name: Some(name.to_string()),
             description: None,
@@ -1341,6 +1654,9 @@ mod tests {
     }
 
     struct FakeBackend {
+        shutdown_probe: Option<lifecycle::ShutdownProbe>,
+        query_nodes: Option<Vec<BackendNode>>,
+        frame_state: Option<Arc<Mutex<String>>>,
         batch_probe: Option<Arc<Mutex<batch::BatchProbe>>>,
         pages: Vec<BackendPage>,
         document_generation: u64,
@@ -1354,6 +1670,8 @@ mod tests {
         page_created: bool,
         structured_controls: bool,
         compact_select_page: bool,
+        control_state_page: bool,
+        iframe_control_state: bool,
     }
 
     impl FakeBackend {
@@ -1363,6 +1681,9 @@ mod tests {
 
         fn with_snapshot_nodes(snapshot_node_count: usize) -> Self {
             Self {
+                shutdown_probe: None,
+                query_nodes: None,
+                frame_state: None,
                 batch_probe: None,
                 pages: vec![BackendPage {
                     target_id: "private-target".to_string(),
@@ -1381,12 +1702,27 @@ mod tests {
                 page_created: false,
                 structured_controls: false,
                 compact_select_page: false,
+                control_state_page: false,
+                iframe_control_state: false,
             }
+        }
+
+        fn with_iframe_control_state(frame_state: Arc<Mutex<String>>) -> Self {
+            let mut backend = Self::new();
+            backend.frame_state = Some(frame_state);
+            backend.iframe_control_state = true;
+            backend
         }
 
         fn with_compact_select_page() -> Self {
             let mut backend = Self::new();
             backend.compact_select_page = true;
+            backend
+        }
+
+        fn with_control_state_page() -> Self {
+            let mut backend = Self::new();
+            backend.control_state_page = true;
             backend
         }
 
@@ -1422,6 +1758,24 @@ mod tests {
     }
 
     impl BrowserBackend for FakeBackend {
+        fn ownership(&self) -> crate::BrowserOwnership {
+            self.shutdown_probe
+                .as_ref()
+                .map(|probe| probe.ownership)
+                .unwrap_or(crate::BrowserOwnership::OwnedEphemeral)
+        }
+
+        fn validate_frame_fence(&mut self, _target_id: &str, fence: &str) -> BrowserResult<()> {
+            if self
+                .frame_state
+                .as_ref()
+                .is_some_and(|state| *state.lock().unwrap() == fence)
+            {
+                Ok(())
+            } else {
+                Err(stale_element())
+            }
+        }
         fn pages(&mut self) -> BrowserResult<Vec<BackendPage>> {
             if self
                 .batch_probe
@@ -1459,10 +1813,67 @@ mod tests {
             _target_id: &str,
             _max_depth: u32,
         ) -> BrowserResult<BackendSnapshot> {
-            if self.batch_probe.is_some() {
+            if let Some(nodes) = &self.query_nodes {
                 return Ok(BackendSnapshot {
                     document_id: self.pages[0].document_id.clone(),
+                    nodes: nodes.clone(),
+                    form_context_by_backend_id: HashMap::new(),
+                    source_incomplete: false,
+                    truncated: nodes.len() > MAX_SNAPSHOT_NODES,
+                });
+            }
+            if self.iframe_control_state {
+                let (mut nodes, truncated) = crate::cdp::project_ax_nodes(
+                    &control_state_ax_nodes(),
+                    Some(&control_state_dom()),
+                );
+                let fence = self
+                    .frame_state
+                    .as_ref()
+                    .expect("iframe control fixture has a frame fence")
+                    .lock()
+                    .unwrap()
+                    .clone();
+                for node in &mut nodes {
+                    node.frame_fence = Some(fence.clone());
+                }
+                return Ok(BackendSnapshot {
+                    source_incomplete: false,
+                    document_id: format!("doc-{}", self.document_generation),
+                    nodes,
+                    form_context_by_backend_id: HashMap::new(),
+                    truncated,
+                });
+            }
+            if let Some(frame_state) = &self.frame_state {
+                let mut nodes = batch::form_nodes();
+                if self.snapshot_node_count > 1 {
+                    nodes = nodes
+                        .into_iter()
+                        .cycle()
+                        .take(self.snapshot_node_count)
+                        .collect();
+                    for node in &mut nodes {
+                        node.name = Some("x".repeat(MAX_NODE_TEXT_BYTES));
+                    }
+                }
+                for node in &mut nodes {
+                    node.frame_fence = Some(frame_state.lock().unwrap().clone());
+                }
+                return Ok(BackendSnapshot {
+                    source_incomplete: false,
+                    document_id: self.pages[0].document_id.clone(),
+                    nodes,
+                    form_context_by_backend_id: HashMap::new(),
+                    truncated: false,
+                });
+            }
+            if self.batch_probe.is_some() {
+                return Ok(BackendSnapshot {
+                    source_incomplete: false,
+                    document_id: self.pages[0].document_id.clone(),
                     nodes: batch::form_nodes(),
+                    form_context_by_backend_id: HashMap::new(),
                     truncated: false,
                 });
             }
@@ -1472,14 +1883,31 @@ mod tests {
                     Some(&compact_select_dom()),
                 );
                 return Ok(BackendSnapshot {
+                    source_incomplete: false,
                     document_id: format!("doc-{}", self.document_generation),
                     nodes,
+                    form_context_by_backend_id: HashMap::new(),
+                    truncated,
+                });
+            }
+            if self.control_state_page {
+                let (nodes, truncated) = crate::cdp::project_ax_nodes(
+                    &control_state_ax_nodes(),
+                    Some(&control_state_dom()),
+                );
+                return Ok(BackendSnapshot {
+                    source_incomplete: false,
+                    document_id: format!("doc-{}", self.document_generation),
+                    nodes,
+                    form_context_by_backend_id: HashMap::new(),
                     truncated,
                 });
             }
             if self.structured_controls {
                 return Ok(BackendSnapshot {
+                    source_incomplete: false,
                     document_id: format!("doc-{}", self.document_generation),
+                    form_context_by_backend_id: HashMap::new(),
                     nodes: vec![
                         fixture_node("button", "Go", Some(7), ControlCapability::click()),
                         fixture_node(
@@ -1498,6 +1926,7 @@ mod tests {
                 .map(|index| {
                     let actionable = !self.mixed_snapshot || index % 2 == 0;
                     BackendNode {
+                        frame_fence: None,
                         role: if actionable { "button" } else { "paragraph" }.to_string(),
                         name: Some(if actionable {
                             format!("Go {index}")
@@ -1525,8 +1954,10 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             Ok(BackendSnapshot {
+                source_incomplete: false,
                 document_id: format!("doc-{}", self.document_generation),
                 nodes,
+                form_context_by_backend_id: HashMap::new(),
                 truncated: self.snapshot_node_count > MAX_SNAPSHOT_NODES,
             })
         }
@@ -1703,6 +2134,17 @@ mod tests {
         ) -> BrowserResult<()> {
             self.record_batch_effect(format!("value:{_backend_node_id}:{_value}"))
         }
+        fn select_choice(
+            &mut self,
+            _target_id: &str,
+            node: i64,
+            path: &[String],
+        ) -> BrowserResult<()> {
+            self.record_batch_effect(format!("choice:{node}:{}", path.join("/")))
+        }
+        fn set_date(&mut self, _target_id: &str, node: i64, value: &str) -> BrowserResult<()> {
+            self.record_batch_effect(format!("date:{node}:{value}"))
+        }
         fn upload_file(
             &mut self,
             _target_id: &str,
@@ -1743,7 +2185,10 @@ mod tests {
             self.pages.retain(|page| page.target_id != target_id);
             Ok(())
         }
-        fn shutdown(&mut self, _timeout: Duration) -> BrowserResult<()> {
+        fn shutdown(&mut self, timeout: Duration) -> BrowserResult<()> {
+            if let Some(probe) = &mut self.shutdown_probe {
+                return probe.shutdown(timeout);
+            }
             Ok(())
         }
     }
@@ -1865,6 +2310,82 @@ mod tests {
         nodes
     }
 
+    fn control_state_dom() -> serde_json::Value {
+        serde_json::json!({
+            "nodeType": 9,
+            "children": [{
+                "nodeType": 1,
+                "localName": "body",
+                "backendNodeId": 100,
+                "children": [
+                    {"nodeType": 1, "localName": "input", "backendNodeId": 1, "attributes": ["type", "number", "disabled", ""]},
+                    {"nodeType": 1, "localName": "select", "backendNodeId": 2, "attributes": ["disabled", ""], "children": [
+                        {"nodeType": 1, "localName": "option", "backendNodeId": 3, "attributes": ["value", "alpha"]}
+                    ]},
+                    {"nodeType": 1, "localName": "input", "backendNodeId": 4, "attributes": ["type", "text", "readonly", "readonly"]},
+                    {"nodeType": 1, "localName": "input", "backendNodeId": 5, "attributes": ["type", "text"]},
+                    {"nodeType": 1, "localName": "input", "backendNodeId": 6, "attributes": ["type", "number"]},
+                    {"nodeType": 1, "localName": "input", "backendNodeId": 7, "attributes": ["type", "text"]},
+                    {"nodeType": 1, "localName": "input", "backendNodeId": 8, "attributes": ["type", "number", "readonly", ""]},
+                    {"nodeType": 1, "localName": "select", "backendNodeId": 9, "children": [
+                        {"nodeType": 1, "localName": "option", "backendNodeId": 10, "attributes": ["value", "beta"]}
+                    ]},
+                    {"nodeType": 1, "localName": "p", "backendNodeId": 11},
+                    {"nodeType": 1, "localName": "input", "backendNodeId": 12, "attributes": ["type", "number"]}
+                ]
+            }]
+        })
+    }
+
+    fn control_state_ax(
+        name: &str,
+        role: &str,
+        backend_node_id: i64,
+        disabled: Option<bool>,
+        read_only: Option<bool>,
+    ) -> serde_json::Value {
+        let mut node = serde_json::json!({
+            "nodeId": format!("ax-{name}"),
+            "role": {"value": role},
+            "name": {"value": name},
+            "backendDOMNodeId": backend_node_id
+        });
+        let mut properties = Vec::new();
+        if let Some(disabled) = disabled {
+            properties.push(serde_json::json!({
+                "name": "disabled",
+                "value": {"value": disabled}
+            }));
+        }
+        if let Some(read_only) = read_only {
+            properties.push(serde_json::json!({
+                "name": "readonly",
+                "value": {"value": read_only}
+            }));
+        }
+        if !properties.is_empty() {
+            node["properties"] = serde_json::json!(properties);
+        }
+        node
+    }
+
+    fn control_state_ax_nodes() -> Vec<serde_json::Value> {
+        vec![
+            control_state_ax("Qty", "spinbutton", 1, Some(true), None),
+            control_state_ax("Pick", "combobox", 2, Some(true), None),
+            control_state_ax("Alpha", "option", 3, None, None),
+            control_state_ax("Notes", "textbox", 4, None, Some(true)),
+            control_state_ax("Name", "textbox", 5, None, None),
+            control_state_ax("Amount", "spinbutton", 6, Some(false), None),
+            control_state_ax("Title", "textbox", 7, Some(false), Some(false)),
+            control_state_ax("Locked", "spinbutton", 8, None, Some(true)),
+            control_state_ax("Kind", "combobox", 9, None, None),
+            control_state_ax("Beta", "option", 10, None, None),
+            control_state_ax("Static", "paragraph", 11, None, None),
+            control_state_ax("Count", "spinbutton", 12, None, None),
+        ]
+    }
+
     struct CompactSelectFactory;
     impl BackendFactory for CompactSelectFactory {
         fn available(&self) -> bool {
@@ -1872,6 +2393,16 @@ mod tests {
         }
         fn launch(&self) -> BrowserResult<Box<dyn BrowserBackend>> {
             Ok(Box::new(FakeBackend::with_compact_select_page()))
+        }
+    }
+
+    struct ControlStateFactory;
+    impl BackendFactory for ControlStateFactory {
+        fn available(&self) -> bool {
+            true
+        }
+        fn launch(&self) -> BrowserResult<Box<dyn BrowserBackend>> {
+            Ok(Box::new(FakeBackend::with_control_state_page()))
         }
     }
 
@@ -2271,6 +2802,140 @@ mod tests {
     }
 
     #[test]
+    fn disabled_and_read_only_controls_publish_no_unsupported_effect() {
+        let supervisor = BrowserSupervisor::with_factory(Arc::new(ControlStateFactory));
+        let browser = supervisor.launch().unwrap();
+        let page = supervisor.pages(&browser.browser_id, 8).unwrap().remove(0);
+        let snapshot = supervisor
+            .snapshot(
+                &browser.browser_id,
+                &page.page_id,
+                SnapshotMode::Full,
+                MAX_SNAPSHOT_NODES,
+                DEFAULT_SNAPSHOT_DEPTH,
+            )
+            .unwrap();
+        let find = |name: &str| {
+            snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+        let qty = find("Qty");
+        assert_eq!(qty.disabled, Some(true));
+        assert!(qty.actions.is_empty());
+        assert!(qty.element_id.is_none());
+        assert!(!qty.actionable);
+        let pick = find("Pick");
+        assert_eq!(pick.disabled, Some(true));
+        assert!(pick.actions.is_empty());
+        assert!(pick.element_id.is_none());
+        let alpha = find("Alpha");
+        assert!(alpha.actions.is_empty());
+        assert!(alpha.element_id.is_none());
+        let locked = find("Locked");
+        assert_eq!(locked.read_only, Some(true));
+        assert!(locked.actions.is_empty());
+        assert!(locked.element_id.is_none());
+        let notes = find("Notes");
+        assert_eq!(notes.read_only, Some(true));
+        assert_eq!(notes.actions, ["click"]);
+        assert!(notes.element_id.is_some());
+        let name = find("Name");
+        assert_eq!(name.disabled, None);
+        assert_eq!(name.read_only, None);
+        assert_eq!(name.actions, ["click", "input_text", "set_value"]);
+        let title = find("Title");
+        assert_eq!(title.disabled, Some(false));
+        assert_eq!(title.read_only, Some(false));
+        assert_eq!(title.actions, ["click", "input_text", "set_value"]);
+        assert_eq!(find("Amount").disabled, Some(false));
+        assert_eq!(find("Amount").actions, ["set_value"]);
+        assert_eq!(find("Count").disabled, None);
+        assert_eq!(find("Count").read_only, None);
+        assert_eq!(find("Count").actions, ["set_value"]);
+        assert_eq!(find("Kind").actions, ["select_option"]);
+        assert!(find("Beta").actions.is_empty());
+        assert!(find("Beta").element_id.is_none());
+
+        let notes_id = notes.element_id.clone().unwrap();
+        supervisor
+            .click(&browser.browser_id, &page.page_id, &notes_id)
+            .unwrap();
+        let rejected_text = supervisor
+            .input_text(&browser.browser_id, &page.page_id, &notes_id, "later")
+            .unwrap_err();
+        assert_eq!(rejected_text.kind, "element_action_unsupported");
+        assert_eq!(rejected_text.execution_state, ExecutionState::NotStarted);
+        assert_eq!(rejected_text.recovery_action, None);
+        let rejected_value = supervisor
+            .set_value(&browser.browser_id, &page.page_id, &notes_id, "later")
+            .unwrap_err();
+        assert_eq!(rejected_value.kind, "element_action_unsupported");
+        assert_eq!(rejected_value.execution_state, ExecutionState::NotStarted);
+        let name_id = name.element_id.clone().unwrap();
+        supervisor
+            .click(&browser.browser_id, &page.page_id, &name_id)
+            .unwrap();
+        supervisor
+            .input_text(&browser.browser_id, &page.page_id, &name_id, "Ada")
+            .unwrap();
+        let amount_id = find("Amount").element_id.clone().unwrap();
+        supervisor
+            .set_value(&browser.browser_id, &page.page_id, &amount_id, "4")
+            .unwrap();
+        let count_id = find("Count").element_id.clone().unwrap();
+        supervisor
+            .set_value(&browser.browser_id, &page.page_id, &count_id, "5")
+            .unwrap();
+        let kind_id = find("Kind").element_id.clone().unwrap();
+        supervisor
+            .select_option(&browser.browser_id, &page.page_id, &kind_id, "beta")
+            .unwrap();
+        let absent = supervisor
+            .set_value(&browser.browser_id, &page.page_id, "element_absent", "9")
+            .unwrap_err();
+        assert_eq!(absent.kind, "stale_element");
+        assert_eq!(absent.execution_state, ExecutionState::NotStarted);
+
+        let interactive = supervisor
+            .snapshot(
+                &browser.browser_id,
+                &page.page_id,
+                SnapshotMode::Interactive,
+                MAX_SNAPSHOT_NODES,
+                DEFAULT_SNAPSHOT_DEPTH,
+            )
+            .unwrap();
+        let kept = |name: &str| {
+            interactive
+                .nodes
+                .iter()
+                .any(|node| node.name.as_deref() == Some(name))
+        };
+        assert!(kept("Qty"));
+        assert!(kept("Pick"));
+        assert!(kept("Locked"));
+        assert!(kept("Notes"));
+        assert!(kept("Beta"));
+        assert!(!kept("Alpha"));
+        assert!(!kept("Static"));
+        assert!(interactive.nodes.iter().any(|node| {
+            node.name.as_deref() == Some("Qty") && node.actions.is_empty() && !node.actionable
+        }));
+        assert!(interactive.nodes.iter().any(|node| {
+            node.name.as_deref() == Some("Kind") && node.actions == ["select_option"]
+        }));
+        let stale = supervisor
+            .click(&browser.browser_id, &page.page_id, &notes_id)
+            .unwrap_err();
+        assert_eq!(stale.kind, "stale_element");
+        assert_eq!(stale.execution_state, ExecutionState::NotStarted);
+        assert_eq!(stale.recovery_action, Some("snapshot"));
+    }
+
+    #[test]
     fn diagnostics_cursor_returns_only_new_events_and_summary() {
         let supervisor = fixture();
         let browser = supervisor.launch().unwrap();
@@ -2375,6 +3040,95 @@ mod tests {
                 .as_ref()
                 .is_none_or(|value| value.len() <= MAX_NODE_TEXT_BYTES)
         }));
+    }
+
+    #[test]
+    fn snapshot_window_pages_post_filter_nodes_without_replaying_effects() {
+        struct WindowFactory;
+        impl BackendFactory for WindowFactory {
+            fn available(&self) -> bool {
+                true
+            }
+
+            fn launch(&self) -> BrowserResult<Box<dyn BrowserBackend>> {
+                Ok(Box::new(FakeBackend::with_snapshot_nodes(20)))
+            }
+        }
+
+        let supervisor = BrowserSupervisor::with_factory(Arc::new(WindowFactory));
+        let browser = supervisor.launch().unwrap();
+        let page = supervisor.pages(&browser.browser_id, 8).unwrap().remove(0);
+
+        let middle = supervisor
+            .snapshot_window(
+                &browser.browser_id,
+                &page.page_id,
+                SnapshotMode::Full,
+                5,
+                DEFAULT_SNAPSHOT_DEPTH,
+                5,
+            )
+            .unwrap();
+        assert_eq!(middle.node_count, 5);
+        assert_eq!(middle.node_offset, 5);
+        assert_eq!(middle.next_node_offset, Some(10));
+        assert_eq!(middle.nodes[0].name.as_deref(), Some("Go 5"));
+        assert_eq!(middle.nodes[4].name.as_deref(), Some("Go 9"));
+        assert!(middle.truncated);
+
+        let tail = supervisor
+            .snapshot_window(
+                &browser.browser_id,
+                &page.page_id,
+                SnapshotMode::Full,
+                5,
+                DEFAULT_SNAPSHOT_DEPTH,
+                18,
+            )
+            .unwrap();
+        assert_eq!(tail.node_count, 2);
+        assert_eq!(tail.node_offset, 18);
+        assert_eq!(tail.next_node_offset, None);
+        assert_eq!(tail.nodes[0].name.as_deref(), Some("Go 18"));
+        assert_eq!(tail.nodes[1].name.as_deref(), Some("Go 19"));
+        assert!(!tail.truncated);
+    }
+
+    #[test]
+    fn snapshot_window_never_advertises_an_unreachable_offset() {
+        struct LargeWindowFactory;
+        impl BackendFactory for LargeWindowFactory {
+            fn available(&self) -> bool {
+                true
+            }
+
+            fn launch(&self) -> BrowserResult<Box<dyn BrowserBackend>> {
+                Ok(Box::new(FakeBackend::with_snapshot_nodes(
+                    crate::MAX_SNAPSHOT_OFFSET + MAX_SNAPSHOT_NODES + 1,
+                )))
+            }
+        }
+
+        let supervisor = BrowserSupervisor::with_factory(Arc::new(LargeWindowFactory));
+        let browser = supervisor.launch().unwrap();
+        let page = supervisor.pages(&browser.browser_id, 8).unwrap().remove(0);
+        let boundary = supervisor
+            .snapshot_window(
+                &browser.browser_id,
+                &page.page_id,
+                SnapshotMode::Full,
+                MAX_SNAPSHOT_NODES,
+                DEFAULT_SNAPSHOT_DEPTH,
+                crate::MAX_SNAPSHOT_OFFSET,
+            )
+            .unwrap();
+
+        assert_eq!(boundary.node_offset, crate::MAX_SNAPSHOT_OFFSET);
+        assert!(boundary.node_count > 0);
+        assert!(boundary.node_count <= MAX_SNAPSHOT_NODES);
+        assert_eq!(boundary.nodes[0].name.as_deref(), Some("Go 4096"));
+        assert_eq!(boundary.next_node_offset, None);
+        assert!(boundary.truncated);
     }
 
     #[test]
@@ -2829,6 +3583,10 @@ mod tests {
 
     impl FormPage {
         fn serve() -> Self {
+            Self::serve_html(FORM_PAGE_HTML.to_string())
+        }
+
+        fn serve_html(html: String) -> Self {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2844,7 +3602,7 @@ mod tests {
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                     let mut request = [0u8; 2048];
                     let _ = std::io::Read::read(&mut stream, &mut request);
-                    let body = FORM_PAGE_HTML.as_bytes();
+                    let body = html.as_bytes();
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()

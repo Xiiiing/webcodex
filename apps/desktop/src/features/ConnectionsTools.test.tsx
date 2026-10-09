@@ -4,14 +4,14 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../i18n/locale";
 import { CONNECTIONS_TOOLS_MESSAGES, connectionsToolsText } from "../i18n/connections-tools";
-import { PRODUCT_LOCALES } from "../i18n/product";
+import { PRODUCT_LOCALES, productText } from "../i18n/product";
 import type { DesktopState, RunnerSettings } from "../models/topology";
 import { EMPTY_MCP_PROVIDERS, type McpProviderRequest, type TunnelProfileRequest } from "../models/connections-tools";
 import { connectionFixture, connectionSnapshot } from "../test/connections-fixtures";
 import { ConnectionPanel } from "./connection/ConnectionPanel";
 import { McpProvidersPanel } from "./extensions/McpProvidersPanel";
 
-const api = vi.hoisted(() => ({ saveTunnelProfile: vi.fn(), tunnelProfileAction: vi.fn(), saveMcpProvider: vi.fn(), removeMcpProvider: vi.fn(), runnerSettings: vi.fn(), restartOwnedRunner: vi.fn(), stopQuickShare: vi.fn() }));
+const api = vi.hoisted(() => ({ saveTunnelProfile: vi.fn(), tunnelProfileAction: vi.fn(), cloudflareConnection: vi.fn(), environmentServiceAction: vi.fn(), saveMcpProvider: vi.fn(), removeMcpProvider: vi.fn(), runnerSettings: vi.fn(), restartOwnedRunner: vi.fn(), stopQuickShare: vi.fn() }));
 vi.mock("../lib/desktop-api", () => ({ desktopApi: api }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 const onSettings = vi.fn();
@@ -36,14 +36,336 @@ function Harness({ mode, initial = state() }: { mode: "connections" | "mcp"; ini
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.setItem("webcodex.desktop.locale", "en-US");
   api.tunnelProfileAction.mockResolvedValue(state());
+  api.environmentServiceAction.mockResolvedValue(state());
   api.runnerSettings.mockResolvedValue(settings);
   api.restartOwnedRunner.mockResolvedValue(state());
 });
 
 describe("Connections + Tools control surfaces", () => {
+  it.each([
+    ["http://127.0.0.1:18080", null],
+    ["http://192.0.2.10:18080", null],
+    ["https://central.example", "viewer-environment"],
+  ])("explains unobserved external connectivity for a viewer at %s (%s)", (url, persistent_environment) => {
+    const initial = state();
+    initial.persistent_environment = persistent_environment;
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url }, runner: { kind: "none" } };
+    initial.connections = connectionSnapshot();
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getAllByText("No Tunnel connections saved in Desktop")).toHaveLength(2);
+    expect(screen.getByText(/External connections to this Server are not observed here/)).toBeInTheDocument();
+    expect(screen.queryByText("Use a local Server connection to manage tunnels.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Runtime" })).not.toBeInTheDocument();
+    expect(screen.queryByText("ChatGPT connected")).not.toBeInTheDocument();
+    expect(onSettings).not.toHaveBeenCalled();
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+    expect(api.saveTunnelProfile).not.toHaveBeenCalled();
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, { ...connectionSnapshot(), config_error: true }])("keeps unavailable configuration distinct from an empty saved set", connections => {
+    const initial = state();
+    initial.connections = connections;
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("Desktop Tunnel status unconfirmed")).toBeInTheDocument();
+    expect(screen.queryByText("No Tunnel connections saved in Desktop")).not.toBeInTheDocument();
+  });
+
+  it("retains saved profile editing without enabling viewer start controls", () => {
+    const initial = state();
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url: "http://127.0.0.1:18080" }, runner: { kind: "none" } };
+    initial.connections = connectionSnapshot(connectionFixture({ lifecycle: "stopped", pid: null, enabled: false, ready: false }));
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("0 of 1 Desktop tunnels locally ready")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start ChatGPT" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit ChatGPT" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete ChatGPT" })).toBeEnabled();
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps a joined local Runner separate from external connection observations", () => {
+    const initial = state();
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url: "https://central.example" } };
+    initial.connections = connectionSnapshot();
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText(/External connections to this Server are not observed here/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Runtime" })).not.toBeInTheDocument();
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([null, "full-environment"])("preserves local recovery and requires an explicit action (%s)", persistent_environment => {
+    const initial = state();
+    initial.persistent_environment = persistent_environment;
+    initial.readiness = { ...initial.readiness, server: "stopped", runner: "stopped", runtime_ready: false };
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("Start the local runtime to connect. Your settings remain saved.")).toBeInTheDocument();
+    expect(screen.queryByText(/External connections to this Server are not observed here/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restart ChatGPT Personal" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Runtime" }));
+    expect(onSettings).toHaveBeenCalledExactlyOnceWith("runtime");
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it("keeps service-host Tunnel controls without requiring a local Runner", async () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.topology = { ...initial.topology!, runner: { kind: "none" } };
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.queryByText(/External connections to this Server are not observed here/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Restart ChatGPT Personal" }));
+    await waitFor(() => expect(api.tunnelProfileAction).toHaveBeenCalledExactlyOnceWith("personal", "restart"));
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it("defaults new persistent local connections to the Server-owned lifecycle without restarting the Server", async () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.connections = connectionSnapshot();
+    const captured: TunnelProfileRequest[] = [];
+    api.saveTunnelProfile.mockImplementation(async request => {
+      captured.push(structuredClone(request));
+      return initial;
+    });
+    render(<Harness mode="connections" initial={initial} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Connection" }));
+    const serverOwned = screen.getByRole("radio", { name: /Run with WebCodex Server \(recommended\)/ });
+    const separate = screen.getByRole("radio", { name: /Separate Tunnel service \(advanced\)/ });
+    expect(serverOwned).toBeChecked();
+    expect(separate).not.toBeChecked();
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "ChatGPT Work" } });
+    fireEvent.change(screen.getByLabelText("Tunnel ID"), { target: { value: "tunnel_work" } });
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "write-only-server-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Apply" }));
+
+    await waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]).toMatchObject({
+      id: null,
+      name: "ChatGPT Work",
+      tunnel_id: "tunnel_work",
+      api_key: "write-only-server-key",
+      autostart: true,
+      host_mode: "embedded",
+      expected_revision: null,
+    });
+    expect(api.environmentServiceAction).not.toHaveBeenCalled();
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.body.textContent).not.toContain("write-only-server-key");
+  });
+
+  it("keeps a separate managed Tunnel service as an explicit advanced creation choice", async () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.connections = connectionSnapshot();
+    const captured: TunnelProfileRequest[] = [];
+    api.saveTunnelProfile.mockImplementation(async request => {
+      captured.push(structuredClone(request));
+      return initial;
+    });
+    render(<Harness mode="connections" initial={initial} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Connection" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Separate Tunnel service \(advanced\)/ }));
+    expect(screen.queryByRole("checkbox", { name: "Start automatically" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Independent" } });
+    fireEvent.change(screen.getByLabelText("Tunnel ID"), { target: { value: "tunnel_independent" } });
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "write-only-separate-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Apply" }));
+
+    await waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]).toMatchObject({ host_mode: "standalone", autostart: true });
+    expect(api.environmentServiceAction).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("write-only-separate-key");
+  });
+
+  it("offers one explicit Server restart for every pending Server-owned profile", async () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.connections = connectionSnapshot(
+      connectionFixture({
+        id: "work",
+        name: "ChatGPT Work",
+        source: "environment",
+        host_mode: "embedded",
+        server_restart_required: true,
+        lifecycle: "stopped",
+        pid: null,
+        ready: false,
+        process_started: false,
+        process_ready: false,
+        tunnel_ready: null,
+        local_mcp_ready: null,
+      }),
+      connectionFixture({
+        id: "personal",
+        name: "ChatGPT Personal",
+        source: "environment",
+        host_mode: "embedded",
+        server_restart_required: true,
+        lifecycle: "stopped",
+        pid: null,
+        ready: false,
+        process_started: false,
+        process_ready: false,
+        tunnel_ready: null,
+        local_mcp_ready: null,
+      }),
+    );
+    api.environmentServiceAction.mockResolvedValue({
+      ...initial,
+      connections: connectionSnapshot(
+        ...initial.connections.profiles.map(profile => ({ ...profile, server_restart_required: false })),
+      ),
+    });
+    render(<Harness mode="connections" initial={initial} />);
+
+    expect(screen.getAllByRole("button", { name: "Restart Server" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Restart ChatGPT Work" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop ChatGPT Personal" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("embedded");
+    fireEvent.click(screen.getByRole("button", { name: "Restart Server" }));
+
+    await waitFor(() => expect(api.environmentServiceAction).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "server-environment",
+      component: "server",
+      action: "restart",
+    }));
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Restart Server" })).not.toBeInTheDocument());
+  });
+
+  it("starts the owner explicitly when saved Server-owned profiles have no running Server", async () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.readiness = { ...initial.readiness, server: "stopped", runner: "stopped", runtime_ready: false };
+    initial.connections = connectionSnapshot(connectionFixture({
+      id: "work",
+      name: "ChatGPT Work",
+      source: "environment",
+      host_mode: "embedded",
+      lifecycle: "stopped",
+      pid: null,
+      ready: false,
+      process_started: false,
+      process_ready: false,
+      tunnel_ready: null,
+      local_mcp_ready: null,
+    }));
+    render(<Harness mode="connections" initial={initial} />);
+
+    expect(screen.getByRole("button", { name: "Start Server" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start Server" }));
+    await waitFor(() => expect(api.environmentServiceAction).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "server-environment",
+      component: "server",
+      action: "start",
+    }));
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+  });
+
+  it("does not prompt to start the Server when every Server-owned profile is disabled", () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.readiness = { ...initial.readiness, server: "stopped", runner: "stopped", runtime_ready: false };
+    initial.connections = connectionSnapshot(connectionFixture({
+      id: "paused",
+      name: "Paused ChatGPT",
+      source: "environment",
+      host_mode: "embedded",
+      enabled: false,
+      autostart: false,
+      lifecycle: "stopped",
+      pid: null,
+      ready: false,
+      process_started: false,
+      process_ready: false,
+      tunnel_ready: null,
+      local_mcp_ready: null,
+    }));
+    render(<Harness mode="connections" initial={initial} />);
+
+    expect(screen.queryByRole("button", { name: "Start Server" })).not.toBeInTheDocument();
+    expect(screen.getByText("Runs with WebCodex Server")).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Advanced · Paused ChatGPT/));
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+  });
+
+  it("keeps an existing persistent owner read-only while editing and preserves write-only credentials", async () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.connections = connectionSnapshot(connectionFixture({
+      id: "work",
+      name: "ChatGPT Work",
+      source: "environment",
+      host_mode: "embedded",
+      revision: 7,
+    }));
+    const captured: TunnelProfileRequest[] = [];
+    api.saveTunnelProfile.mockImplementation(async request => {
+      captured.push(structuredClone(request));
+      return initial;
+    });
+    render(<Harness mode="connections" initial={initial} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit ChatGPT Work" }));
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.getByText("Run with WebCodex Server (recommended)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Tunnel ID")).toBeDisabled();
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    expect(document.body.textContent).not.toContain("embedded");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Work renamed" } });
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "write-only-edit-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Apply" }));
+
+    await waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]).toMatchObject({
+      id: "work",
+      expected_revision: 7,
+      name: "Work renamed",
+      host_mode: "embedded",
+      api_key: "write-only-edit-key",
+    });
+    expect(api.environmentServiceAction).not.toHaveBeenCalled();
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("write-only-edit-key");
+  });
+
+  it("shows Quick Share independently and keeps its explicit stop action", async () => {
+    const initial = state();
+    initial.topology = { ...initial.topology!, experience: "quick_share" };
+    initial.readiness = { ...initial.readiness, exposure: "remote_ready" };
+    initial.connections = connectionSnapshot();
+    initial.quick_share = { provider: "openai", project: "/fixture", clipboard_state: "copied", clipboard_contains: "mcp_url", ready_for_chatgpt: true };
+    api.stopQuickShare.mockResolvedValue(state());
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("Quick Share · Running")).toBeInTheDocument();
+    expect(screen.queryByText("No Tunnel connections saved in Desktop")).not.toBeInTheDocument();
+    expect(screen.queryByText(/External connections to this Server are not observed here/)).not.toBeInTheDocument();
+    expect(api.stopQuickShare).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop Quick Share" }));
+    await waitFor(() => expect(api.stopQuickShare).toHaveBeenCalledExactlyOnceWith());
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+  });
+
+  it.each(PRODUCT_LOCALES)("scopes viewer connections in %s", locale => {
+    localStorage.setItem("webcodex.desktop.locale", locale);
+    const initial = state();
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url: "http://127.0.0.1:18080" }, runner: { kind: "none" } };
+    initial.connections = connectionSnapshot();
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText(connectionsToolsText(locale, "externalConnectionUnobserved"))).toBeInTheDocument();
+    expect(screen.getAllByText(productText(locale, "noTunnels"))).toHaveLength(2);
+    for (const key of ["tunnels", "tunnelsReadyCount", "noTunnels", "tunnelStatusUnavailable"] as const) {
+      expect(productText(locale, key)).toContain("Desktop");
+    }
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+  });
+
   it("shows 2/3 connections without degrading runtime and routes each action by identity", async () => {
     render(<Harness mode="connections" />);
-    expect(screen.getByText("2 of 3 tunnels locally ready")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 Desktop tunnels locally ready")).toBeInTheDocument();
     expect(within(screen.getByRole("article", { name: "ChatGPT Work" })).getByText("Connection unavailable")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Restart ChatGPT Personal" }));
     await waitFor(() => expect(api.tunnelProfileAction).toHaveBeenLastCalledWith("personal", "restart"));
@@ -71,7 +393,7 @@ describe("Connections + Tools control surfaces", () => {
     await waitFor(() => expect(within(work).getByRole("button", { name: "Start ChatGPT Work" })).toBeEnabled());
     expect(within(work).queryByRole("button", { name: "Stop ChatGPT Work" })).not.toBeInTheDocument();
     expect(within(screen.getByRole("article", { name: "ChatGPT Personal" })).getByText("Running")).toBeInTheDocument();
-    expect(screen.getByText("2 of 3 tunnels locally ready")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 Desktop tunnels locally ready")).toBeInTheDocument();
     fireEvent.click(within(work).getByRole("button", { name: "Start ChatGPT Work" }));
     await waitFor(() => expect(api.tunnelProfileAction).toHaveBeenLastCalledWith("work", "start"));
     expect(api.tunnelProfileAction.mock.calls.every(([id]) => id === "work")).toBe(true);
@@ -92,7 +414,7 @@ describe("Connections + Tools control surfaces", () => {
   it("shows proxy recovery for asynchronous readiness failure without a rejected start call", () => {
     const initial = state();
     initial.tunnel_proxy = { mode: "auto", custom_url: null, effective_source: "system", effective_proxy_present: true, system_proxy_detected: true };
-    initial.connections = connectionSnapshot(connectionFixture({ id: "work", name: "ChatGPT Work", lifecycle: "error", pid: null, ready: false, last_error: "tunnel_unavailable", failure_stage: "tunnel_daemon_readiness", reason_code: "tunnel_daemon_not_ready", auto_proxy_used: true }));
+    initial.connections = connectionSnapshot(connectionFixture({ id: "work", name: "ChatGPT Work", lifecycle: "error", pid: null, ready: false, last_error: "tunnel_unavailable", failure_stage: "tunnel_control_plane", reason_code: "tunnel_control_plane_unreachable", auto_proxy_used: true }));
     render(<Harness mode="connections" initial={initial} />);
     const card = screen.getByRole("article", { name: "ChatGPT Work" });
     expect(within(card).getByText(/The failed attempt used an automatically detected proxy/)).toHaveTextContent("try Direct");
@@ -101,9 +423,8 @@ describe("Connections + Tools control surfaces", () => {
   });
 
   it.each([
-    ["tunnel_client_download_failed", "tunnel_client_download", "could not be downloaded", true],
-    ["tunnel_client_install_failed", "tunnel_client_install", "could not be installed", false],
-    ["tunnel_client_verification_failed", "tunnel_client_verification", "failed integrity verification", false],
+    ["tunnel_restart_uncertain", "tunnel_recovery", "Restart is blocked", false],
+    ["tunnel_control_plane_unreachable", "tunnel_control_plane", "Check internet", true],
   ] as const)("shows specific recovery for %s instead of blaming credentials", (reason_code, failure_stage, message, proxyHint) => {
     const initial = state();
     initial.tunnel_proxy = { mode: "auto", custom_url: null, effective_source: "system", effective_proxy_present: true, system_proxy_detected: true };
@@ -119,14 +440,14 @@ describe("Connections + Tools control surfaces", () => {
   it("uses the failed attempt's proxy evidence rather than the current global setting", () => {
     const afterAutoFailure = state();
     afterAutoFailure.tunnel_proxy = { mode: "direct", custom_url: null, effective_source: "direct", effective_proxy_present: false, system_proxy_detected: true };
-    afterAutoFailure.connections = connectionSnapshot(connectionFixture({ lifecycle: "error", ready: false, last_error: "tunnel_unavailable", failure_stage: "tunnel_daemon_readiness", reason_code: "tunnel_daemon_not_ready", auto_proxy_used: true }));
+    afterAutoFailure.connections = connectionSnapshot(connectionFixture({ lifecycle: "error", ready: false, last_error: "tunnel_unavailable", failure_stage: "tunnel_control_plane", reason_code: "tunnel_control_plane_unreachable", auto_proxy_used: true }));
     const { unmount } = render(<Harness mode="connections" initial={afterAutoFailure} />);
     expect(screen.getByText(/The failed attempt used an automatically detected proxy/)).toHaveTextContent("try Direct");
     unmount();
 
     const afterDirectFailure = state();
     afterDirectFailure.tunnel_proxy = { mode: "auto", custom_url: null, effective_source: "system", effective_proxy_present: true, system_proxy_detected: true };
-    afterDirectFailure.connections = connectionSnapshot(connectionFixture({ lifecycle: "error", ready: false, last_error: "tunnel_unavailable", failure_stage: "tunnel_daemon_readiness", reason_code: "tunnel_daemon_not_ready", auto_proxy_used: false }));
+    afterDirectFailure.connections = connectionSnapshot(connectionFixture({ lifecycle: "error", ready: false, last_error: "tunnel_unavailable", failure_stage: "tunnel_control_plane", reason_code: "tunnel_control_plane_unreachable", auto_proxy_used: false }));
     render(<Harness mode="connections" initial={afterDirectFailure} />);
     expect(screen.queryByText(/The failed attempt used an automatically detected proxy/)).not.toBeInTheDocument();
     expect(api.tunnelProfileAction).not.toHaveBeenCalled();
@@ -145,7 +466,7 @@ describe("Connections + Tools control surfaces", () => {
 
   it.each([
     ["tunnel_control_plane_unreachable", "tunnel_unavailable", "Cannot reach the OpenAI tunnel service", "network", "Proxy settings"],
-    ["tunnel_control_plane_probe_failed", "tunnel_unavailable", "Cannot reach the OpenAI tunnel service", "network", "Proxy settings"],
+    ["tunnel_control_plane_unreachable", "tunnel_unavailable", "Cannot reach the OpenAI tunnel service", "network", "Proxy settings"],
     [null, "local_mcp_unavailable", "Local MCP service is unreachable", "runtime", "Runtime"],
     [null, "health_stale", "Tunnel health reports stopped arriving", "diagnostics", "Troubleshooting"],
     [null, "protocol_invalid", "Tunnel client returned an invalid status", "diagnostics", "Troubleshooting"],
@@ -202,6 +523,18 @@ describe("Connections + Tools control surfaces", () => {
     expect(api.tunnelProfileAction).toHaveBeenCalledExactlyOnceWith("personal", "delete");
   });
 
+  it("deletes Cloudflare only at the profile revision displayed when confirmation opened", async () => {
+    const initial = state();
+    initial.persistent_environment = "full-environment";
+    initial.connections = connectionSnapshot(connectionFixture({ id: "cf", name: "Quick", revision: 4, configuration_id: "displayed-configuration", provider: { kind: "cloudflare_quick" }, host_mode: "embedded" }));
+    api.cloudflareConnection.mockResolvedValue({ profile_id: "cf", server_instance_id: "owner", process_generation: 7, lifecycle: "stopped", public_origin: null, oauth_configured: false, observed_authorization: false, configured_revision: 5, applied_revision: null, local_target: "http://127.0.0.1:8900", reason_code: null });
+    render(<Harness mode="connections" initial={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete Quick" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.tunnelProfileAction).toHaveBeenCalledExactlyOnceWith("cf", "delete", 4, "displayed-configuration"));
+  });
+
   it("keeps profile editing write-only and fences against the opened revision", async () => {
     const captured: TunnelProfileRequest[] = [];
     api.saveTunnelProfile.mockImplementation(async request => { captured.push(structuredClone(request)); return state(); });
@@ -212,7 +545,7 @@ describe("Connections + Tools control surfaces", () => {
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "write-only-fixture-secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Save & Apply" }));
     await waitFor(() => expect(captured).toHaveLength(1));
-    expect(captured[0]).toMatchObject({ id: "personal", expected_revision: 1, name: "Personal renamed", api_key: "write-only-fixture-secret" });
+    expect(captured[0]).toMatchObject({ id: "personal", expected_revision: 1, name: "Personal renamed", host_mode: "standalone", api_key: "write-only-fixture-secret" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(document.body.textContent).not.toContain("write-only-fixture-secret");
     expect(api.tunnelProfileAction).not.toHaveBeenCalled(); expect(api.restartOwnedRunner).not.toHaveBeenCalled();

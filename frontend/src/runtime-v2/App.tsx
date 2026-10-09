@@ -15,6 +15,7 @@ import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LANGUAGE_STORAGE_KEY,
+  RUNTIME_LANGUAGES,
   loadLanguagePreference,
   translate,
   type RuntimeLanguage,
@@ -37,6 +38,7 @@ import {
   persistAccentPreference,
 } from "../ui/accent.js";
 import { locateSession } from "./api/sessions.js";
+import { useProjects } from "./state/useProjects.js";
 import { projectFamilyId } from "../ui/projectPresentation.js";
 import { RuntimeV2Client } from "./api/client.js";
 import { SessionWindowNavigation } from "./components/SessionWindowNavigation.js";
@@ -128,9 +130,14 @@ export function App() {
   const overviewState = useRuntimeOverview(client, Boolean(token), handleUnauthorized,
     view === "runtime" || (view === "work" && workSurface === "session"));
   const overview = overviewState.data;
+  // Work needs labels/lineage, not a new Project projection on every nav tick.
+  // Projects owns its own inventory; Runtime/Session hydrate through full overview.
+  const workCatalog = useProjects(client, Boolean(token) && view === "work" && workSurface !== "session" && overview?.projects_included === false,
+    handleUnauthorized, { initialLimit: 2_000, refreshMs: 60_000 });
+  const workProjects = overview?.projects_included === false ? workCatalog.projects : overview?.projects || [];
   const visibleProjectFamilyCount = useMemo(
-    () => new Set((overview?.projects || []).map(projectFamilyId)).size,
-    [overview?.projects],
+    () => overview?.visible_project_families ?? new Set((overview?.projects || []).map(projectFamilyId)).size,
+    [overview?.visible_project_families, overview?.projects],
   );
 
   const workItems = useMemo(() => {
@@ -251,11 +258,19 @@ export function App() {
     persistAccentPreference(color);
   };
 
+  const languageControl = () => (
+    <label className="runtime-language-control">
+      <Languages size={17} aria-hidden="true" />
+      <select aria-label={translate("Language", language)} value={language}
+        onChange={event => setLanguage(event.currentTarget.value as RuntimeLanguage)}>
+        {RUNTIME_LANGUAGES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </label>
+  );
+
   const preferenceControls = () => (
     <>
-      <button type="button" title={translate("Language", language)} aria-label={translate("Language", language)} onClick={() => setLanguage((current) => current === "en" ? "zh-CN" : "en")}>
-        <Languages size={17} /><span>{language === "en" ? "中文" : "English"}</span>
-      </button>
+      {languageControl()}
       <button type="button" title={translate("Appearance", language)} aria-label={translate("Appearance", language)} onClick={cycleAppearance}>
         {appearance === "dark" ? <MoonStar size={17} /> : <Sun size={17} />}
         <span>{translate("Appearance", language)} · {translate(appearance === "system" ? "System" : appearance === "light" ? "Light" : "Dark", language)}</span>
@@ -272,9 +287,7 @@ export function App() {
       <>
         <AuthGate language={language} onConnect={connect} />
         <div className="auth-preferences-v2">
-          <button type="button" onClick={() => setLanguage((current) => current === "en" ? "zh-CN" : "en")} aria-label={translate("Language", language)}>
-            <Languages size={16} /> {language === "en" ? "中" : "EN"}
-          </button>
+          {languageControl()}
           <button type="button" onClick={cycleAppearance} aria-label={translate("Appearance", language)}>
             {appearance === "dark" ? <MoonStar size={16} /> : <Sun size={16} />}
           </button>
@@ -349,7 +362,7 @@ export function App() {
             client={client}
             items={workItems}
             selected={selected}
-            projects={overview?.projects || []}
+            projects={workProjects}
             language={language}
             inventoryIncomplete={Boolean(overview?.recent_sessions.truncated || overview?.recent_sessions.scan_truncated)}
             hydratingSessions={overviewState.refreshing && overview?.detail_level === "primary"}

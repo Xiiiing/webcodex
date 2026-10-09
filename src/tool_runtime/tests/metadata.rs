@@ -184,6 +184,7 @@ fn runtime_status_call() -> ToolCall {
 
 fn list_projects_call() -> ToolCall {
     ToolCall::ListProjects {
+        include_git_summary: false,
         client_id: None,
         project: None,
         query: None,
@@ -194,6 +195,9 @@ fn list_projects_call() -> ToolCall {
 
 fn list_runners_call() -> ToolCall {
     ToolCall::ListRunners {
+        query: None,
+        status: None,
+        limit: None,
         client_id: None,
         client_ids: None,
         include_projects: None,
@@ -475,10 +479,14 @@ async fn register_agent_projects_for_auth(
                 capabilities: crate::test_support::current_runner_capabilities(
                     RunnerCapabilities {
                         shell: true,
+                        browser_managed_profile: false,
+                        browser_surface_handoff: false,
+                        browser_extension_bridge: false,
                         explicit_shell_selection: false,
                         bash_login_shell: false,
                         file_read: true,
                         file_write: true,
+                        file_list_page: false,
                         artifact_export_chunk_read: false,
                         artifact_export_streaming_metadata: false,
                         structured_file_delete: false,
@@ -508,7 +516,10 @@ async fn register_agent_projects_for_auth(
                         project_dependency_policy_v1: false,
                         project_go_single_module_v1: false,
                         project_validation_package_scope_v1: false,
+                        project_all_packages_v1: false,
                         project_validation_test_options_v1: false,
+                        project_validation_python_pytest_v1: false,
+                        project_validation_python_ruff_v1: false,
                         structured_go_test_tool: true,
                         structured_go_test_packages: true,
                         structured_process_argv: true,
@@ -532,6 +543,8 @@ async fn register_agent_projects_for_auth(
                         browser_control: false,
                         browser_element_action_admission: false,
                         browser_batch: false,
+                        browser_semantic_query: false,
+                        browser_complex_controls: false,
                         browser_launch: false,
                         computer_observe: false,
                         computer_application_discovery: false,
@@ -2169,6 +2182,8 @@ async fn tool_manifest_keeps_list_compact_and_exact_contract_bounded() {
     let runtime = test_runtime();
     let result = runtime
         .dispatch(ToolCall::ToolManifest {
+            query: None,
+            limit: None,
             tool_name: None,
             category: None,
             intent: None,
@@ -2196,6 +2211,8 @@ async fn tool_manifest_keeps_list_compact_and_exact_contract_bounded() {
 
     let exact = runtime
         .dispatch(ToolCall::ToolManifest {
+            query: None,
+            limit: None,
             tool_name: Some("run_script".to_string()),
             category: None,
             intent: None,
@@ -2215,6 +2232,8 @@ async fn tool_manifest_exact_route_is_parser_ready_for_direct_and_gateway_tools(
 
     let direct = runtime
         .dispatch(ToolCall::ToolManifest {
+            query: None,
+            limit: None,
             tool_name: Some("run_shell".to_string()),
             category: None,
             intent: None,
@@ -2247,6 +2266,8 @@ async fn tool_manifest_exact_route_is_parser_ready_for_direct_and_gateway_tools(
 
     let gateway = runtime
         .dispatch(ToolCall::ToolManifest {
+            query: None,
+            limit: None,
             tool_name: Some("apply_patch".to_string()),
             category: None,
             intent: None,
@@ -2340,6 +2361,8 @@ async fn tool_manifest_recommends_default_remote_coding_loop() {
     let runtime = test_runtime();
     let result = runtime
         .dispatch(ToolCall::ToolManifest {
+            query: None,
+            limit: None,
             tool_name: None,
             category: None,
             intent: None,

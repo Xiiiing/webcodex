@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CircleHelp, FolderLock, Info, Monitor, Network, Settings2 } from "lucide-react";
+import { CircleHelp, Database, FolderLock, Info, Monitor, Network, Settings2 } from "lucide-react";
 import { desktopApi } from "../../lib/desktop-api";
 import type { DesktopError, DesktopState, TunnelProxyMode } from "../../models/topology";
 import { LANGUAGES, useLocale } from "../../i18n/locale";
@@ -11,15 +11,19 @@ import { RunnerFileAccess } from "./RunnerFileAccess";
 import { PowerShellInstallGuidance } from "./PowerShellInstallGuidance";
 import { APPEARANCES, useAppearance } from "../../hooks/useAppearance";
 import { AccentPicker } from "../../components/AccentPicker";
+import { RunnerCapacityPanel } from "./RunnerCapacityPanel";
 import { RuntimePanel } from "./RuntimePanel";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { AboutPanel } from "./AboutPanel";
 import { LocalServicesPanel } from "./LocalServicesPanel";
 import type { RuntimeUpdates } from "../../hooks/useRuntimeUpdates";
 
-const SECTIONS = ["general", "access", "network", "runtime", "diagnostics", "about"] as const;
+import { ConfigurationDataPanel } from "./ConfigurationDataPanel";
+import { useConfigurationData } from "../../i18n/configuration-data";
+
+const SECTIONS = ["general", "access", "network", "runtime", "configuration", "diagnostics", "about"] as const;
 type SettingsSection = typeof SECTIONS[number];
-const SECTION_ICONS = { general: Settings2, access: FolderLock, network: Network, runtime: Monitor, diagnostics: CircleHelp, about: Info };
+const SECTION_ICONS = { general: Settings2, access: FolderLock, network: Network, runtime: Monitor, configuration: Database, diagnostics: CircleHelp, about: Info };
 
 export function SettingsPanel({
   state,
@@ -50,6 +54,7 @@ export function SettingsPanel({
   useEffect(() => { if (initialSection) selectSection(initialSection); }, [initialSection]);
   const { appearance, setAppearance, accent, setAccent } = useAppearance();
   const p = useProduct();
+  const c = useConfigurationData();
   const [runnerSettings, setRunnerSettings] = useState<RunnerSettings | null>(null);
   const [restartingRunner, setRestartingRunner] = useState(false);
   const [runnerError, setRunnerError] = useState<DesktopError | null>(null);
@@ -64,8 +69,8 @@ export function SettingsPanel({
   const configuredProxyMode = state.tunnel_proxy.mode === "auto" ? t("settings.tunnelProxyAuto") : state.tunnel_proxy.mode === "direct" ? t("settings.tunnelProxyDirect") : t("settings.tunnelProxyCustom");
   const effectiveProxyPath = state.tunnel_proxy.effective_source === "system" ? p("systemProxy") : state.tunnel_proxy.effective_source === "environment" ? p("environmentProxy") : state.tunnel_proxy.effective_source === "custom" ? p("customProxy") : state.tunnel_proxy.effective_source === "invalid_custom" ? t("settings.tunnelProxyCustom") : t("settings.tunnelProxyDirectValue");
   const detectedProxy = state.tunnel_proxy.effective_source === "environment" ? p("environmentProxy") : state.tunnel_proxy.system_proxy_detected ? p("systemProxy") : p("notConfigured");
-  const labels: Record<SettingsSection, string> = { general: p("general"), access: p("accessAndPermissions"), network: p("network"), runtime: p("runtimeAndServices"), diagnostics: p("troubleshooting"), about: p("aboutAndUpdates") };
-  const descriptions: Record<SettingsSection, string> = { general: p("generalSummary"), access: p("accessSummary"), network: p("networkSummary"), runtime: p("runtimeSummary"), diagnostics: p("diagnosticsSummary"), about: p("aboutSummary") };
+  const labels: Record<SettingsSection, string> = { general: p("general"), access: p("accessAndPermissions"), network: p("network"), runtime: p("runtimeAndServices"), configuration: c("title"), diagnostics: p("troubleshooting"), about: p("aboutAndUpdates") };
+  const descriptions: Record<SettingsSection, string> = { general: p("generalSummary"), access: p("accessSummary"), network: p("networkSummary"), runtime: p("runtimeSummary"), configuration: c("summary"), diagnostics: p("diagnosticsSummary"), about: p("aboutSummary") };
 
   useEffect(() => {
     let cancelled = false;
@@ -156,9 +161,11 @@ export function SettingsPanel({
         {proxyError && <SettingsError error={proxyError} />}
       </div>
       <div id="desktop-settings-runtime" hidden={section !== "runtime"}>
+        {visited.includes("runtime") && <RunnerCapacityPanel state={state} onState={onState} active={section === "runtime"} />}
         <section className="settings-section">
         <h2>{p("serviceControls")}</h2><p className="field-help">{p("serviceControlsHelp")}</p>
         {visited.includes("runtime") && <LocalServicesPanel state={state} onState={onState} />}
+        <details className="workspace-technical"><summary>{p("advanced")}</summary>
         <div className="connection-actions">
           {onChangeSetup && <button type="button" className="secondary-button" disabled={operationBusy} onClick={onChangeSetup}>{p("changeServer")}</button>}
           {!state.persistent_environment && onStopRuntime && state.topology?.server.kind === "local" && state.readiness.runtime_ready && <button type="button" className="secondary-button" disabled={operationBusy} onClick={onStopRuntime}>{p("stop")} WebCodex</button>}
@@ -172,9 +179,13 @@ export function SettingsPanel({
         }}>{p("restartRunner")}</button></>}
         {runnerError && <SettingsError error={runnerError} />}
         {runnerSettings && <details className="workspace-technical"><summary>{p("details")}</summary><dl className="detail-list"><div><dt>Runner</dt><dd>{runnerSettings.target.config_path}</dd></div></dl></details>}
+        </details>
         <PowerShellInstallGuidance state={state} onState={onState} />
         </section>
         {visited.includes("runtime") && <RuntimePanel state={state} onState={onState} onActivity={onActivity} onUpdates={() => selectSection("about")} />}
+      </div>
+      <div id="desktop-settings-configuration" hidden={section !== "configuration"}>
+        {visited.includes("configuration") && <ConfigurationDataPanel state={state} />}
       </div>
       <div id="desktop-settings-about" hidden={section !== "about"}>
         {visited.includes("about") && <AboutPanel state={state} updates={updates} />}

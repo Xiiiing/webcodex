@@ -2,13 +2,22 @@
 //! Unlike the Code Mode serialization fence this includes direct calls and all
 //! Sessions. It is NOT a filesystem watcher, write lock, or source snapshot.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use webcodex_core::validation_source::{
     ValidationSourceFence, ValidationSourceState, MAX_SOURCE_GENERATION,
 };
 
 const MAX_TRACKED_PROJECTS: usize = 4096;
+const MAX_PRESENTATION_JOBS: usize = 128;
+
+/// Equality-only presentation invalidation, never validation freshness proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PresentationSourceFence {
+    epoch: String,
+    generation: u64,
+    pub(crate) pending_jobs: Vec<String>,
+}
 
 #[derive(Debug)]
 struct ProjectObservation {
@@ -16,6 +25,8 @@ struct ProjectObservation {
     generation: u64,
     active: usize,
     uncertain: bool,
+    presentation_unknown: bool,
+    presentation_jobs: BTreeSet<String>,
 }
 
 impl ProjectObservation {
@@ -57,6 +68,8 @@ impl ValidationSourceRegistry {
             generation: 0,
             active: 0,
             uncertain: false,
+            presentation_unknown: false,
+            presentation_jobs: BTreeSet::new(),
         }));
         projects.insert(project.to_string(), Arc::clone(&state));
         Some(state)
@@ -66,6 +79,51 @@ impl ValidationSourceRegistry {
         let state = self.project(project)?;
         let state = state.lock().ok()?;
         Some(state.snapshot())
+    }
+
+    pub(crate) fn capture_presentation(&self, project: &str) -> Option<PresentationSourceFence> {
+        let state = self.project(project)?;
+        let state = state.lock().ok()?;
+        if state.active != 0
+            || state.presentation_unknown
+            || state.generation == MAX_SOURCE_GENERATION
+        {
+            return None;
+        }
+        Some(PresentationSourceFence {
+            epoch: state.epoch.clone(),
+            generation: state.generation,
+            pending_jobs: state.presentation_jobs.iter().cloned().collect(),
+        })
+    }
+
+    /// The caller proved these exact Jobs ended under current Project authority.
+    /// Compare before removing references; never clear validation uncertainty.
+    pub(crate) fn resolve_presentation_jobs(
+        &self,
+        project: &str,
+        fence: &PresentationSourceFence,
+    ) -> bool {
+        let Some(state) = self.project(project) else {
+            return false;
+        };
+        let Ok(mut state) = state.lock() else {
+            return false;
+        };
+        if state.epoch != fence.epoch
+            || state.generation != fence.generation
+            || state.active != 0
+            || state.presentation_unknown
+        {
+            return false;
+        }
+        for id in &fence.pending_jobs {
+            state.presentation_jobs.remove(id);
+        }
+        if !fence.pending_jobs.is_empty() {
+            state.advance();
+        }
+        true
     }
 
     pub(crate) fn observe(
@@ -86,6 +144,7 @@ impl ValidationSourceRegistry {
         Some(MutationObservationGuard {
             state,
             completed: false,
+            presentation_job: None,
         })
     }
 }
@@ -93,34 +152,28 @@ impl ValidationSourceRegistry {
 pub(crate) struct MutationObservationGuard {
     state: Arc<Mutex<ProjectObservation>>,
     completed: bool,
+    presentation_job: Option<String>,
 }
 
 impl MutationObservationGuard {
     pub(crate) fn finish(mut self, result: &super::ToolResult) {
         // Returning a Job, losing delivery, or lacking mutation truth cannot
         // prove that the potential writer stopped. Keep this epoch uncertain.
-        let output = &result.output;
-        self.completed = output
-            .get("execution_state")
-            .and_then(serde_json::Value::as_str)
-            != Some("outcome_unknown")
-            && output
-                .get("failure_kind")
-                .and_then(serde_json::Value::as_str)
-                != Some("outcome_unknown")
-            && output.get("job_id").filter(|id| !id.is_null()).is_none()
-            && (output
-                .get("state_changed")
-                .and_then(serde_json::Value::as_bool)
-                .is_some()
-                || output
-                    .get("command_completed")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
-                || output
-                    .get("command_started")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(false));
+        let facts = super::execution_outcome::ExecutionOutcomeFacts::from_result(result);
+        if !facts.is_outcome_unknown() {
+            self.presentation_job = facts
+                .job_id()
+                .filter(|id| webcodex_core::workflow_session_contract::is_safe_job_id(id))
+                .map(str::to_owned);
+        }
+
+        // No success requirement and no broad is_pending classification here:
+        // these are the existing proof conditions for a potential writer stopping.
+        self.completed = !facts.is_outcome_unknown()
+            && !facts.has_job_marker()
+            && (facts.state_changed().is_some()
+                || facts.command_completed() == Some(true)
+                || facts.command_started() == Some(false));
     }
 }
 
@@ -130,6 +183,19 @@ impl Drop for MutationObservationGuard {
             state.advance();
             state.active = state.active.saturating_sub(1);
             state.uncertain |= !self.completed;
+            if !self.completed {
+                if let Some(id) = self.presentation_job.take() {
+                    if state.presentation_jobs.len() < MAX_PRESENTATION_JOBS
+                        || state.presentation_jobs.contains(&id)
+                    {
+                        state.presentation_jobs.insert(id);
+                    } else {
+                        state.presentation_unknown = true;
+                    }
+                } else {
+                    state.presentation_unknown = true;
+                }
+            }
         }
     }
 }

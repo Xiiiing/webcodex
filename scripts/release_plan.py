@@ -30,7 +30,7 @@ else:
 
 
 LEGACY_STATE_SCHEMA_VERSION = 1
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 4
 MAX_STATE_BYTES = 64 * 1024
 KIND = "release-plan"
 
@@ -137,8 +137,12 @@ def _load_state(path: Path) -> dict:
     schema_version = value.get("schema_version")
     if schema_version == LEGACY_STATE_SCHEMA_VERSION:
         required = legacy_required
-    elif schema_version == STATE_SCHEMA_VERSION:
+    elif schema_version == 2:
         required = legacy_required | {"source_ref"}
+    elif schema_version in (3, STATE_SCHEMA_VERSION):
+        required = legacy_required | {"source_ref", "require_unified_installers"}
+        if schema_version == STATE_SCHEMA_VERSION:
+            required.add("require_runtime_installers")
     else:
         raise ReleasePlanError("unsupported release plan state schema")
     if set(value) != required:
@@ -168,6 +172,14 @@ def _load_state(path: Path) -> dict:
             raise ReleasePlanError(f"release plan {field} is invalid")
     if not isinstance(value.get("last_action"), str):
         raise ReleasePlanError("release plan last_action is invalid")
+    if schema_version < 3:
+        value["require_unified_installers"] = False
+    if not isinstance(value["require_unified_installers"], bool):
+        raise ReleasePlanError("release plan unified installer requirement must be boolean")
+    if schema_version < STATE_SCHEMA_VERSION:
+        value["require_runtime_installers"] = False
+    if type(value["require_runtime_installers"]) is not bool or (value["require_runtime_installers"] and not value["require_unified_installers"]):
+        raise ReleasePlanError("Runtime installer requirement needs Full selection and must be boolean")
     value["source_sha"] = source
     value["version"] = version
     value["source_ref"] = source_ref
@@ -203,6 +215,8 @@ def _summary(
         "bundle_dir": state["bundle_dir"],
         "stage_dir": str(Path(state["stage_dir"]) / "npm-package"),
         "last_action": state["last_action"],
+        "require_unified_installers": state["require_unified_installers"],
+        "require_runtime_installers": state["require_runtime_installers"],
     }
     if next_action is not None:
         result["next_action"] = next_action
@@ -218,8 +232,11 @@ def init_plan(
     root: Path,
     state_file: Path,
     work_dir: Path,
+    require_runtime_installers: bool = False,
     timeout: float,
 ) -> dict:
+    if type(require_runtime_installers) is not bool:
+        raise ReleasePlanError("Runtime requirement must be boolean")
     state_path = _validate_new_state_path(state_file)
     source = collector.normalize_source_sha(source_sha)
     release_version = publication.normalize_version(version)
@@ -242,6 +259,8 @@ def init_plan(
     now = int(time.time())
     state = {
         "schema_version": STATE_SCHEMA_VERSION,
+        "require_unified_installers": True,
+        "require_runtime_installers": require_runtime_installers,
         "kind": KIND,
         "repo": repo,
         "version": release_version,
@@ -279,8 +298,15 @@ def _existing_bundle_is_valid(state: dict) -> bool:
     bundle = Path(state["bundle_dir"])
     if not bundle.is_dir():
         return False
-    summary = publication.verify_bundle(bundle, state["repo"])
+    summary = publication.verify_bundle(bundle, state["repo"], require_unified_installers=state["require_unified_installers"], require_runtime_installers=state["require_runtime_installers"])
     return summary.get("source_sha") == state["source_sha"] and summary.get("tag") == state["tag"]
+
+
+def _require_build_selection(state: dict, build: dict) -> None:
+    if state["require_runtime_installers"] and build.get("include_runtime_installers") is not True:
+        raise ReleasePlanError("bound release-build did not request required Runtime installers")
+    if state["require_unified_installers"] and build.get("include_unified_installers") is not True:
+        raise ReleasePlanError("bound release-build did not request required unified installers; reconcile the existing build state before proceeding")
 
 
 def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[dict, int]:
@@ -288,6 +314,11 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
         raise ReleasePlanError("wait_secs must be within 0..7200")
     state_path = state_file.absolute()
     state = _load_state(state_path)
+    if state["require_unified_installers"] and state["phase"] in {
+        PHASE_BUILD_PASSED, PHASE_BUNDLE, PHASE_NPM_STAGED,
+        PHASE_AWAIT_DRAFT, PHASE_DRAFT_VERIFIED, PHASE_AWAIT_PUBLICATION,
+    }:
+        _require_build_selection(state, publication._load_state(Path(state["build_state_file"])))
 
     # Advance through locally safe/recoverable phases until external work is
     # still running or an explicit human authorization boundary is reached.
@@ -363,6 +394,8 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
                 continue
             summary, _ = publication.start_build(
                 repo=state["repo"],
+                include_unified_installers=state["require_unified_installers"],
+                include_runtime_installers=state["require_runtime_installers"],
                 source_sha=state["source_sha"],
                 tag=state["tag"],
                 state_file=build_state,
@@ -379,6 +412,7 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
                 timeout=timeout,
                 wait_secs=wait_secs,
             )
+            _require_build_selection(state, summary)
             state["build_run_id"] = summary.get("run_id")
             if exit_code == 2:
                 _update(state_path, state, action="build_waiting")
@@ -399,6 +433,8 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
             else:
                 collector.collect_bundle(
                     repo=state["repo"],
+                    require_unified_installers=state["require_unified_installers"],
+                    require_runtime_installers=state["require_runtime_installers"],
                     run_id=state["build_run_id"],
                     expected_source_sha=state["source_sha"],
                     expected_tag=state["tag"],
@@ -420,6 +456,8 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
                 ), 4
             publication.stage_npm(
                 repo=state["repo"],
+                require_unified_installers=state["require_unified_installers"],
+                require_runtime_installers=state["require_runtime_installers"],
                 bundle_dir=Path(state["bundle_dir"]),
                 source_root=Path(state["root"]),
                 output_dir=stage,
@@ -435,6 +473,8 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
             try:
                 publication.verify_draft_assets(
                     repo=state["repo"],
+                    require_unified_installers=state["require_unified_installers"],
+                    require_runtime_installers=state["require_runtime_installers"],
                     bundle_dir=Path(state["bundle_dir"]),
                     timeout=timeout,
                 )
@@ -460,7 +500,10 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
                 state,
                 status="needs_authorization",
                 state_file=state_path,
-                next_action="publish the verified GitHub draft and staged npm package only after explicit approval; public verification remains a separate final gate",
+                next_action="publish the verified GitHub draft and staged npm package only after explicit approval; "
+                "run public verification as a separate final gate"
+                + (" with --require-unified-installers" if state["require_unified_installers"] else "")
+                + (" --require-runtime-installers" if state["require_runtime_installers"] else ""),
             ), 3
 
         raise AssertionError(f"unhandled release plan phase: {phase}")

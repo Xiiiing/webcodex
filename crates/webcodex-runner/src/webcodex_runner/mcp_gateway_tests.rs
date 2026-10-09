@@ -1,15 +1,15 @@
 use super::*;
-use crate::mcp_gateway::{
-    McpGatewayContent, McpGatewayResponsePayload, McpGatewaySchemaObservation,
-    MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES, MCP_GATEWAY_MAX_IMAGE_BYTES, MCP_GATEWAY_MAX_MESSAGE_BYTES,
-    MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES, MCP_GATEWAY_MAX_RESULT_BYTES,
-};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tempfile::TempDir;
+use webcodex_core::mcp_gateway::{
+    McpGatewayContent, McpGatewayResponsePayload, McpGatewaySchemaObservation,
+    MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES, MCP_GATEWAY_MAX_IMAGE_BYTES, MCP_GATEWAY_MAX_MESSAGE_BYTES,
+    MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES, MCP_GATEWAY_MAX_RESULT_BYTES,
+};
 
 static FAKE_SERVER: OnceLock<Mutex<Weak<FakeBinary>>> = OnceLock::new();
 const TEST_PARALLEL_TIMEOUT_FLOOR_SECS: u64 = 10;
@@ -173,6 +173,35 @@ impl Fixture {
             .filter(|line| *line == value)
             .count()
     }
+}
+
+#[test]
+fn request_id_exhaustion_retires_connection_without_dispatch_or_replay() {
+    let fixture = Fixture::new("normal", 2);
+    let provider = fixture.provider();
+    assert!(fixture.list(&provider).error.is_none());
+    let entry = {
+        let state = fixture.manager.state.read().unwrap();
+        Arc::clone(state.providers.get("fake").unwrap())
+    };
+    entry.session.lock().unwrap().as_mut().unwrap().next_id = u64::MAX;
+
+    let failed = fixture.call(&provider);
+    assert_eq!(failed.dispatch_state, McpGatewayDispatchState::NotStarted);
+    assert_eq!(failed.error.unwrap().code, "provider_request_id_exhausted");
+    assert_eq!(fixture.marker_count("call"), 0);
+    assert_eq!(fixture.marker_count("start"), 1);
+    assert_eq!(
+        provider_state(fixture.status(&provider)),
+        McpGatewayProviderState::ConnectionRetired
+    );
+
+    // Only this new explicit request reconnects. Logical provider identity
+    // remains stable; the exhausted attempt must never be replayed.
+    assert_eq!(fixture.provider(), provider);
+    assert!(fixture.call(&provider).error.is_none());
+    assert_eq!(fixture.marker_count("start"), 2);
+    assert_eq!(fixture.marker_count("call"), 1);
 }
 
 fn provider_state(response: McpGatewayResponse) -> McpGatewayProviderState {
@@ -621,7 +650,8 @@ fn image_result_crosses_expanded_provider_wire_bound_and_reuses_connection() {
     assert_eq!(MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES, 5_592_408);
     assert!(MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES > MCP_GATEWAY_MAX_MESSAGE_BYTES);
     assert!(
-        MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES < crate::runner_protocol::RUNNER_ENVELOPE_MAX_BYTES
+        MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES
+            < webcodex_core::runner_protocol::RUNNER_ENVELOPE_MAX_BYTES
     );
 
     let fixture = Fixture::new("max_image_result", 3);

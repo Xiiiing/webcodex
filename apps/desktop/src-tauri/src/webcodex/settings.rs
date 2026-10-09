@@ -27,6 +27,7 @@ pub struct RunnerPaths {
 #[serde(deny_unknown_fields)]
 pub struct RunnerFileAccess {
     pub configured_roots: Vec<String>,
+    pub default_roots: Vec<String>,
     pub effective_roots: Vec<String>,
     pub using_default_roots: bool,
     pub allow_cwd_anywhere: bool,
@@ -66,6 +67,7 @@ pub struct RunnerSettings {
     pub plugin_ids: Vec<String>,
     pub target: SettingsTarget,
     pub can_restart: bool,
+    pub max_concurrent_jobs: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +76,14 @@ pub struct SettingsUpdate {
     pub target: SettingsTarget,
     pub expected: RunnerPaths,
     pub paths: RunnerPaths,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobConcurrencyUpdate {
+    pub target: SettingsTarget,
+    pub expected: Option<usize>,
+    pub limit: usize,
 }
 
 #[derive(Deserialize)]
@@ -184,6 +194,11 @@ fn configured_allowed_roots(doc: &DocumentMut) -> DesktopResult<Vec<String>> {
 
 fn file_access(doc: &DocumentMut) -> DesktopResult<RunnerFileAccess> {
     let configured_roots = configured_allowed_roots(doc)?;
+    let default_roots = webcodex_runner_config::effective_allowed_roots(&[], true)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
     let allow_cwd_anywhere = match doc.get("policy") {
         None => false,
         Some(policy) if policy.is_table_like() => policy
@@ -206,6 +221,7 @@ fn file_access(doc: &DocumentMut) -> DesktopResult<RunnerFileAccess> {
     Ok(RunnerFileAccess {
         using_default_roots: configured_roots.is_empty(),
         configured_roots,
+        default_roots,
         effective_roots,
         allow_cwd_anywhere,
     })
@@ -232,9 +248,17 @@ fn validate(paths: &[String]) -> DesktopResult<()> {
     Ok(())
 }
 
-fn validate_allowed_roots(roots: &[String]) -> DesktopResult<()> {
+fn validate_allowed_roots(current: &[String], roots: &[String]) -> DesktopResult<()> {
     validate(roots)?;
     for root in roots {
+        if current.iter().any(|existing| {
+            webcodex_runner_config::paths::paths_equal(Path::new(existing), Path::new(root))
+        }) {
+            // Existing configured roots are not new authority. A directory may
+            // have disappeared since it was configured; keep that stale entry
+            // editable so users can remove stale roots one at a time.
+            continue;
+        }
         let canonical = Path::new(root).canonicalize().map_err(|_| error())?;
         if !canonical.is_dir() {
             return Err(error());
@@ -252,6 +276,7 @@ pub fn inspect(runtime: &StoredRuntime, can_restart: bool) -> DesktopResult<Runn
         plugin_ids: plugin_ids(&doc)?,
         target: target(runtime)?,
         can_restart,
+        max_concurrent_jobs: configured_job_concurrency(&doc)?,
     })
 }
 
@@ -295,18 +320,64 @@ fn plugin_ids(doc: &DocumentMut) -> DesktopResult<Vec<String>> {
     Ok(ids)
 }
 
+fn job_concurrency_error() -> DesktopError {
+    DesktopError::new(
+        "runner_job_concurrency_invalid",
+        "Runner Job concurrency could not be saved safely",
+        "Reload settings and use a whole number from 1 to 64. The saved Runner identity and value must still match.",
+    )
+}
+
+fn valid_job_concurrency(value: usize) -> bool {
+    use webcodex_core::runner_protocol::{RUNNER_JOB_CONCURRENCY_MAX, RUNNER_JOB_CONCURRENCY_MIN};
+    (RUNNER_JOB_CONCURRENCY_MIN..=RUNNER_JOB_CONCURRENCY_MAX).contains(&value)
+}
+
+fn configured_job_concurrency(doc: &DocumentMut) -> DesktopResult<Option<usize>> {
+    doc.get("max_concurrent_jobs")
+        .map(|value| {
+            value
+                .as_integer()
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| valid_job_concurrency(*value))
+                .ok_or_else(job_concurrency_error)
+        })
+        .transpose()
+}
+
+/// Startup-only setting: saving does not reload or restart the active Runner.
+/// Preserve unrelated TOML and fence both the displayed value and full-file write.
+pub fn save_job_concurrency(
+    runtime: &StoredRuntime,
+    request: JobConcurrencyUpdate,
+) -> DesktopResult<()> {
+    verify_target(runtime, &request.target)?;
+    if !valid_job_concurrency(request.limit) {
+        return Err(job_concurrency_error());
+    }
+    let path = runtime.runner_config.as_ref().ok_or_else(error)?;
+    let original = read(path)?;
+    let mut doc = parse(&original, runtime)?;
+    if configured_job_concurrency(&doc)? != request.expected {
+        return Err(job_concurrency_error());
+    }
+    doc["max_concurrent_jobs"] = toml_edit::value(request.limit as i64);
+    persist(path, &original, &doc)
+}
+
 pub fn stage_allowed_roots_update(
     runtime: &StoredRuntime,
     request: AllowedRootsUpdate,
 ) -> DesktopResult<PendingSettingsEdit> {
     verify_target(runtime, &request.target)?;
-    validate_allowed_roots(&request.roots)?;
     let path = runtime.runner_config.as_ref().ok_or_else(error)?;
     let original = read(path)?;
     let mut doc = parse(&original, runtime)?;
-    if configured_allowed_roots(&doc)? != request.expected {
+    let current = configured_allowed_roots(&doc)?;
+    if current != request.expected {
         return Err(error());
     }
+    validate_allowed_roots(&current, &request.roots)?;
     doc["policy"]["allowed_roots"] = toml_edit::value(request.roots.into_iter().collect::<Array>());
     let candidate = doc.to_string();
     persist_text(path, &original, &candidate)?;

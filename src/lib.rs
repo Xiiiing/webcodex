@@ -34,7 +34,11 @@ mod mcp_host;
 mod model_surface;
 mod model_workflow;
 pub(crate) use webcodex_store::models;
+mod cloudflare_host;
+mod cloudflare_ingress;
 mod oauth_http;
+mod public_ingress_auth;
+pub use cloudflare_host::run_cloudflare_tunnel_with_stop;
 
 mod pairing_http;
 mod plugin_gateway;
@@ -53,6 +57,7 @@ mod upgrade_maintenance_store;
 pub(crate) use webcodex_store::ServerInstanceGuard;
 mod server_listener;
 mod server_shutdown;
+mod server_tunnels;
 mod ssh_resource_gateway;
 mod startup;
 #[cfg(test)]
@@ -123,6 +128,7 @@ async fn healthz(res: &mut Response) {
 pub enum ServerBinaryAction {
     Run {
         stop_on_stdin_eof: bool,
+        env_file: Option<std::path::PathBuf>,
     },
     Exit {
         code: i32,
@@ -143,13 +149,25 @@ where
     match args.as_slice() {
         [] => ServerBinaryAction::Run {
             stop_on_stdin_eof: false,
+            env_file: None,
         },
         [arg] if arg == "--stop-on-stdin-eof" => ServerBinaryAction::Run {
             stop_on_stdin_eof: true,
+            env_file: None,
+        },
+        [flag, path] if flag == "--env-file" && !path.is_empty() && !path.starts_with('-') => ServerBinaryAction::Run {
+            stop_on_stdin_eof: false,
+            env_file: Some(path.into()),
+        },
+        [flag, path, parent] | [parent, flag, path]
+            if flag == "--env-file" && parent == "--stop-on-stdin-eof"
+                && !path.is_empty() && !path.starts_with('-') => ServerBinaryAction::Run {
+            stop_on_stdin_eof: true,
+            env_file: Some(path.into()),
         },
         [arg] if matches!(arg.as_str(), "--help" | "-h") => ServerBinaryAction::Exit {
             code: 0,
-            stdout: "Usage: webcodex-server [OPTIONS]\n\nRun the WebCodex server runtime.\n\nOptions:\n      --stop-on-stdin-eof  Stop when the invoking parent closes stdin\n  -h, --help               Print help and exit\n  -V, --version            Print version and exit\n".to_string(),
+            stdout: "Usage: webcodex-server [OPTIONS]\n\nRun the WebCodex server runtime.\n\nOptions:\n      --env-file PATH     Load the selected private Server environment\n      --stop-on-stdin-eof  Stop when the invoking parent closes stdin\n  -h, --help               Print help and exit\n  -V, --version            Print version and exit\n".to_string(),
             stderr: String::new(),
         },
         [arg] if arg == "--build-info-json" => ServerBinaryAction::Exit {
@@ -263,6 +281,7 @@ pub async fn run_server_with_shutdown(
     let (acceptor, listener_mode, listener_addr) = server_listener::server_acceptor(&config.addr)
         .await
         .map_err(std::io::Error::other)?;
+    let mut tunnels = server_tunnels::TunnelSupervisor::from_env(listener_addr)?;
     let console_asset_source = Arc::new(
         console_web::ConsoleAssetSource::from_env(&config.addr).map_err(std::io::Error::other)?,
     );
@@ -354,9 +373,10 @@ explicitly allow remote shared-key auth."
     let shutdown_coordinator = Arc::new(server_shutdown::ShutdownCoordinator::default());
     let quic_cfg = config::QuicServerConfig::from_env();
     let project_auth = Arc::new(auth::ProjectAuthState::from_env().map_err(std::io::Error::other)?);
-    let runtime_info = Arc::new(tool_runtime::RuntimeInfo::from_config_with_quic_config(
-        &config, &quic_cfg,
-    ));
+    let mut runtime_info =
+        tool_runtime::RuntimeInfo::from_config_with_quic_config(&config, &quic_cfg);
+    runtime_info.tunnels = tunnels.status();
+    let runtime_info = Arc::new(runtime_info);
     let runtime_state_dir = config.runtime_state_dir();
     let mut tool_runtime_builder =
         tool_runtime::ToolRuntime::new(runner_registry.clone(), runtime_info.clone())
@@ -432,8 +452,24 @@ explicitly allow remote shared-key auth."
         }
     }
 
+    let cloudflare_owner = cloudflare_ingress::CloudflareOwner::from_env(
+        config.clone(),
+        db.clone(),
+        runner_registry.clone(),
+        tool_runtime.clone(),
+        authorize_session_store.clone(),
+        shutdown_coordinator.clone(),
+    )
+    .await?;
+    let cloudflare_control = cloudflare_owner.as_ref().map(|owner| owner.control());
+    tunnels.attach_cloudflare(cloudflare_owner);
+
     let authed_api_router = Router::new()
         .hoop(AuthMiddleware)
+        .push(
+            Router::with_path(route_metadata::api_path(RouteId::CloudflareControl))
+                .post(cloudflare_ingress::cloudflare_control_handler),
+        )
         .push(runtime_console_http::routes())
         .push(admin_http::routes())
         .push(
@@ -675,6 +711,7 @@ explicitly allow remote shared-key auth."
         .hoop(affix_state::inject(authorize_session_store.clone()))
         .hoop(affix_state::inject(runner_registry.clone()))
         .hoop(affix_state::inject(tool_runtime.clone()))
+        .hoop(affix_state::inject(cloudflare_control))
         .hoop(affix_state::inject(project_auth.clone()))
         .hoop(affix_state::inject(console_asset_source))
         .hoop(cors.into_handler())
@@ -687,10 +724,12 @@ explicitly allow remote shared-key auth."
         // client_id + client_secret in the form body.
         .push(
             Router::with_path(route_metadata::root_path(RouteId::OAuthToken))
+                .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                 .post(oauth_http::oauth_token),
         )
         .push(
             Router::with_path(route_metadata::root_path(RouteId::OAuthRevoke))
+                .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                 .post(oauth_http::oauth_revoke),
         )
         // /oauth/authorize is NOT behind AuthMiddleware: the handler accepts
@@ -702,14 +741,17 @@ explicitly allow remote shared-key auth."
             Router::new()
                 .push(
                     Router::with_path(route_metadata::root_path(RouteId::OAuthAuthorize))
+                        .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                         .get(oauth_http::oauth_authorize),
                 )
                 .push(
                     Router::with_path(route_metadata::root_path(RouteId::OAuthAuthorizeLogin))
+                        .hoop(public_ingress_auth::ClientIngressGate::LoginReturnTo)
                         .post(oauth_http::oauth_authorize_login),
                 )
                 .push(
                     Router::with_path(route_metadata::root_path(RouteId::OAuthAuthorizeConsent))
+                        .hoop(public_ingress_auth::ClientIngressGate::ClientId)
                         .post(oauth_http::oauth_authorize_consent),
                 )
                 .push(
@@ -828,6 +870,7 @@ explicitly allow remote shared-key auth."
         std::time::Duration::from_secs(SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SECS),
         stop_on_stdin_eof,
         service_stop,
+        tunnels,
     )
     .await?;
     #[cfg(target_os = "macos")]
@@ -847,14 +890,52 @@ mod tests {
             server_binary_action(std::iter::empty::<&str>()),
             ServerBinaryAction::Run {
                 stop_on_stdin_eof: false,
+                env_file: None,
             }
         );
         assert_eq!(
             server_binary_action(["--stop-on-stdin-eof"]),
             ServerBinaryAction::Run {
                 stop_on_stdin_eof: true,
+                env_file: None,
             }
         );
+    }
+
+    #[test]
+    fn server_binary_accepts_the_existing_user_task_environment_argument() {
+        let path = r"C:\Users\owner\AppData\Roaming\WebCodex\server\webcodex.env";
+        assert_eq!(
+            server_binary_action(["--env-file", path]),
+            ServerBinaryAction::Run {
+                stop_on_stdin_eof: false,
+                env_file: Some(path.into()),
+            }
+        );
+        for args in [
+            ["--env-file", path, "--stop-on-stdin-eof"],
+            ["--stop-on-stdin-eof", "--env-file", path],
+        ] {
+            assert_eq!(
+                server_binary_action(args),
+                ServerBinaryAction::Run {
+                    stop_on_stdin_eof: true,
+                    env_file: Some(path.into()),
+                }
+            );
+        }
+        for args in [
+            vec!["--env-file"],
+            vec!["--env-file", ""],
+            vec!["--env-file", "--version"],
+            vec!["--env-file", path, "--env-file", path],
+            vec!["--env-file", path, "unknown"],
+        ] {
+            assert!(matches!(
+                server_binary_action(args),
+                ServerBinaryAction::Exit { code: 2, .. }
+            ));
+        }
     }
 
     #[test]

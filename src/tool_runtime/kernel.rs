@@ -91,6 +91,8 @@ pub(crate) struct ToolProtocolCapabilities {
     /// lazy diff reads. Exact Project and optional Session context are checked per call;
     /// lazy reads additionally fence caller, snapshot, and advertised path.
     pub(crate) work_result_app: bool,
+    /// Adapter admission for ModelHidden presentation-artifact reads; never supplies Project authority.
+    pub(crate) artifact_app: bool,
     /// Protocol-surface support for ModelHidden MCP App Host-continuation
     /// coordination. Canonical communication authorization and exact
     /// process-local Host binding validation remain mandatory in the runtime.
@@ -118,6 +120,11 @@ pub(crate) struct ToolCallOutcome {
     /// Existing privacy-safe audit projection captured before model compaction.
     /// Never serialized into ToolResult or interpreted as execution authority.
     pub(crate) canonical_audit_output: Option<Value>,
+    /// Canonical pre-model-projection state-change truth for request-local
+    /// internal effect accounting. This is never serialized into ToolResult and
+    /// carries no authorization, source-fence, or replay authority.
+    #[cfg_attr(not(feature = "experimental-code-mode"), allow(dead_code))]
+    pub(crate) canonical_state_changed: Option<bool>,
     /// Trusted internal Window/Workflow Session correlation evidence. This is
     /// adapter metadata only and is never part of the public ToolResult.
     pub(crate) correlation: super::window_activity::ToolCallCorrelation,
@@ -132,6 +139,7 @@ fn session_selector_failure(error: super::SessionSelectorError) -> ToolCallOutco
             project: None,
             model_ergonomics: None,
             canonical_audit_output: None,
+            canonical_state_changed: None,
             correlation: Default::default(),
         },
         super::SessionSelectorError::RetentionExpired { session_id } => ToolCallOutcome {
@@ -143,9 +151,26 @@ fn session_selector_failure(error: super::SessionSelectorError) -> ToolCallOutco
             project: None,
             model_ergonomics: None,
             canonical_audit_output: None,
+            canonical_state_changed: None,
             correlation: Default::default(),
         },
     }
+}
+
+/// Shared scope projection for authenticated discovery surfaces. Operator
+/// extensions always require their declared authority; ordinary non-OAuth
+/// catalogs retain their established visibility behavior.
+pub(crate) fn runtime_tool_scope_allows_discovery(
+    auth: Option<&AuthContext>,
+    tool_name: &str,
+) -> bool {
+    let requires_check = auth.is_some_and(AuthContext::is_oauth_token)
+        || runtime_tool_operator_extension_family(tool_name).is_some()
+        || matches!(
+            crate::auth::scopes::oauth_scope_policy_for_runtime_tool(tool_name),
+            OAuthToolScopePolicy::RequireAny(_)
+        );
+    !requires_check || check_runtime_tool_scope(auth, tool_name).is_ok()
 }
 
 pub(crate) fn check_runtime_tool_scope(
@@ -327,6 +352,7 @@ impl ToolRuntime {
                 trace_diagnostics: false,
                 goal_plan_app: false,
                 work_result_app: false,
+                artifact_app: false,
                 agent_continuation_app: false,
             },
         )
@@ -447,6 +473,7 @@ impl ToolRuntime {
                     project: None,
                     model_ergonomics: None,
                     canonical_audit_output: None,
+                    canonical_state_changed: None,
                     correlation: Default::default(),
                 }
             }
@@ -487,6 +514,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -501,6 +529,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
             canonical_audit_output: None,
+            canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -521,6 +550,22 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
             canonical_audit_output: None,
+            canonical_state_changed: None,
+                correlation: Default::default(),
+            };
+        }
+        if request.tool_name == "read_app_artifact_chunk" && !capabilities.artifact_app {
+            return ToolCallOutcome {
+                success: false,
+                result: None,
+                error_status: Some(ToolCallErrorStatus::InvalidArguments {
+                    message: "Presentation artifact reads require the dedicated MCP App capability"
+                        .to_string(),
+                }),
+                project: None,
+                model_ergonomics: None,
+                canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -535,6 +580,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
             canonical_audit_output: None,
+            canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -560,6 +606,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
             canonical_audit_output: None,
+            canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -582,6 +629,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
             canonical_audit_output: None,
+            canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -605,6 +653,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -626,6 +675,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -644,6 +694,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -664,6 +715,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -738,6 +790,7 @@ impl ToolRuntime {
                     project: None,
                     model_ergonomics: None,
                     canonical_audit_output: None,
+                    canonical_state_changed: None,
                     correlation: Default::default(),
                 };
             }
@@ -773,6 +826,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -787,6 +841,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -825,6 +880,7 @@ impl ToolRuntime {
                         project: None,
                         model_ergonomics: None,
                         canonical_audit_output: None,
+                        canonical_state_changed: None,
                         correlation: Default::default(),
                     };
                 }
@@ -854,6 +910,7 @@ impl ToolRuntime {
                         project: None,
                         model_ergonomics: None,
                         canonical_audit_output: None,
+                        canonical_state_changed: None,
                         correlation: Default::default(),
                     };
                 }
@@ -920,6 +977,7 @@ impl ToolRuntime {
                 project: None,
                 model_ergonomics: None,
                 canonical_audit_output: None,
+                canonical_state_changed: None,
                 correlation: Default::default(),
             };
         }
@@ -938,6 +996,7 @@ impl ToolRuntime {
                     project: None,
                     model_ergonomics: None,
                     canonical_audit_output: None,
+                    canonical_state_changed: None,
                     correlation: Default::default(),
                 };
             }
@@ -989,6 +1048,7 @@ impl ToolRuntime {
                     project: None,
                     model_ergonomics: None,
                     canonical_audit_output: None,
+                    canonical_state_changed: None,
                     correlation: Default::default(),
                 };
             }
@@ -1011,6 +1071,7 @@ impl ToolRuntime {
                     project: None,
                     model_ergonomics: None,
                     canonical_audit_output: None,
+                    canonical_state_changed: None,
                     correlation: Default::default(),
                 };
             }
@@ -1064,6 +1125,7 @@ impl ToolRuntime {
                     project: None,
                     model_ergonomics: None,
                     canonical_audit_output: None,
+                    canonical_state_changed: None,
                     correlation: Default::default(),
                 };
             }
@@ -1114,6 +1176,7 @@ impl ToolRuntime {
         // Permission is evaluated once inside dispatch (pre-exec gate). Kernel
         // only reuses the attached decision for the outer recording session —
         // never re-evaluate (no second request id / inconsistent outcome).
+        let execution_started = std::time::Instant::now();
         let (mut result, result_projection, mut correlation) = self
             .dispatch_with_auth_transport_options_and_metadata_with_recording_mode_and_context_with_result_projection(
                 call,
@@ -1131,6 +1194,15 @@ impl ToolRuntime {
                 return_timing,
             )
             .await;
+        crate::tool_request_trace::record_phase_latency(
+            "canonical_execution",
+            execution_started,
+            if result.success {
+                "completed"
+            } else {
+                "failed"
+            },
+        );
         if result.success {
             if let Some(code) = input_normalization {
                 result.output["input_normalization"] =
@@ -1227,6 +1299,7 @@ impl ToolRuntime {
                 recorder_ack_requested,
             );
         }
+        let canonical_state_changed = result.output.get("state_changed").and_then(Value::as_bool);
         // Session/permission evidence is sealed above. The response stage owns
         // canonical audit capture, one-shot model projection, and late sidecars.
         let postprocess::PostRecordResult {
@@ -1250,6 +1323,7 @@ impl ToolRuntime {
             project,
             model_ergonomics: None,
             canonical_audit_output,
+            canonical_state_changed,
             correlation,
         }
     }

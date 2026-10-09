@@ -35,6 +35,27 @@ A release without the unified installer manifest is a supported legacy fallback:
 manual unified installation of the first updater-capable release; the new code
 cannot retroactively add an updater to an already published older executable.
 
+Cache admission or invalid persisted update state can require recovery before a
+pending transaction is known. These recovery errors remain visible in About and
+the banner even without a newer release or after **Later**; they do not create a
+pending transaction or authorize another installer. A failed automatic-download
+preference save is also shown when no update is available.
+
+The current unified release workflow uses an explicit shared Cargo target directory
+before compiling the independent Desktop workspace; native binaries and macOS app
+bundles are collected from that same directory. Before upload, the retained bundle
+is verified according to the explicit `include_unified_installers` input:
+true requires all eight installers and six source manifests; the default false
+retains normal core-only validation. New durable release plans record a unified
+requirement, actually dispatch that input as true, and carry the requirement
+through collection, npm staging and draft verification. Build state records the
+selection; a strict plan never accepts an older/core-only build state as unified
+success. Low-level metadata/collection/public-verification commands expose
+`--require-unified-installers` for current unified deliveries. Entirely absent
+installer/source sets fail this requirement; historical read-only verification
+without it and Desktop's **View release** fallback remain supported. Present but
+null installer declarations are invalid, rather than legacy absence.
+
 ## Canonical manifests and trust chain
 
 `webcodex-release-manifest.json` remains the release/Runtime compatibility
@@ -147,16 +168,34 @@ or installation; it never changes normal Runtime readiness.
 
 Desktop holds the downloaded outer `.exe` against write/delete sharing while
 rehashing and mapping it through `CreateProcess`, with literal arguments and no
-shell. The current-user NSIS bootstrap owns candidate extraction, existing Core
-preflight/prepare, the inner package, finish and rollback. Desktop does not add a
-new elevation path or replace its own executable. Any OS authorization remains
-subject to the existing installer policy. A durable pending record precedes
-launch, and Desktop closes only after a confirmed process launch.
+shell. Automatic handoff requires `windows_guarded_bootstrap_contract: 1` in the raw
+Windows CLI build-info object of the existing official source manifest. Its
+original object hash and CLI byte hash bind the attestation; the native release
+workflow requires the outer builder and provenance to attest that same protocol,
+source, run and candidate-manifest bytes. Existing installer-entry and generic
+MachineBuildInfo schemas stay unchanged, so older strict updater readers still
+parse the same release. Absent or unsupported capability remains manual-only;
+a version number or executable probe never implies protocol support.
 
-The outer bootstrap is current-user; machine-wide/foreign-owner installations
-are not automatically adopted. V1 has no dedicated bootstrap acknowledgment
-channel, so an early failure before it writes a Core transaction remains
-**recovery required**, not a speculative success or automatic second attempt.
+The current-user outer NSIS bootstrap extracts and verifies its candidate CLI.
+Guarded mode keeps that candidate CLI for preparation, receipt verification,
+finish and rollback, passing the selected Environment and candidate manifest
+identity. It rejects fresh, legacy or unconfigured classification instead of
+falling back. Manual installer invocation retains its existing routing.
+
+A private, bounded, per-launch nonce exchange reports the operation returned by
+Core under the preparing lock. Desktop persists that exact operation in the
+existing pending record before acknowledging permission for the inner installer
+to replace files. Finish and rollback use Core's guarded APIs with the captured
+operation; the exchange adds no transaction authority. Unix preparation also
+captures its operation directly rather than inferring it from a later journal.
+
+Only an acknowledged operation permits Desktop exit. Spawn-only, timeout or
+uncertain acknowledgement leaves recovery required, with no competing rollback
+or automatic second attempt. Reconciliation requires the exact pending operation
+plus verified installed bytes and Core commitment; a later operation for the same
+candidate cannot complete this handoff. The bootstrap remains current-user;
+machine-wide or foreign-owner installations are not automatically adopted.
 
 ### macOS
 

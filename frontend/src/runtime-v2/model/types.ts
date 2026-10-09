@@ -233,6 +233,8 @@ export type RuntimeOverview = {
   active_jobs: number;
   active_windows: number;
   projects_available: boolean;
+  projects_included?: boolean;
+  visible_project_families?: number;
   visible_projects: number;
   projects_truncated: boolean;
   workflow_sessions: {
@@ -274,6 +276,7 @@ export type WindowActivitySession = {
 };
 
 export type WindowActivity = {
+  failure_expectation_result?: string;
   started_at_ms: number;
   ended_at_ms: number;
   duration_ms: number;
@@ -347,6 +350,7 @@ export type WindowDetail = {
 };
 
 export type WindowsResponse = {
+  next_offset?: number;
   windows: WindowSummary[];
   returned: number;
   total: number;

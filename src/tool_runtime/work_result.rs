@@ -48,8 +48,15 @@ impl ToolRuntime {
         auth: Option<&AuthContext>,
         window: Option<&ClientWindow>,
     ) -> ToolResult {
-        self.exact_work_result(project, session_id, "present_work_result", auth, window)
-            .await
+        self.exact_work_result(
+            project,
+            session_id,
+            "present_work_result",
+            auth,
+            window,
+            false,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -63,6 +70,7 @@ impl ToolRuntime {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn work_result_state_for_window(
         &self,
         project: String,
@@ -70,8 +78,27 @@ impl ToolRuntime {
         auth: Option<&AuthContext>,
         window: Option<&ClientWindow>,
     ) -> ToolResult {
-        self.exact_work_result(project, session_id, "get_work_result_state", auth, window)
+        self.work_result_state_for_window_with_refresh(project, session_id, auth, window, false)
             .await
+    }
+
+    pub(crate) async fn work_result_state_for_window_with_refresh(
+        &self,
+        project: String,
+        session_id: Option<String>,
+        auth: Option<&AuthContext>,
+        window: Option<&ClientWindow>,
+        automatic: bool,
+    ) -> ToolResult {
+        self.exact_work_result(
+            project,
+            session_id,
+            "get_work_result_state",
+            auth,
+            window,
+            automatic,
+        )
+        .await
     }
 
     pub(crate) async fn work_result_activity_detail(
@@ -158,12 +185,85 @@ impl ToolRuntime {
         ToolResult::ok(json!({"activity_detail": detail}))
     }
 
+    pub(crate) async fn work_result_collaboration_page(
+        &self,
+        project: String,
+        session_id: Option<String>,
+        history: super::tool_call::WorkResultCollaborationRequest,
+        auth: Option<&AuthContext>,
+        window: Option<&ClientWindow>,
+    ) -> ToolResult {
+        if let Err(result) = self.authorize_work_result_project(&project, auth).await {
+            return result;
+        }
+        if let Some(session) = session_id.as_deref() {
+            if let Err(result) = self
+                .authorize_work_result_target(&project, session, "get_work_result_state", auth)
+                .await
+            {
+                return result;
+            }
+        }
+        let Some(window) = window else {
+            return ToolResult::err("stable Window identity required");
+        };
+        if !auth.is_some_and(|auth| auth.has_scope(crate::auth::SCOPE_SESSION_COLLABORATE)) {
+            return ToolResult::err("collaboration scope required");
+        }
+        if history
+            .limit
+            .is_some_and(|limit| !(1..=100).contains(&limit))
+            || history.before_message_id.as_deref().is_some_and(|id| {
+                !webcodex_core::workflow_session_contract::is_valid_session_message_id(id)
+            })
+        {
+            return ToolResult::err("invalid collaboration history page");
+        }
+        let Ok((kind, principal)) = super::runtime_observation_principal(auth) else {
+            return ToolResult::err("collaboration principal unavailable");
+        };
+        let page = self.window_collaboration_page_for_principal(
+            window.key(),
+            &kind,
+            &principal,
+            history.limit.unwrap_or(50),
+            history.before_message_id.as_deref(),
+        );
+        if page["available"] != true {
+            return ToolResult::err_with_output("Collaboration history unavailable", page);
+        }
+        ToolResult::ok(json!({"work_result_collaboration":page}))
+    }
+
+    #[cfg(test)]
     pub(crate) async fn work_result_send_message(
         &self,
         project: String,
         session_id: Option<String>,
         message: String,
         delivery_key: String,
+        auth: Option<&AuthContext>,
+        window: Option<&ClientWindow>,
+    ) -> ToolResult {
+        self.work_result_send_message_with_kind(
+            project,
+            session_id,
+            message,
+            delivery_key,
+            "guidance",
+            auth,
+            window,
+        )
+        .await
+    }
+
+    pub(crate) async fn work_result_send_message_with_kind(
+        &self,
+        project: String,
+        session_id: Option<String>,
+        message: String,
+        delivery_key: String,
+        kind: &str,
         auth: Option<&AuthContext>,
         window: Option<&ClientWindow>,
     ) -> ToolResult {
@@ -174,10 +274,13 @@ impl ToolRuntime {
         let Some(window) = window else {
             return ToolResult::err("stable Window identity required");
         };
-        self.post_window_operator_message(
+        self.post_window_operator_message_with_options(
             window.key(),
             session_id.as_deref(),
             Some(&project),
+            kind,
+            "normal",
+            true,
             message,
             delivery_key,
             auth,
@@ -264,6 +367,7 @@ impl ToolRuntime {
         tool_name: &'static str,
         auth: Option<&AuthContext>,
         window: Option<&ClientWindow>,
+        automatic: bool,
     ) -> ToolResult {
         let resolved_project = match self.authorize_work_result_project(&project, auth).await {
             Ok(project) => project,
@@ -306,8 +410,12 @@ impl ToolRuntime {
 
         // The Results pane uses current Project changes and, when linked, Session
         // check/review evidence separately from sealed final task changes.
-        let workspace_result = self
-            .workspace_metadata_for_presentation(resolved_project.clone())
+        let automatic = automatic
+            && summary.as_ref().is_none_or(|summary| {
+                summary.lifecycle == super::sessions::SessionLifecycle::Active
+            });
+        let (workspace_result, workspace_reused) = self
+            .work_result_workspace_observation(&resolved_project, auth, automatic)
             .await;
         let mut projection = if let Some(summary) = summary.as_ref() {
             let projection_summary = self.refresh_validation_source_summary(summary);
@@ -411,6 +519,13 @@ impl ToolRuntime {
             .work_result_jobs(&resolved_project, session_id.as_deref(), auth)
             .await;
         projection["state_version"] = json!(work_result_state_version(&projection));
+        // Observation provenance is not content revision: it must not restart the
+        // App's idle clock or turn a reused snapshot into fresh execution evidence.
+        projection["workspace_observation"] = json!({
+            "reused": workspace_reused,
+            "max_reuse_ms": super::work_result_workspace::REUSE_LEASE.as_millis() as u64,
+            "semantics": "bounded_snapshot_not_filesystem_freshness",
+        });
 
         if let Some(summary) = summary.as_ref() {
             match self.sealed_work_result_changes(&resolved_project, summary, auth) {
@@ -691,6 +806,7 @@ fn work_result_window_activity_projection(observed: &Value) -> Value {
                 "server_trace_id": event.get("server_trace_id"),
                 "kind": semantics.kind.as_str(),
                 "status": event.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+                "failure_expectation_result": event.get("failure_expectation_result"),
                 "meaningful": meaningful,
                 "started_at_ms": started_at_ms,
                 "ended_at_ms": ended_at_ms,

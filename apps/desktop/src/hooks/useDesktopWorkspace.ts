@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { subscribeDesktopNavigation } from "../lib/desktop-navigation";
 import { desktopApi } from "../lib/desktop-api";
 import type { ActivityEntry, DesktopError, DesktopState } from "../models/topology";
 import { normalizeDesktopError } from "../i18n/presentation";
@@ -50,25 +50,10 @@ export function useDesktopWorkspace() {
     if (window.innerWidth <= 600) window.scrollTo(0, 0);
   }, [navigation, showSetup]);
 
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void listen<unknown>("desktop:navigate", (event) => {
-      if (event.payload !== "activity" && event.payload !== "settings" && event.payload !== "connections") return;
-      setShowSetup(false);
-      setNavigation(event.payload === "connections" ? "connection" : event.payload);
-    }).then((stopListening) => {
-      if (disposed) stopListening();
-      else unlisten = stopListening;
-    }).catch(() => {
-      // Host navigation is optional. Ordinary in-window navigation remains
-      // usable if the native event subscription is unavailable.
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
+  useEffect(() => subscribeDesktopNavigation((target) => {
+    setShowSetup(false);
+    setNavigation(target === "connections" ? "connection" : target);
+  }), []);
 
   useEffect(() => {
     const navigateWithKeyboard = (event: KeyboardEvent) => {
@@ -116,23 +101,33 @@ export function useDesktopWorkspace() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      let bootstrapSettled = false;
       try {
         const initial = await desktopApi.getState();
         if (cancelled) return;
         if (initial.current_operation || initial.configuration_issue) {
           commitState(initial);
+          bootstrapSettled = true;
           return;
         }
 
-        // Installing persistent services is an explicit first-run choice. Do not
-        // bind a fresh machine to a local Server before it can choose Join, or
-        // trigger administrator/service-password prompts from a status read.
-        if (!initial.topology) {
-          commitState(initial);
-          return;
-        }
-
+        // Fresh setup starts with an explicit Create/Join choice. Reading state
+        // must never enroll a Runner or install/start services on mount.
         commitState(initial);
+        if (!initial.topology) {
+          bootstrapSettled = true;
+          return;
+        }
+
+        // Once the native process has completed its one startup bootstrap, every
+        // replacement renderer is observation-only. Check this before even the
+        // persistent-Environment eager refresh so recreation cannot overlap the
+        // no-window native observer or replay startup work.
+        if (await desktopApi.shellRestoreOnly()) {
+          bootstrapSettled = true;
+          return;
+        }
+        if (cancelled) return;
         if (initial.persistent_environment) {
           // System services own persistence. Opening Desktop only observes them;
           // it must not restart a service the user explicitly stopped.
@@ -145,6 +140,7 @@ export function useDesktopWorkspace() {
           } finally {
             if (!cancelled) setRefreshing(false);
           }
+          bootstrapSettled = true;
           return;
         }
         const resumeExisting = Boolean(
@@ -157,7 +153,10 @@ export function useDesktopWorkspace() {
           && initial.readiness.runtime_ready
           && !initial.quick_share
           && initial.connections?.profiles.some(profile => profile.enabled && profile.autostart && !profile.process_started);
-        if (!resumeExisting && !resumeConnections) return;
+        if (!resumeExisting && !resumeConnections) {
+          bootstrapSettled = true;
+          return;
+        }
 
         setRefreshing(true);
         try {
@@ -172,15 +171,24 @@ export function useDesktopWorkspace() {
         } finally {
           if (!cancelled) setRefreshing(false);
         }
+        bootstrapSettled = true;
       } catch (value) {
         if (!cancelled) setError(normalizeDesktopError(value));
+      } finally {
+        if (!cancelled && bootstrapSettled) {
+          try {
+            await desktopApi.shellBootstrapComplete();
+          } catch {
+            // Shell readiness is an optimization gate. Keep ordinary Desktop
+            // usable if this best-effort native acknowledgement is unavailable.
+          }
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [commitState, observeFailedOperation, startupAttempt]);
-
   useEffect(() => {
     if (!hasLoadedState) return;
 
@@ -269,8 +277,21 @@ export function useDesktopWorkspace() {
 
   const refresh = async () => {
     setRefreshing(true);
+    setError(null);
     try {
-      await runStateOperation(desktopApi.refresh);
+      commitState(await desktopApi.refresh());
+    } catch (value) {
+      const failure = normalizeDesktopError(value);
+      if (failure.code === "desktop_operation_busy") {
+        try {
+          commitState(await desktopApi.getState());
+        } catch {
+          // The competing operation remains authoritative; a failed observation
+          // must not turn an ordinary Refresh race into a second error.
+        }
+      } else {
+        await observeFailedOperation(value);
+      }
     } finally {
       setRefreshing(false);
     }

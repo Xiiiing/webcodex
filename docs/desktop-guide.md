@@ -8,29 +8,87 @@ For contributor workflows—frontend/Tauri development, source runtime resolutio
 
 ## Runtime project inventory
 
-**Projects** is a read-only view of Runtime Projects observed on the current Runner, including Git branches, active Sessions, and recent activity. Runtime Project identity remains the authorization, routing, persistence, audit, and Session boundary, but it is not a Desktop setup resource that users need to maintain.
+**Projects** shows Runtime Projects observed on the current Runner, including Git branches, active Sessions, and recent activity. **Add local folder** is an optional shortcut for explicitly authorizing and registering another folder on this computer, not a prerequisite for model-driven work. Runtime Project identity remains the authorization, routing, persistence, audit, and Session boundary, but it is not a Desktop setup resource that users need to maintain.
 
 For local Full Runtime, ChatGPT/model-driven calls supply the concrete workspace path. `work_on_project(path)` reuses the exact registered Project when present or registers it on demand when Runner policy permits. Multiple Projects can remain active concurrently; opening one does not revoke another.
 
 The Runner filesystem policy remains the authority boundary. A fresh Desktop local Runner uses the normal Runner policy defaults; an empty `allowed_roots` resolves to the user's home directory. Explicit Runner policy can narrow that scope. This is Runner-level authority, separate from Runtime Project identity: a Project on one drive or root does not authorize another drive or unrelated path unless that target is also inside `allowed_roots`. Project registration never expands this scope.
 
+## Configuration and data
+
+Open **Settings → Configuration and data** to see the current Environment root,
+the actual Desktop app-data root, and saved Server, Runner, Tunnel, credential,
+data and log locations. These remain separate authorities. Locations come from
+saved configuration; they do not confirm a running process's effective settings.
+Unknown, missing, remote and unconfigured locations have distinct states. Open
+is available only for a native-confirmed local directory. Journal/system log
+entries explain their existing viewing method; Desktop Activity/output is in
+memory.
+
+Refresh, path copy and JSON export are explicit actions. Exports contain private
+local paths and identity metadata, so review them before sharing and choose a
+private destination. The default **backup manifest** describes safe projections,
+excluded contents and missing recovery materials; it contains no configuration,
+credential, database, log or project files and cannot restore an Environment.
+Incomplete inventories cannot be exported. Full secret backup and restore require
+a separate design. See the [schema and validation report](implementation/configuration-inventory-backup-manifest.md).
+
+## Runner Job capacity
+
+**Projects → execution devices** shows each Runner's reported durable Job usage:
+running, queued, and the effective concurrency limit. Counts follow the Server's
+capacity aggregate: stop-requested Jobs remain in the running count until termination
+because they still occupy execution slots. Offline, stale, unavailable, or unsupported observations
+never mean zero usage; ordinary request-dispatch queues are separate.
+
+In **Settings → Runtime & services → Runner Job capacity**, Desktop-managed local
+Runners can save **Maximum concurrent Jobs** as a whole number from **1 to 64**.
+The default remains **4**. The saved value and current effective limit are shown
+separately. **Save for next restart** only writes the exact local Runner's
+configuration, preserves unrelated settings, and rejects a conflicting edit.
+It does not hot-reload or restart services.
+
+Choose **Restart Runner…** when ready and confirm the interruption warning.
+Restarting applies the saved Runner configuration and may interrupt Jobs,
+browser sessions, and handoffs. Desktop reuses its existing owned-process or
+persistent-service restart path. Remote and independently managed Runners remain
+read-only; their actual operator must edit the configuration and restart them.
+A restart is not reported as applying the saved limit until fresh Runner status
+reports that limit.
+
+## Windows startup and upgrades
+
+**After sign-in (recommended)** uses user-session Task Scheduler tasks. This is the ordinary Desktop path and does not require an administrator account or a service password. Server, Runner and Tunnel use the signed-in user's identity. Closing Desktop does not stop these tasks; signing out ends the user-session path.
+
+**At computer startup (advanced)** is under **Advanced deployment options**. It uses SCM and is intended for always-on or remotely managed machines that must run before sign-in. It requires administrator authorization and has different filesystem and desktop-session permissions. It is not a more reliable or more capable version of normal Desktop startup.
+
+Upgrading a legacy Desktop-owned environment preserves its Server, Runner identity, projects and saved Tunnel credentials. New migrations default to user-session startup. An interrupted migration or an already managed environment retains its recorded manager; Desktop never silently replaces an existing SCM service with a second scheduled task. Resume the saved operation after fixing its diagnostic rather than deleting configuration or creating another connection.
+
 ## First use
 
-1. Launch WebCodex Desktop and make the one-time local/remote environment choice. Local setup enables **Allow AI to work on this computer** by default, with no default Project. Confirm setup before persistent services or system authorization are requested; merely opening Desktop never binds a fresh machine to a local Server.
+1. Launch WebCodex Desktop and choose **Create main node** or **Join main node**. Ordinary creation runs separate Server and local Runner services; ordinary joining connects this computer’s Runner to an existing Server. An initial Project is optional; skipping it keeps the Runner enabled. Confirm setup before persistent services or system authorization are requested; merely opening Desktop never binds a fresh machine to a local Server.
 2. Start describing work in ChatGPT. When a request identifies a workspace path, the runtime resolves or registers that Project automatically within the Runner's allowed scope. Later launches observe saved persistent services rather than silently restarting stopped components.
-3. **Projects** can be used to observe which Runtime Projects have appeared; there is no Add, Activate, Reactivate, or Unregister workflow in the normal Desktop UI.
+3. **Projects** shows Runtime Projects that have appeared. To add a local folder manually, choose **Add local folder**, select it, and confirm **Authorize and add folder**. This explicitly adds access to that folder and its subfolders through the existing local Runner; Server and Tunnel credentials are reused. Viewer-only connections cannot add local folders.
 4. Configure **OpenAI Secure Tunnel** only when external ChatGPT reachability is needed. Tunnel setup controls connectivity; it does not define Project authority.
 5. A real observed project call verifies prior client use, not current host presence.
 
-If you already have a remote Server, choose the existing Server option and enter its address. Enable local work and provide a one-time pairing code to connect this computer's Runner; no project selection is needed. Disable local work to join as a viewer using a user API credential. Saved connections reuse their identity. The remote operator owns its Runner policy and external connectivity.
+For **Join main node**, enter a direct Server URL reachable from this computer and a one-time pairing code in the protected input. ChatGPT uses OpenAI Tunnel separately; a Tunnel address or the main node’s loopback URL is not the additional Runner’s endpoint. You do not need the main node’s Tunnel key or bootstrap credential. Saved connections reuse their identity. **Advanced** retains explicit Server-only and viewer-only setup; reopening setup preserves an existing environment’s role and startup ownership.
 
-For temporary sharing of one project, choose Quick Share and a connection provider. Quick Share keeps its own explicit project selection and temporary lifecycle.
+For temporary sharing of one project, expand **Advanced**, choose Quick Share and a connection provider. Quick Share keeps its own explicit project selection and temporary lifecycle.
+
+## Add another device
+
+On a saved local Server environment, open **Projects → Add device** (also available before any device has appeared). Opening the dialog does not issue a code. Supply a Server URL reachable from the other machine, then explicitly choose **Create invitation**. The existing Core and Server authorization decide whether issuance is allowed; the advertised URL never selects the issuance target. No listener, firewall or service settings are changed.
+
+The ten-minute, single-use code is masked by default. **Show code** and each copy action require a click. Install WebCodex on the other machine, choose **Join main node**, and enter that URL and code. Its initial Project can be skipped. Closing the dialog, changing environment or ending the local display period clears the displayed code; closing does not revoke the Server invitation. Failed or uncertain requests are not retried automatically.
+
+Choose **View devices and projects** to refresh the existing authorized inventory. Invitation creation, a Runner appearing online, and a real ChatGPT Project read are separate observations. Projects remain on their owning machines; identical names and paths are distinguished by Runner and Project identities.
 
 ## Start each day on Home
 
 Home shows Server, Runner, and connection status, a short ChatGPT handoff, and shortcuts to Projects, Activity, and Extensions. Project and activity lists live on their respective pages. Healthy state avoids duplicate readiness information; problems still expose recovery actions. A local Full Runtime is healthy with no default Project; Project readiness is not a prerequisite for starting Desktop.
 
-- **Projects** shows observed Runtime Projects only. Project lifecycle is driven by model/runtime path resolution rather than Desktop buttons.
+- **Projects** shows observed Runtime Projects and an optional **Add local folder** shortcut. Model/runtime path resolution remains the normal workflow.
 - **Activity** and **Extensions** operate on the Runtime Project associated with the selected Session or observed context.
 - **Connection** manages external reachability independently from Project authority.
 - **Settings** exposes Runner configuration, diagnostics, and explicit operational controls.

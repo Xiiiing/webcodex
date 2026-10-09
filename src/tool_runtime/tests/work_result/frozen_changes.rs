@@ -254,6 +254,166 @@ async fn ui_files(
 }
 
 #[tokio::test]
+async fn work_result_pdf_pages_are_bounded_immutable_and_reauthorize_snapshot_identity() {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use webcodex_tool_contracts::{WorkResultFileView, WorkResultFilesRequest};
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    commit_file(tmp.path(), "deleted.pdf", "%PDF-1.7\nbefore\n", "base");
+    fs::remove_file(tmp.path().join("deleted.pdf")).unwrap();
+    let mut original = vec![0; 256 * 1024 + 9];
+    original[..9].copy_from_slice(b"%PDF-1.7\n");
+    original[128 * 1024..128 * 1024 + 4].copy_from_slice(&[0xff, 1, 2, 3]);
+    fs::write(tmp.path().join("report[1].pdf"), &original).unwrap();
+    fs::write(tmp.path().join("fake.pdf"), "not a PDF").unwrap();
+    fs::write(tmp.path().join("empty.pdf"), "").unwrap();
+    fs::write(tmp.path().join("large.pdf"), vec![0; 20 * 1024 * 1024 + 1]).unwrap();
+    fs::write(tmp.path().join(".env"), "%PDF-1.7\nPRIVATE_SECRET").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("report[1].pdf", tmp.path().join("link.pdf")).unwrap();
+    let runtime = test_runtime();
+    let auth = auth_context(None, true);
+    let client = "pdf-result";
+    let project =
+        register_runner_project_at_path_with_auth(&runtime, client, "demo", tmp.path(), &auth)
+            .await;
+    let inventory = ui_files(
+        &runtime,
+        client,
+        &project,
+        None,
+        WorkResultFilesRequest::default(),
+        &auth,
+    )
+    .await;
+    assert!(inventory.success, "{:?}", inventory.error);
+    let snapshot = inventory.output["work_result_files"]["snapshot_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let request = |path: &str, offset| WorkResultFilesRequest {
+        snapshot_id: Some(snapshot.clone()),
+        path: Some(path.into()),
+        view: Some(WorkResultFileView::Pdf),
+        byte_offset: offset,
+        ..Default::default()
+    };
+    fs::write(
+        tmp.path().join("report[1].pdf"),
+        "%PDF-1.7\nlater live content",
+    )
+    .unwrap();
+    let mut collected = Vec::new();
+    loop {
+        let offset = collected.len();
+        let result = ui_files(
+            &runtime,
+            client,
+            &project,
+            None,
+            request("report[1].pdf", offset),
+            &auth,
+        )
+        .await;
+        assert!(result.success, "{:?}", result.error);
+        let page = &result.output["work_result_files"];
+        assert_eq!(page["view"], "pdf");
+        assert_eq!(page["byte_offset"], offset);
+        assert_eq!(page["bytes_total"], original.len());
+        let bytes = STANDARD
+            .decode(page["content_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(bytes.len(), (original.len() - offset).min(128 * 1024));
+        collected.extend_from_slice(&bytes);
+        if page["complete"] == true {
+            assert!(page["next_byte_offset"].is_null());
+            break;
+        }
+        assert_eq!(page["next_byte_offset"], collected.len());
+    }
+    assert_eq!(collected, original);
+    for (path, reason) in [
+        ("deleted.pdf", "deleted"),
+        ("fake.pdf", "not_pdf"),
+        ("empty.pdf", "not_pdf"),
+        ("large.pdf", "too_large"),
+    ] {
+        let result = ui_files(&runtime, client, &project, None, request(path, 0), &auth).await;
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            result.output["work_result_files"]["unavailable_reason"],
+            reason
+        );
+        assert!(result.output["work_result_files"]
+            .get("content_base64")
+            .is_none());
+    }
+    #[cfg(unix)]
+    {
+        let result = ui_files(
+            &runtime,
+            client,
+            &project,
+            None,
+            request("link.pdf", 0),
+            &auth,
+        )
+        .await;
+        assert_eq!(
+            result.output["work_result_files"]["unavailable_reason"],
+            "symlink"
+        );
+    }
+    for (path, offset) in [
+        (".env", 0),
+        ("../outside.pdf", 0),
+        ("unadvertised.pdf", 0),
+        ("report[1].pdf", original.len()),
+        ("report[1].pdf", 20 * 1024 * 1024),
+    ] {
+        let result = ui_files(
+            &runtime,
+            client,
+            &project,
+            None,
+            request(path, offset),
+            &auth,
+        )
+        .await;
+        assert!(!result.success, "accepted {path} at {offset}");
+    }
+    let mut other = auth_context(Some("other-pdf-reader"), false);
+    other.role = Some("admin".to_string());
+    other.scopes = vec!["admin".to_string()];
+    let denied = ui_files(
+        &runtime,
+        client,
+        &project,
+        None,
+        request("report[1].pdf", 0),
+        &other,
+    )
+    .await;
+    assert!(!denied.success, "another principal read this snapshot");
+    let content = ui_files(
+        &runtime,
+        client,
+        &project,
+        None,
+        WorkResultFilesRequest {
+            view: Some(WorkResultFileView::Content),
+            ..request("report[1].pdf", 0)
+        },
+        &auth,
+    )
+    .await;
+    assert_eq!(
+        content.output["work_result_files"]["unavailable_reason"],
+        "binary"
+    );
+}
+
+#[tokio::test]
 async fn work_result_file_pages_share_frozen_source_and_never_require_a_session() {
     use webcodex_tool_contracts::WorkResultFilesRequest;
     let tmp = tempfile::tempdir().unwrap();
@@ -279,6 +439,8 @@ async fn work_result_file_pages_share_frozen_source_and_never_require_a_session(
         &project,
         None,
         WorkResultFilesRequest {
+            view: None,
+            byte_offset: 0,
             snapshot_id: None,
             offset: 0,
             path: None,
@@ -298,6 +460,8 @@ async fn work_result_file_pages_share_frozen_source_and_never_require_a_session(
         &project,
         None,
         WorkResultFilesRequest {
+            view: None,
+            byte_offset: 0,
             snapshot_id: Some(snapshot.clone()),
             offset: 24,
             path: None,
@@ -322,6 +486,8 @@ async fn work_result_file_pages_share_frozen_source_and_never_require_a_session(
         &project,
         None,
         WorkResultFilesRequest {
+            view: None,
+            byte_offset: 0,
             snapshot_id: Some(snapshot.clone()),
             offset: 0,
             path: Some("file_39.txt".into()),
@@ -342,6 +508,8 @@ async fn work_result_file_pages_share_frozen_source_and_never_require_a_session(
             &project,
             None,
             WorkResultFilesRequest {
+                view: None,
+                byte_offset: 0,
                 snapshot_id: Some(snapshot.clone()),
                 offset: 0,
                 path: Some(path.into()),
@@ -365,6 +533,8 @@ async fn work_result_file_pages_share_frozen_source_and_never_require_a_session(
         &project,
         Some(session.session_id.clone()),
         WorkResultFilesRequest {
+            view: None,
+            byte_offset: 0,
             snapshot_id: Some(final_id.clone()),
             offset: 24,
             path: None,
@@ -385,6 +555,8 @@ async fn work_result_file_pages_share_frozen_source_and_never_require_a_session(
             project.clone(),
             None,
             WorkResultFilesRequest {
+                view: None,
+                byte_offset: 0,
                 snapshot_id: Some(final_id),
                 offset: 0,
                 path: None,
@@ -402,6 +574,8 @@ async fn work_result_file_pages_share_frozen_source_and_never_require_a_session(
             project,
             None,
             WorkResultFilesRequest {
+                view: None,
+                byte_offset: 0,
                 snapshot_id: Some(snapshot),
                 offset: 24,
                 path: None,
@@ -1003,4 +1177,236 @@ async fn shell_only_is_ineligible_and_reverted_first_class_edit_has_no_presentat
     let work = present(&runtime, client_id, &project, &reverted.session_id, &auth).await;
     assert!(work.success, "{:?}", work.error);
     assert!(work.output["work_result"].get("final_changes").is_none());
+}
+
+#[tokio::test]
+async fn work_result_content_pages_preserve_utf8_snapshot_scope_and_preview_bounds() {
+    use webcodex_tool_contracts::{WorkResultFileView, WorkResultFilesRequest};
+    let tmp = tempfile::tempdir().unwrap();
+    init_git_repo(tmp.path());
+    commit_file(tmp.path(), "deleted.txt", "before deletion\n", "base");
+    fs::remove_file(tmp.path().join("deleted.txt")).unwrap();
+    let original = format!("{}🙂尾", "a".repeat(32 * 1024 - 1));
+    fs::write(tmp.path().join("unicode.md"), &original).unwrap();
+    fs::write(tmp.path().join("large.txt"), "z".repeat(256 * 1024 + 10)).unwrap();
+    fs::write(tmp.path().join("invalid.txt"), [0xff, 0xfe]).unwrap();
+    fs::write(tmp.path().join("binary.bin"), [1, 0, 2]).unwrap();
+    fs::write(tmp.path().join("empty.md"), "").unwrap();
+    fs::create_dir(tmp.path().join("nested")).unwrap();
+    fs::write(tmp.path().join("nested/file[1].md"), "# nested\n").unwrap();
+    #[cfg(unix)]
+    fs::write(tmp.path().join(":(glob)*.md"), "# literal pathspec magic\n").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("unicode.md", tmp.path().join("link.md")).unwrap();
+    let runtime = test_runtime();
+    let auth = auth_context(None, true);
+    let client = "content-result";
+    let project =
+        register_runner_project_at_path_with_auth(&runtime, client, "demo", tmp.path(), &auth)
+            .await;
+    let inventory = ui_files(
+        &runtime,
+        client,
+        &project,
+        None,
+        WorkResultFilesRequest::default(),
+        &auth,
+    )
+    .await;
+    assert!(inventory.success, "{:?}", inventory.error);
+    let snapshot = inventory.output["work_result_files"]["snapshot_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    fs::write(tmp.path().join("unicode.md"), "later live content").unwrap();
+    let request = |path: &str, offset: usize| WorkResultFilesRequest {
+        snapshot_id: Some(snapshot.clone()),
+        path: Some(path.into()),
+        view: Some(WorkResultFileView::Content),
+        byte_offset: offset,
+        ..Default::default()
+    };
+    let first = ui_files(
+        &runtime,
+        client,
+        &project,
+        None,
+        request("unicode.md", 0),
+        &auth,
+    )
+    .await;
+    assert!(first.success, "{:?}", first.error);
+    let page = &first.output["work_result_files"];
+    assert_eq!(page["content"].as_str().unwrap().len(), 32 * 1024 - 1);
+    assert_eq!(page["next_byte_offset"], 32 * 1024 - 1);
+    assert_eq!(page["bytes_total"], original.len());
+    assert_eq!(page["complete"], false);
+    let second = ui_files(
+        &runtime,
+        client,
+        &project,
+        None,
+        request("unicode.md", 32 * 1024 - 1),
+        &auth,
+    )
+    .await;
+    assert!(second.success, "{:?}", second.error);
+    assert_eq!(second.output["work_result_files"]["content"], "🙂尾");
+    assert_eq!(second.output["work_result_files"]["complete"], true);
+    assert!(second.output["work_result_files"]["next_byte_offset"].is_null());
+    let mut offset = 0;
+    loop {
+        let result = ui_files(
+            &runtime,
+            client,
+            &project,
+            None,
+            request("large.txt", offset),
+            &auth,
+        )
+        .await;
+        assert!(result.success, "{:?}", result.error);
+        let page = &result.output["work_result_files"];
+        assert!(page["content"].as_str().unwrap().len() <= 32 * 1024);
+        assert!(serde_json::to_vec(&result.output).unwrap().len() < 256 * 1024);
+        if let Some(next) = page["next_byte_offset"].as_u64() {
+            offset = next as usize;
+        } else {
+            assert_eq!(page["limited"], true);
+            assert_eq!(page["complete"], false);
+            assert_eq!(offset + page["content"].as_str().unwrap().len(), 256 * 1024);
+            break;
+        }
+    }
+    for (path, reason) in [
+        ("deleted.txt", "deleted"),
+        ("invalid.txt", "non_utf8"),
+        ("binary.bin", "binary"),
+    ] {
+        let result = ui_files(&runtime, client, &project, None, request(path, 0), &auth).await;
+        assert!(result.success, "{path}: {:?}", result.error);
+        assert_eq!(
+            result.output["work_result_files"]["unavailable_reason"],
+            reason
+        );
+        assert!(result.output["work_result_files"].get("content").is_none());
+    }
+    #[cfg(unix)]
+    {
+        let result = ui_files(
+            &runtime,
+            client,
+            &project,
+            None,
+            request("link.md", 0),
+            &auth,
+        )
+        .await;
+        assert_eq!(
+            result.output["work_result_files"]["unavailable_reason"],
+            "symlink"
+        );
+    }
+    for (path, expected) in [("empty.md", ""), ("nested/file[1].md", "# nested\n")] {
+        let result = ui_files(&runtime, client, &project, None, request(path, 0), &auth).await;
+        assert!(result.success, "{path}: {:?}", result.error);
+        assert_eq!(result.output["work_result_files"]["content"], expected);
+        assert_eq!(result.output["work_result_files"]["complete"], true);
+    }
+    #[cfg(unix)]
+    {
+        let result = ui_files(
+            &runtime,
+            client,
+            &project,
+            None,
+            request(":(glob)*.md", 0),
+            &auth,
+        )
+        .await;
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            result.output["work_result_files"]["content"],
+            "# literal pathspec magic\n"
+        );
+        assert_eq!(result.output["work_result_files"]["complete"], true);
+    }
+    for (path, offset) in [
+        ("../outside", 0),
+        (".env", 0),
+        ("absent.md", 0),
+        ("unicode.md", 256 * 1024),
+    ] {
+        let result = runtime
+            .work_result_files(project.clone(), None, request(path, offset), Some(&auth))
+            .await;
+        assert!(!result.success, "{path} at {offset}");
+    }
+    for invalid in [
+        WorkResultFilesRequest {
+            view: Some(WorkResultFileView::Content),
+            snapshot_id: Some(snapshot.clone()),
+            ..Default::default()
+        },
+        WorkResultFilesRequest {
+            path: Some("unicode.md".into()),
+            byte_offset: 1,
+            snapshot_id: Some(snapshot.clone()),
+            ..Default::default()
+        },
+        WorkResultFilesRequest {
+            offset: 1,
+            ..request("unicode.md", 0)
+        },
+    ] {
+        assert!(
+            !runtime
+                .work_result_files(project.clone(), None, invalid, Some(&auth))
+                .await
+                .success
+        );
+    }
+    let foreign = crate::auth::shared_key_context("other-content-principal");
+    assert!(
+        !runtime
+            .work_result_files(
+                project.clone(),
+                None,
+                request("unicode.md", 0),
+                Some(&foreign)
+            )
+            .await
+            .success
+    );
+    // Explicit final content reads use the sealed final tree and original Session;
+    // a later edit cannot retarget them into either the workspace or another scope.
+    let baseline = git(tmp.path(), &["rev-parse", "HEAD^{tree}"]);
+    let session = start_changes_session(&runtime, &auth, &project, baseline);
+    record_first_class_edit(&runtime, &session.session_id, &project, "unicode.md");
+    let sealed = seal_successful_closeout(&runtime, client, &project, &session.session_id, &auth)
+        .await
+        .unwrap();
+    let mut final_request = request("unicode.md", 0);
+    final_request.snapshot_id = Some(sealed["snapshot_id"].as_str().unwrap().into());
+    fs::write(tmp.path().join("unicode.md"), "after finish").unwrap();
+    let result = ui_files(
+        &runtime,
+        client,
+        &project,
+        Some(session.session_id.clone()),
+        final_request.clone(),
+        &auth,
+    )
+    .await;
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(
+        result.output["work_result_files"]["content"],
+        "later live content"
+    );
+    assert!(
+        !runtime
+            .work_result_files(project, None, final_request, Some(&auth))
+            .await
+            .success
+    );
 }
