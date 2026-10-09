@@ -1056,8 +1056,8 @@ text and `end_turn` without tool activity or file edits. A separate no-model
 identifying denied Bubblewrap loopback initialization. Session metadata confirmed
 `agent` mode, `default` collaboration mode, and an advertised model. These facts
 identify a host sandbox limitation but do not establish the original reporter's
-root cause. Re-run all three cases on a sandbox-capable Linux host before ready
-PR publication. macOS and the original unknown reporter environment remain
+root cause. Re-run all three cases on a sandbox-capable Linux host to complete
+end-to-end acceptance. macOS and the original unknown reporter environment remain
 unverified; this evidence does not justify closing #978.
 
 ## 15. Explicitly deferred
