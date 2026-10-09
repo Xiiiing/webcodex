@@ -7,11 +7,11 @@ use super::{AppListing, BundledMcpApp};
 pub(in crate::mcp) const MCP_COMPUTER_UI_RESOURCE_URI: &str = "ui://webcodex/computer/v12";
 // Existing gray-card diagnostic: do not introduce a cache reuse policy change.
 pub(in crate::mcp) const MCP_COMPUTER_UI_RESOURCE_TTL_MS: u64 = 0;
-pub(in crate::mcp) const MCP_DOCX_UI_RESOURCE_URI: &str = "ui://webcodex/docx/v1";
+pub(in crate::mcp) const MCP_DOCX_UI_RESOURCE_URI: &str = "ui://webcodex/docx/v2";
 pub(in crate::mcp) const MCP_DOCX_APP_HTML: &str = include_str!("../../mcp_docx_app.html");
 pub(in crate::mcp) const MCP_RESULT_UI_RESOURCE_URI: &str = "ui://webcodex/changes/v4";
 pub(in crate::mcp) const MCP_WORKBENCH_UI_RESOURCE_URI: &str = "ui://webcodex/workbench/v2";
-pub(in crate::mcp) const MCP_WORK_RESULT_UI_RESOURCE_URI: &str = "ui://webcodex/work-result/v29";
+pub(in crate::mcp) const MCP_WORK_RESULT_UI_RESOURCE_URI: &str = "ui://webcodex/work-result/v30";
 pub(in crate::mcp) const MCP_SPREADSHEET_UI_RESOURCE_URI: &str = "ui://webcodex/spreadsheet/v1";
 pub(in crate::mcp) const MCP_GOAL_PLAN_UI_RESOURCE_URI: &str = "ui://webcodex/goal-plan/v7";
 pub(in crate::mcp) const MCP_AGENT_CONTINUATION_UI_RESOURCE_URI: &str =
