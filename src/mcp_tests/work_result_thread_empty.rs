@@ -1,3 +1,7 @@
+use super::super::tools::{
+    handle_call, work_result_thread_binding_for_test, WORK_RESULT_APP_RESULT_META_KEY,
+    WORK_RESULT_THREAD_CONTEXT_META_KEY,
+};
 use super::*;
 use crate::client_window::ClientWindow;
 use std::sync::Arc;
@@ -11,7 +15,7 @@ async fn open_panel(
 ) -> McpOutcome {
     handle_call(
         runtime,
-        json!({"name": WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME, "arguments": {}}),
+        json!({"name": "work_result_thread_panel", "arguments": {}}),
         Some(json!(1)),
         auth,
         stateless,
@@ -28,9 +32,15 @@ async fn open_panel(
 
 #[test]
 fn work_result_thread_empty_schema_is_launcher_only() {
-    let launcher = work_result_thread_entrypoint_tool_spec();
+    let listed = mcp_tools_list_payload_with_features_for_auth(false, true, true, None);
+    let launcher = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "work_result_thread_panel")
+        .unwrap();
     assert_eq!(
-        launcher.output_schema["properties"]["output"]["properties"]["work_result"]["type"],
+        launcher["outputSchema"]["properties"]["output"]["properties"]["work_result"]["type"],
         json!(["object", "null"])
     );
     let state = crate::tool_runtime::work_result_app_tool_specs()
@@ -90,7 +100,7 @@ async fn work_result_thread_empty_panel_requires_scope_and_protocol_admission() 
         .trim_start()
         .starts_with('{'));
     assert!(
-        work_result_thread_binding(&runtime, Some(&auth), Some(&window))
+        work_result_thread_binding_for_test(&runtime, Some(&auth), Some(&window))
             .unwrap()
             .is_none()
     );

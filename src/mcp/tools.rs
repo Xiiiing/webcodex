@@ -3231,7 +3231,3 @@ pub(super) async fn handle_call(
         },
     ));
 }
-
-#[cfg(test)]
-#[path = "../mcp_tests/work_result_thread_empty.rs"]
-mod work_result_thread_empty;
