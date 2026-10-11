@@ -802,7 +802,7 @@ mod tests {
     #[test]
     fn continuation_follow_ups_use_current_routes_in_both_schema_and_value() {
         use webcodex_core::runtime_contract::GeneratedFollowUpKind::FallbackRecovery;
-        for (target, arguments, available) in [
+        for (target, arguments, gateway) in [
             (
                 "wait_for_job_terminal",
                 json!({"job_id":"wc_job_exact", "idempotency_key":"wait-once"}),
@@ -844,7 +844,7 @@ mod tests {
             project_suggested_tool_call_schema(&mut schema, &|name| {
                 suggested_tool_call_route(name, false)
             });
-            if available {
+            if gateway {
                 assert_eq!(value["next"]["tool"], ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME);
                 assert_eq!(value["next"]["arguments"]["tool"], target);
                 assert_eq!(value["next"]["arguments"]["arguments"], arguments);
@@ -853,9 +853,12 @@ mod tests {
                     ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME
                 );
             } else {
-                assert!(value.get("next").is_none(), "{target}");
-                assert!(schema["properties"].get("next").is_none(), "{target}");
-                assert_eq!(schema["required"], json!([]));
+                assert_eq!(value["next"]["tool"], target);
+                assert_eq!(value["next"]["arguments"], arguments);
+                assert_eq!(
+                    schema["properties"]["next"]["properties"]["tool"]["const"],
+                    target
+                );
             }
             crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&value, &schema)
                 .unwrap();

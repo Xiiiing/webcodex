@@ -233,7 +233,7 @@ fn bundled_app_registry_composition_does_not_bypass_capability_or_model_visibili
             let payload =
                 super::super::tools::mcp_tools_list_payload_with_compact_and_app(compact, enabled);
             let tools = payload["tools"].as_array().unwrap();
-            assert!(!tools
+            assert!(tools
                 .iter()
                 .any(|tool| tool["name"] == "present_agent_continuation"));
             for descriptor in tools {

@@ -30,7 +30,8 @@ pub(super) fn compact_tool(tool: &mut Value) {
             "wait_for_job_readiness" => "Bounded current-turn join for 1..8 exact Jobs, 1..45s. Finish independent work first. Use any when one terminal Job unlocks work; all only when every dependency is needed. Budget the largest safe remaining wait. At deadline reassess work/set; never mechanically refill. Terminal is readiness, not success. Logs/details: observe_jobs. No automatic next turn.",
             "wait_for_job_terminal" => "Optional durable terminal attention for an explicitly selected continuation workflow. Not a blocking wait and does not start a model turn. Ordinary work uses wait_for_job_readiness in the current turn and observe_jobs for results. Reuse exact keyed waits; never redispatch the Job.",
             "present_docx" => "View one authorized project DOCX in a dedicated read-only reader. Supply project and relative path; unchanged/untracked files supported, no Git/Session required. Pins size/SHA (10 MiB max); private App reads fail on version changes. Common styles only; automatic Word pagination/editing unsupported. Rendering requires MCP Apps Host. Reopen to select a new version.",
-            "present_agent_continuation" => "Present one exact Agent/Endpoint generation as the persistent MCP App continuation card. Pass agent_continuation_ref or the exact tuple. New window setup: create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation, then yield/end promptly. Presentation success is not wake readiness; later verify list_agent_identities.production_auto_resume_available.",
+            "present_agent_continuation" => "Present exact Agent/Endpoint generation using agent_continuation_ref or the exact tuple. Setup: create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation. Then output a normal assistant final response and end the turn promptly; the card alone does not finish it. Presentation success is not wake readiness; later verify list_agent_identities.production_auto_resume_available.",
+            "present_job_terminal_continuation" => "Present one exact caller-owned still-waiting wait_id as an MCP App continuation card when blocked and no independent work remains. Then output a normal assistant final response and end the turn promptly; the card alone does not finish it. Triggered waits stay in the current turn. Presentation does not change Job execution or prove automatic resumption.",
             "start_agent_task_attempt" => "Create one leased fenced Attempt for the explicit current assignee. Returns attempt_id, attempt_fence, and attempt_ref. Exact keyed retry returns that same Attempt. Does not dispatch CodingAgent, Job, Wake, or Endpoint work.",
             "start_agent_task_endpoint_continuation" => "Select the Endpoint continuation for one exact live AgentTaskAttempt. Pass attempt_ref or task, attempt, assignee, fence, and controller generation. Does not choose an Endpoint or grant CodingAgent authority. A stale ref fails closed and is not rewritten onto a later attempt or generation.",
             _ => description,
@@ -43,6 +44,15 @@ pub(super) fn compact_tool(tool: &mut Value) {
         compact_invocation_envelope(schema);
         if name == "edit_project_files" {
             compact_primary_editor_schema(schema);
+        }
+        if matches!(
+            name.as_str(),
+            "present_agent_continuation" | "present_job_terminal_continuation"
+        ) {
+            // The top-level continuation guidance describes the exact selector
+            // and turn boundary. Avoid duplicating that prose in compact inputs;
+            // retain all selector alternatives, types, bounds and patterns.
+            strip_schema_descriptions(schema);
         }
         if name == "get_work_result_state" {
             // The App consumes the canonical file contract. Discovery retains

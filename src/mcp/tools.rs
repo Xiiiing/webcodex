@@ -1144,7 +1144,7 @@ fn attach_job_terminal_resume_suggested_call_schema(
         "suggested_call".to_string(),
         json!({
             "type": "object",
-            "description": "Host-specific parser-ready advisory call for the current MCP App continuation carrier. Present only for a still-waiting Job when this Host can create that carrier; it grants no authority and should be used only when no independent work remains and the current model turn can yield immediately after presentation.",
+            "description": "Host-specific parser-ready advisory call for the current MCP App continuation carrier. Present only for a still-waiting Job when this Host can create that carrier and no independent work remains; then output a normal assistant final response and end the current turn promptly. The card alone does not finish the turn or grant authority.",
             "additionalProperties": false,
             "properties": {
                 "follow_up_kind": {"type": "string", "const": "fallback_recovery"},

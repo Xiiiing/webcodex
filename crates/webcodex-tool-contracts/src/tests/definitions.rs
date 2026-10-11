@@ -701,7 +701,7 @@ fn stop_job_preserves_one_canonical_effect() {
 }
 
 #[test]
-fn agent_continuation_setup_descriptions_are_self_guiding_without_direct_expansion() {
+fn agent_continuation_setup_descriptions_require_a_completed_presenting_turn() {
     let description = |name: &str| {
         lookup_tool_definition(name)
             .unwrap_or_else(|| panic!("missing ToolDefinition {name}"))
@@ -721,7 +721,8 @@ fn agent_continuation_setup_descriptions_are_self_guiding_without_direct_expansi
     assert!(present.contains(
         "create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation"
     ));
-    assert!(present.contains("yield/end the current model turn promptly"));
+    assert!(present.contains("normal assistant final response"));
+    assert!(present.contains("card/tool result alone does not finish the turn"));
     assert!(present.contains("production_auto_resume_available"));
     assert!(present.contains("not production auto-resume readiness"));
 
@@ -736,7 +737,7 @@ fn agent_continuation_setup_descriptions_are_self_guiding_without_direct_expansi
         lookup_tool_definition("present_agent_continuation")
             .unwrap()
             .adaptive_runtime_direct_rank(),
-        None
+        Some(18)
     );
     assert_eq!(
         lookup_tool_definition("rotate_agent_continuation_endpoint")
@@ -759,56 +760,65 @@ fn retired_endpoint_name_is_absent_from_every_tool_surface() {
 }
 
 #[test]
-fn inactive_continuation_surface_preserves_domain_definitions() {
-    for (name, visible, category, effect) in [
+fn direct_continuation_presentations_preserve_gateway_waits_and_authority() {
+    for (name, rank, category, effect) in [
         (
             "wait_for_agent_events",
-            true,
+            None,
             TOOL_CATEGORY_AGENT_WAIT,
             ToolEffect::Mutate,
         ),
         (
             "wait_for_job_terminal",
-            true,
+            None,
             TOOL_CATEGORY_JOB,
             ToolEffect::Mutate,
         ),
         (
             "present_agent_continuation",
-            false,
+            Some(18),
             TOOL_CATEGORY_COMMUNICATION,
             ToolEffect::Observe,
         ),
         (
             "present_job_terminal_continuation",
-            false,
+            Some(78),
             TOOL_CATEGORY_JOB,
             ToolEffect::Observe,
         ),
     ] {
         let definition = lookup_tool_definition(name).expect("retained continuation definition");
-        assert_eq!(definition.visibility.is_model_visible(), visible, "{name}");
-        assert_eq!(definition.adaptive_runtime_direct, None, "{name}");
+        assert!(definition.visibility.is_model_visible(), "{name}");
+        assert_eq!(definition.adaptive_runtime_direct_rank(), rank, "{name}");
+        assert_eq!(
+            definition.adaptive_runtime_direct_reason(),
+            rank.map(|_| crate::tool_definition::ToolDirectReason::Continuation),
+            "{name}"
+        );
         assert_eq!(definition.category, category, "{name}");
         assert_eq!(definition.metadata.effect, effect, "{name}");
         assert!(
             definition.model_spec.is_some(),
             "{name} keeps its domain specification"
         );
-        assert_eq!(
+        assert!(
             registered_tool_specs().iter().any(|spec| spec.name == name),
-            visible,
             "{name}"
         );
         assert_eq!(
             definition.metadata.idempotency,
-            if visible {
+            if effect == ToolEffect::Mutate {
                 ToolIdempotency::Keyed
             } else {
                 ToolIdempotency::PureRead
             },
             "{name}"
         );
+        if rank.is_some() {
+            let description = definition.model_spec.unwrap().description;
+            assert!(description.contains("normal assistant final response"));
+            assert!(description.contains("card/tool result alone does not finish the turn"));
+        }
     }
 }
 
@@ -822,6 +832,11 @@ fn adaptive_direct_reason_is_independent_of_domain_and_authority() {
         ("import_host_files", ToolDirectReason::HostIntegration),
         ("present_work_result", ToolDirectReason::Presentation),
         ("present_goal_plan", ToolDirectReason::Presentation),
+        ("present_agent_continuation", ToolDirectReason::Continuation),
+        (
+            "present_job_terminal_continuation",
+            ToolDirectReason::Continuation,
+        ),
     ] {
         let definition = lookup_tool_definition(name).unwrap();
         assert_eq!(

@@ -7,6 +7,19 @@
 
 This note records durable findings from the September 11-12, 2026 MCP App presentation and continuation investigation. The experiments ran in a temporary `mcp-stream-probe` deployment rather than the production WebCodex runtime. They establish Host behavior and design constraints; they do **not** make the temporary probe state machine a production contract.
 
+## October 11 restoration and acceptance boundary
+
+Issues #1018 and #1013 report missing continuation presentation entries. The
+restoration makes both Agent and Job presentation tools dedicated Direct tools
+again, retaining the existing App protocol, generation fences and uncertainty
+handling. Current resources are Agent v18 and Job v2. After presenting, output a
+normal assistant final response to complete the original turn; the tool result
+and card alone are insufficient. This source change does not establish current
+ChatGPT automatic-resume support. The [acceptance procedure](../implementation/mcp-app-auto-resume-restoration.md)
+requires fresh-turn and exact-consume evidence for both card families, including
+foreground and background delays. Keep the default Host policy `unknown` until
+the deployment's behavior has actually been verified.
+
 ## Why this investigation existed
 
 WebCodex already exposes MCP App result cards, but a durable background agent needs stronger answers than "the card rendered":
@@ -198,7 +211,7 @@ later model turn exact-consumes Wake
 
 The only card-creating entry is the explicit read `present_agent_continuation(agent_id, endpoint_id, expected_controller_generation)`, bound to the current `ui://webcodex/agent-continuation/v16` resource. Bind/recover/state/acquire/prepare/finish/unbind are globally ModelHidden and are projected only as App-visible tools on eligible Stateless MCP 2026 operator surfaces. They do not bind the resource again, so polling/coordination does not create a stream of custom cards. Ordinary communication and coding tools keep native Host presentation.
 
-The setup invariant is `create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation -> yield/end turn`. The presentation response precedes any guaranteed View bind, and the presenting turn has no authoritative fully-mounted signal; continuing long coordinator work after presentation can therefore outlive the bounded Endpoint lease before a carrier exists. Verify the later exact-generation carrier with `list_agent_identities.production_auto_resume_available`; do not treat presentation success or ClientWindow activity as readiness/model-liveness proof.
+The setup invariant is `create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation -> normal assistant final response ending the turn`. The presentation response precedes any guaranteed View bind, and the presenting turn has no authoritative fully-mounted signal; continuing long coordinator work after presentation can therefore outlive the bounded Endpoint lease before a carrier exists. Verify the later exact-generation carrier with `list_agent_identities.production_auto_resume_available`; do not treat presentation success or ClientWindow activity as readiness/model-liveness proof.
 
 The View binding is process-local fencing, not durable authority. Every App-only operation re-authorizes the normal communication principal and exact Agent/Endpoint/controller generation. `binding_id` identifies only the current iframe/process instance. For MCP Apps, the Store retains both the v11 SHA-256 fingerprint of the exact current binding fence and, when the Host supplied valid request-scoped identity, the already-domain-separated SHA-256 `ClientWindow` key. Raw `_meta["openai/session"]` is never persisted. Server takeover clears process-local carriers and durable `wake_capable` but preserves both bounded restart-recovery values. The exact old binding fingerprint remains the fallback when no valid ClientWindow exists. With a canonical ClientWindow, the same authenticated principal + exact Endpoint/generation + same Window may restore or replace a lost iframe fence after restart; refresh unbind clears the iframe fingerprint but preserves that same-Window continuity while the Endpoint remains current. Natural lease expiry clears wake capability and the binding fingerprint; v15 preserves only the hashed Window key as a bounded input to the dedicated expired-Endpoint replacement operation and its exact one-hop replay chain, while ordinary bind/state still reject the expired Endpoint. Explicit detach, ordinary Endpoint replacement, or transition to a push carrier clears the continuity value. Push adapters still require a fresh current-process attachment and never inherit Window recovery. On replacement/loss, existing Store reconciliation handles the durable state: pre-fence claim -> revoked Attempt + pending Wake; post-fence prepared/delivered -> `delivery_unknown`.
 
