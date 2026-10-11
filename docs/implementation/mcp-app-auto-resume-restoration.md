@@ -11,8 +11,11 @@ Gateway tools. There is no new scheduler, persistence format or business API.
 Rust contract, MCP routing/admission and continuation regression tests validate
 the local boundary. JavaScript tests validate the card state machines, including
 duplicate and uncertain dispatch. They cannot prove ChatGPT scheduling.
-`ui/message` acceptance is only dispatch evidence; a fresh model turn and exact
-consume are required to prove resumption.
+`ui/message` acceptance is only dispatch evidence. Agent resumption requires a
+fresh model turn and exact Wake consume. The existing Job protocol has no
+consume operation: require its exact wait/Job delivery evidence and a fresh turn
+that actually observes that Job instead. Neither a delivery ACK nor a displayed
+message proves model execution.
 
 Use an explicitly selected disposable test connection on the approved server.
 Build the reviewed commit using the `dogfood` profile, record the existing
@@ -52,17 +55,20 @@ conversation visible for foreground cases; switch away for background cases.
 | Agent | about 30 seconds | foreground | zero-click fresh turn, exact Wake consume |
 | Agent | about 5 minutes | foreground | zero-click fresh turn, exact Wake consume |
 | Agent | about 5 minutes | background | zero-click fresh turn, exact Wake consume |
-| Job | about 30 seconds | foreground | zero-click fresh turn, exact terminal consume |
-| Job | about 5 minutes | foreground | zero-click fresh turn, exact terminal consume |
-| Job | about 5 minutes | background | zero-click fresh turn, exact terminal consume |
+| Job | about 30 seconds | foreground | zero-click fresh turn, exact wait delivery and Job observation |
+| Job | about 5 minutes | foreground | zero-click fresh turn, exact wait delivery and Job observation |
+| Job | about 5 minutes | background | zero-click fresh turn, exact wait delivery and Job observation |
 
 For each case record UTC timestamps for original final response, trigger,
-prepare, Host dispatch outcome, fresh-turn first tool call and exact consume.
+prepare, Host dispatch outcome, fresh-turn first tool call and exact Agent
+consume or Job observation.
 Record the source build, protocol, visibility, policy, correlation IDs and
-whether any user action occurred. Verify the resumed turn actually calls the
-canonical consume tool with the matching identity; a displayed message alone is
-insufficient. Observe a further polling interval and verify there is no second
-turn or duplicated consume effect for the same logical event.
+whether any user action occurred. Verify the Agent turn calls
+`consume_agent_wake` with the matching identity. For Job, correlate the exact
+wait's one-shot delivery with the resumed turn's `observe_jobs` call for that
+Job; do not invent a Job consume API or infer execution from `delivered` alone.
+Observe a further polling interval and verify there is no second turn or
+duplicated consume/delivery effect for the same logical event.
 
 Retain only bounded, redacted evidence. Omit credentials, binding/claim fences,
 consume tokens, raw automatic envelopes and private Conversation content.

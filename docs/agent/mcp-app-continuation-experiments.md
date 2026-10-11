@@ -16,8 +16,9 @@ handling. Current resources are Agent v18 and Job v2. After presenting, output a
 normal assistant final response to complete the original turn; the tool result
 and card alone are insufficient. This source change does not establish current
 ChatGPT automatic-resume support. The [acceptance procedure](../implementation/mcp-app-auto-resume-restoration.md)
-requires fresh-turn and exact-consume evidence for both card families, including
-foreground and background delays. Keep the default Host policy `unknown` until
+requires fresh-turn evidence for both card families, exact Agent Wake consume,
+and exact Job wait delivery followed by Job observation, including foreground
+and background delays. Keep the default Host policy `unknown` until
 the deployment's behavior has actually been verified.
 
 ## Why this investigation existed
