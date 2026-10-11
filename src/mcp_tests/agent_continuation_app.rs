@@ -236,7 +236,7 @@ fn post_message(
 async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bindings() {
     assert_eq!(
         MCP_AGENT_CONTINUATION_UI_RESOURCE_URI,
-        "ui://webcodex/agent-continuation/v20"
+        "ui://webcodex/agent-continuation/v18"
     );
     let (_temp, _db, adaptive) = continuation_runtime();
     let auth = continuation_auth("continuation-surface");
@@ -254,12 +254,7 @@ async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bin
     let McpOutcome::Ok(ui) = ui else {
         panic!("expected UI tools/list")
     };
-    assert_eq!(
-        tool(&ui["result"], "present_agent_continuation")
-            .unwrap()
-            .pointer("/_meta/ui/resourceUri"),
-        Some(&json!(MCP_AGENT_CONTINUATION_UI_RESOURCE_URI))
-    );
+    assert!(tool(&ui["result"], "present_agent_continuation").is_none());
     assert!(tool(&ui["result"], "wait_for_agent_events").is_none());
     let bound_tools: Vec<_> = ui["result"]["tools"]
         .as_array()
@@ -272,7 +267,7 @@ async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bin
         })
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(bound_tools, vec!["present_agent_continuation"]);
+    assert!(bound_tools.is_empty());
     for name in APP_TOOLS {
         let descriptor = tool(&ui["result"], name).unwrap_or_else(|| panic!("missing {name}"));
         assert_eq!(
@@ -325,10 +320,7 @@ async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bin
     let McpOutcome::Ok(plain) = plain else {
         panic!("expected plain tools/list")
     };
-    assert!(tool(&plain["result"], "present_agent_continuation")
-        .unwrap()
-        .pointer("/_meta/ui/resourceUri")
-        .is_none());
+    assert!(tool(&plain["result"], "present_agent_continuation").is_none());
     assert!(tool(&plain["result"], "wait_for_agent_events").is_none());
     for name in APP_TOOLS {
         assert!(tool(&plain["result"], name).is_none());
@@ -348,10 +340,7 @@ async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bin
     let McpOutcome::Ok(disabled) = disabled else {
         panic!("expected disabled tools/list")
     };
-    assert!(tool(&disabled["result"], "present_agent_continuation")
-        .unwrap()
-        .pointer("/_meta/ui/resourceUri")
-        .is_none());
+    assert!(tool(&disabled["result"], "present_agent_continuation").is_none());
     assert!(tool(&disabled["result"], "wait_for_agent_events").is_none());
     for name in APP_TOOLS {
         assert!(tool(&disabled["result"], name).is_none());
@@ -533,8 +522,8 @@ async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bin
         "v17 successor recovery must remain explicitly bounded"
     );
     assert!(
-        MCP_AGENT_CONTINUATION_APP_HTML.contains("version: \"20.0.0\""),
-        "App identity version must advance with the current resource"
+        MCP_AGENT_CONTINUATION_APP_HTML.contains("version: \"17.0.0\""),
+        "App protocol version must advance with the v17 resource"
     );
     assert!(
         MCP_AGENT_CONTINUATION_APP_HTML.contains("const DEBUG_DIAGNOSTICS = false;"),
@@ -1047,24 +1036,17 @@ async fn agent_continuation_app_protocol_uses_standard_result_without_model_proj
         "continuation-conversation",
     );
 
-    let present = handle_with_app_policy(
-        &runtime,
-        rpc(
-            "tools/call",
-            Some(json!(5201)),
-            mcp_2026_ui_params(json!({
-                "name": "present_agent_continuation",
-                "arguments": {"agent_id": receiver, "endpoint_id": receiver_endpoint,
-                    "expected_controller_generation": receiver_generation}
-            })),
-        ),
+    // Exercise the retained domain projection without advertising a new model
+    // presentation entry. Existing App protocol calls below remain real MCP.
+    let present = runtime.present_agent_continuation(
         Some(&owner),
-        true,
-    )
-    .await;
-    let McpOutcome::Ok(present) = present else {
-        panic!("expected owned Direct Agent presentation")
-    };
+        receiver.clone(),
+        receiver_endpoint.clone(),
+        receiver_generation,
+    );
+    let present = json!({"result": super::super::tools::mcp_runtime_tool_result(
+        "present_agent_continuation", false, present,
+    )});
     assert_eq!(present["result"]["structuredContent"]["success"], true);
     assert_eq!(
         present["result"]["structuredContent"]["output"]["agent_continuation"]["display_name"],

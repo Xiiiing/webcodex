@@ -557,32 +557,28 @@ Runner protocol and domain authority must not churn when that policy changes.
 
 ### Current continuation surface
 
-`present_agent_continuation` and `present_job_terminal_continuation` are
-model-visible dedicated Direct tools with the Continuation reason. Their
-descriptors carry the resource association when the Host admits MCP Apps;
-the generic Gateway cannot reproduce that presentation. `wait_for_agent_events`
-and `wait_for_job_terminal` remain Gateway tools with unchanged keyed replay,
-authorization and durable state. App-only bind/state/prepare/finish operations
-remain ModelHidden and retain independent Server, protocol and scope admission.
+The current static Host surface does not advertise fresh-turn continuation:
+`wait_for_job_terminal` and `wait_for_agent_events` keep their canonical names,
+input/output contracts, keyed replay, authorization and durable state, but are
+Gateway tools. `present_agent_continuation` and
+`present_job_terminal_continuation` are ModelHidden, never generic Gateway
+presentation targets. Their ToolCalls, handlers, resources and existing hidden
+App protocol remain intact. A cached presentation descriptor follows existing
+admission rules; no old-schema compatibility bypass is added.
 
-After presenting a continuation card, the assistant must output a normal final
-response and end the current turn promptly. A tool result or rendered card alone
-does not complete the turn. For a Job, present only a still-waiting exact wait
-when blocked with no independent work remaining; an already-triggered terminal
-transition belongs to the current turn. Presentation is read-only, grants no
-execution authority and does not prove that a later turn will start.
+`present_work_result` and `present_goal_plan` remain Direct with Presentation
+reason. `import_host_files` remains Direct with HostIntegration
+reason. No current Direct definition needs Continuation reason. Restore that
+policy explicitly (and presentation visibility), then refresh Host schema if
+fresh-turn support returns; do not couple registration to
+`WEBCODEX_MCP_APP_RESUME_MODE` or `ModelWorkflowPolicy`.
 
-Static registration is independent of `WEBCODEX_MCP_APP_RESUME_MODE` and
-`ModelWorkflowPolicy`. The default remains `unknown`; `user_confirmed` and
-`unattended` describe verified Host interaction requirements, not permissions.
-Only a deployment whose automatic fresh-turn behavior has been measured may
-declare `unattended`. Refresh the Host's tool registration after this static
-surface change. See the [restoration acceptance procedure](../implementation/mcp-app-auto-resume-restoration.md).
-
-Generated wait edges use the canonical Gateway wrapper. MCP-added Job carrier
-suggestions require an admitted Apps carrier and a still-waiting, not-ready
-result; they never suggest resending `delivery_unknown`. Exact consume, generation
-fences and replay rules continue to own continuation correctness.
+Generated wait edges use the canonical Gateway wrapper; unavailable presentation
+edges are omitted from schema and value. MCP-added Job carrier suggestions also
+check the canonical Direct policy because they are outside the domain output
+schema. Retained recommended recipes are projected through current static
+visibility so dormant continuation recipes do not recommend unavailable tools.
+App-only protocol descriptors are not ordinary model-tool savings.
 
 ### Stable schemas and optional workflow guidance
 

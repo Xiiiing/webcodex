@@ -79,8 +79,8 @@ pub const TOOL_RECOMMENDED_FLOWS: &[ToolRecommendedFlow] = &[
     },
     ToolRecommendedFlow {
         name: "agent_continuation_setup",
-        summary: "New durable Agent window setup: create identity -> create/rotate Endpoint -> present continuation card -> normal assistant final response and end the current turn -> verify production_auto_resume_available.",
-        manifest_purpose: "Use create_agent_identity, then rotate_agent_continuation_endpoint, then present_agent_continuation. Output a normal assistant final response and end the current model turn promptly; the card/tool result alone does not finish it. Presentation success is not Host readiness: later verify the exact Agent through list_agent_identities.production_auto_resume_available. Keep durable Agent identity independent from the Host window.",
+        summary: "New durable Agent window setup: create identity -> create/rotate Endpoint -> present continuation card -> yield/end the current turn -> verify production_auto_resume_available.",
+        manifest_purpose: "Use create_agent_identity, then rotate_agent_continuation_endpoint, then present_agent_continuation. Presentation success is not Host readiness: yield/end the current model turn promptly so the MCP App can mount/bind, then verify the exact Agent through list_agent_identities.production_auto_resume_available. Keep durable Agent identity independent from the Host window.",
         tools: &[
             "create_agent_identity",
             "rotate_agent_continuation_endpoint",

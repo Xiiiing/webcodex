@@ -197,12 +197,7 @@ async fn work_result_descriptor_keeps_renderers_public_and_bridge_tools_app_only
             .pointer("/_meta/ui/resourceUri"),
         Some(&json!(MCP_GOAL_PLAN_UI_RESOURCE_URI))
     );
-    assert_eq!(
-        tool(&full_ui["result"], "present_agent_continuation")
-            .unwrap()
-            .pointer("/_meta/ui/resourceUri"),
-        Some(&json!(MCP_AGENT_CONTINUATION_UI_RESOURCE_URI))
-    );
+    assert!(tool(&full_ui["result"], "present_agent_continuation").is_none());
 
     let plain = handle_with_app_policy(
         &runtime,

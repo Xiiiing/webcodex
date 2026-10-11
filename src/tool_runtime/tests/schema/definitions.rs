@@ -97,6 +97,8 @@ fn tool_call_parser_name_gate_matches_tool_definitions() {
         "read_app_artifact_chunk",
         "record_external_observation",
         "get_session_handoff_state",
+        "present_agent_continuation",
+        "present_job_terminal_continuation",
         "bind_agent_continuation",
         "recover_agent_continuation_endpoint",
         "get_agent_continuation_state",

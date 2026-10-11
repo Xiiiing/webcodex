@@ -2259,26 +2259,16 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
             "present_agent_continuation",
             vec![
                 "create_agent_identity",
-                "normal assistant final response",
-                "card alone does not finish it",
+                "yield/end promptly",
                 "not wake readiness",
                 "production_auto_resume_available",
             ],
         ),
-        (
-            "present_job_terminal_continuation",
-            vec![
-                "wait_id",
-                "no independent work remains",
-                "normal assistant final response",
-                "card alone does not finish it",
-                "prove automatic resumption",
-            ],
-        ),
     ] {
-        let descriptor = if name == "wait_for_job_terminal" {
+        let descriptor = if matches!(name, "wait_for_job_terminal" | "present_agent_continuation") {
             assert!(!tools.iter().any(|tool| tool["name"] == name));
-            // Durable waits remain on the Gateway surface.
+            // Keep testing dormant/gateway compact copy without asserting that
+            // these tools still occupy the ordinary direct inventory.
             let definition = webcodex_tool_contracts::lookup_tool_definition(name).unwrap();
             let mut descriptor = json!({
                 "name": name,
@@ -2297,23 +2287,6 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
         let description = descriptor["description"].as_str().unwrap();
         for phrase in phrases {
             assert!(description.contains(phrase), "{name}: {description}");
-        }
-        if matches!(
-            name,
-            "present_agent_continuation" | "present_job_terminal_continuation"
-        ) {
-            let mut compact_input = descriptor["inputSchema"].clone();
-            compact_input["properties"]
-                .as_object_mut()
-                .unwrap()
-                .remove("_wc");
-            let mut canonical_input = webcodex_tool_contracts::input_schema_for_tool(name);
-            strip_description_text(&mut compact_input);
-            strip_description_text(&mut canonical_input);
-            assert_eq!(
-                compact_input, canonical_input,
-                "{name} selector constraints"
-            );
         }
     }
     for tool in tools {

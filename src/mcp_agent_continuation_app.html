@@ -839,25 +839,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
   function acceptToolInput(params) {
     // MCP Apps 2026-01-26: complete tool input is params.arguments.
     // This is an exact selector only; every tool call is reauthorized by Server.
-    // The protocol permits omitted arguments. This notification supplies no
-    // selector and must not revoke an identity verified by another message.
-    if (params && typeof params === "object" && !Array.isArray(params)
-      && !Object.prototype.hasOwnProperty.call(params, "arguments")) return;
     const args = params && params.arguments;
-    if (args && typeof args === "object" && !Array.isArray(args)
-      && args.agent_continuation_ref != null) {
-      const refOnly = typeof args.agent_continuation_ref === "string"
-        && /^~ac[1-9][0-9]{0,18}$/.test(args.agent_continuation_ref)
-        && args.agent_id == null && args.endpoint_id == null
-        && args.expected_controller_generation == null
-        && Object.keys(args).every(key => [
-          "agent_continuation_ref", "agent_id", "endpoint_id", "expected_controller_generation", "_wc",
-        ].includes(key));
-      // The opaque ref grants no identity. Only the Server's initial result may
-      // resolve it to the exact tuple; input arriving later must not disturb it.
-      if (!refOnly) acceptIdentity(null);
-      return;
-    }
     if (!acceptIdentity(args && !Array.isArray(args) && {
       agent_id: args.agent_id,
       endpoint_id: args.endpoint_id,
@@ -982,7 +964,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 
   request("ui/initialize", {
     protocolVersion: APP_PROTOCOL,
-    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "20.0.0" },
+    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "17.0.0" },
     appCapabilities: {},
   }).then(() => {
     if (tornDown) return;
