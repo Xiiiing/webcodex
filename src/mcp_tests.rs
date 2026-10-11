@@ -300,6 +300,8 @@ mod artifact_export;
 mod computer_app;
 #[path = "mcp_tests/conformance.rs"]
 mod conformance;
+#[path = "mcp_tests/execution_control.rs"]
+mod execution_control;
 #[path = "mcp_tests/execution_feedback.rs"]
 mod execution_feedback;
 #[path = "mcp_tests/file_import.rs"]
@@ -308,6 +310,8 @@ mod file_import;
 mod goal_plan_app;
 #[path = "mcp_tests/http_transport.rs"]
 mod http_transport;
+#[path = "mcp_tests/invocation_envelope.rs"]
+mod invocation_envelope;
 #[path = "mcp_tests/job_terminal_continuation_app.rs"]
 mod job_terminal_continuation_app;
 #[path = "mcp_tests/model_ergonomics.rs"]
@@ -473,6 +477,9 @@ fn readiness_audit_correlation_retains_exact_jobs_without_guessing_project() {
 
 #[path = "mcp_tests/workbench_app.rs"]
 mod workbench_app;
+
+#[path = "mcp_tests/work_result_thread_empty.rs"]
+mod work_result_thread_empty;
 
 #[path = "mcp_tests/resource_mentions.rs"]
 mod resource_mentions;
