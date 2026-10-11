@@ -236,7 +236,7 @@ fn post_message(
 async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bindings() {
     assert_eq!(
         MCP_AGENT_CONTINUATION_UI_RESOURCE_URI,
-        "ui://webcodex/agent-continuation/v18"
+        "ui://webcodex/agent-continuation/v19"
     );
     let (_temp, _db, adaptive) = continuation_runtime();
     let auth = continuation_auth("continuation-surface");
@@ -533,8 +533,8 @@ async fn agent_continuation_app_surface_is_sparse_app_only_without_rendering_bin
         "v17 successor recovery must remain explicitly bounded"
     );
     assert!(
-        MCP_AGENT_CONTINUATION_APP_HTML.contains("version: \"17.0.0\""),
-        "App protocol version must advance with the v17 resource"
+        MCP_AGENT_CONTINUATION_APP_HTML.contains("version: \"19.0.0\""),
+        "App identity version must advance with the current resource"
     );
     assert!(
         MCP_AGENT_CONTINUATION_APP_HTML.contains("const DEBUG_DIAGNOSTICS = false;"),

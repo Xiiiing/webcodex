@@ -246,8 +246,16 @@ Visible status distinguishes script activity, Host initialization, exact identit
 selection, and live binding/polling, with separate initialization, binding, and
 identity errors. Diagnostics do not display binding ids, claim fences, or consume
 tokens. `tools/list` and `resources/list` advertise only the canonical
-`ui://webcodex/agent-continuation/v18` and `ui://webcodex/goal-plan/v7` resources. Goal Plan now uses only its current resource (wire version 3), with no old Goal-resource aliases. The G5 projection keeps production carrier readiness, exact Goal-stall Wake lifecycle, Host delivery outcome, and exact-consume fresh-turn proof as separate bounded facts; it exposes no Wake/Attempt/Endpoint identifiers or continuation proofs.
-Agent continuation v1-v15 are hidden read aliases serving the same current template. Reading an alias does not revive an expired Endpoint or bypass exact generation/authorization fencing; the same current template must still complete explicit Server-authorized one-hop replacement transitions. The v11 fingerprint-proven restart fallback, v12 strict restart projection, v13 canonical Host-window refresh fence, v14 expired-Endpoint replacement, and v15 bounded successor replay remain intact; v16 changes only visibility eligibility for automatic dispatch.
+`ui://webcodex/agent-continuation/v19` and `ui://webcodex/goal-plan/v7` resources. Goal Plan now uses only its current resource (wire version 3), with no old Goal-resource aliases. The G5 projection keeps production carrier readiness, exact Goal-stall Wake lifecycle, Host delivery outcome, and exact-consume fresh-turn proof as separate bounded facts; it exposes no Wake/Attempt/Endpoint identifiers or continuation proofs.
+
+The v19 Agent View also accepts a valid `agent_continuation_ref` presentation
+input without treating its absent tuple as an invalid identity. That opaque ref
+does not select an Agent locally: the View waits for the Server's validated
+initial ToolResult to supply the exact Agent/Endpoint/generation. A later matching
+input or initial result cannot duplicate binding. Invalid refs, mixed selectors
+and conflicting resolved identities still fail closed. The App URI and
+`appInfo.version` advance together; no wire protocol or permission changes.
+Earlier experiments kept Agent continuation v1-v15 as hidden read aliases serving the then-current template; the current v0.5 registry rejects retired URIs. Those alias reads did not revive an expired Endpoint or bypass exact generation/authorization fencing; the template still had to complete explicit Server-authorized one-hop replacement transitions. The v11 fingerprint-proven restart fallback, v12 strict restart projection, v13 canonical Host-window refresh fence, v14 expired-Endpoint replacement, and v15 bounded successor replay remain intact; v16 changed only visibility eligibility for automatic dispatch.
 
 ## Goal-correlated terminal attention carrier
 
