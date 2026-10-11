@@ -6,13 +6,17 @@ and [#1013](https://github.com/yyjeqhc/webcodex/issues/1013). It restores
 model-visible Direct tools with Continuation reason. Durable waits remain
 Gateway tools. There is no new scheduler, persistence format or business API.
 
-The Agent View uses `ui://webcodex/agent-continuation/v19`. A valid ref-only
+The Agent View uses `ui://webcodex/agent-continuation/v20`. A valid ref-only
 presentation input waits for the initial Server result to resolve the exact
 identity; the ref itself never grants identity or authority. This fixes the
 previous initialization teardown when the Host delivered ref-only tool input
 before the result. Complete tuple inputs still work, and invalid selectors or
 conflicting resolved identities still stop coordination. Tests cover all six
 initialization/input/result orders, including an initial `host_binding.bound=false`.
+The [MCP Apps input notification](https://apps.extensions.modelcontextprotocol.io/api/interfaces/app.McpUiToolInputNotification.html)
+allows `arguments` to be omitted. Such notifications preserve an already
+selected identity or keep waiting for one, rather than tearing down the card.
+Explicit malformed or conflicting selectors still fail closed.
 
 ## Local and Host evidence
 

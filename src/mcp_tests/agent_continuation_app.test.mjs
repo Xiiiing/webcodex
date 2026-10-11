@@ -339,6 +339,66 @@ test("ref selector leaves invocation sidecar to Server without deriving identity
   assert.deepEqual(businessArgs(view.calls("bind_agent_continuation")[0]), { ...input, binding_id: bindingId(view) });
 });
 
+for (const order of [
+  ["initialize", "input", "result"], ["input", "initialize", "result"],
+  ["result", "initialize", "input"], ["initialize", "result", "input"],
+  ["input", "result", "initialize"], ["result", "input", "initialize"],
+]) {
+  for (let omittedAt = 0; omittedAt <= order.length; omittedAt++) {
+    test(`omitted arguments preserves ref bootstrap: ${order.join(" -> ")} at ${omittedAt}`, async () => {
+      const view = app("mcp_agent_continuation_app.html");
+      for (let index = 0; index <= order.length; index++) {
+        if (index === omittedAt) view.notification("ui/notifications/tool-input", {});
+        const step = order[index];
+        if (step === "initialize") await view.initialize();
+        else if (step === "input") view.toolInput({ agent_continuation_ref: "~ac1" });
+        else if (step === "result") view.toolResult({ agent_continuation: { ...projection, host_binding: { bound: false } } });
+      }
+      await flush();
+      assert.equal(view.calls("bind_agent_continuation").length, 1);
+      assert.deepEqual(businessArgs(view.calls("bind_agent_continuation")[0]), { ...input, binding_id: bindingId(view) });
+      await view.reply(view.calls("bind_agent_continuation")[0], toolResult({ agent_continuation: projection }));
+      assert.equal(view.nodes.binding.textContent, "Connected");
+      assert.equal(view.calls("unbind_agent_continuation").length, 0);
+    });
+  }
+}
+
+test("omitted arguments supplies no selector before or after initialization", async () => {
+  const view = app("mcp_agent_continuation_app.html");
+  view.notification("ui/notifications/tool-input", {});
+  await view.initialize();
+  view.notification("ui/notifications/tool-input", {});
+  view.toolInput({ agent_continuation_ref: "~ac1" });
+  view.notification("ui/notifications/tool-input", {});
+  await flush();
+  assert.equal(view.calls("bind_agent_continuation").length, 0);
+  assert.equal(view.nodes.status.textContent, "Waiting for Agent connection…");
+});
+
+test("complete tuple can establish identity after omitted arguments", async () => {
+  const view = app("mcp_agent_continuation_app.html");
+  await view.initialize();
+  view.notification("ui/notifications/tool-input", {});
+  view.toolInput(input);
+  await flush();
+  assert.equal(view.calls("bind_agent_continuation").length, 1);
+  assert.deepEqual(businessArgs(view.calls("bind_agent_continuation")[0]), { ...input, binding_id: bindingId(view) });
+});
+
+test("omitted arguments preserves an established binding without rebinding", async () => {
+  const view = await boundView();
+  const status = view.nodes.status.textContent;
+  view.notification("ui/notifications/tool-input", {});
+  await flush();
+  assert.equal(view.calls("bind_agent_continuation").length, 1);
+  assert.equal(view.calls("unbind_agent_continuation").length, 0);
+  assert.equal(view.nodes.binding.textContent, "Connected");
+  assert.equal(view.nodes.status.textContent, status);
+  await view.reply(view.calls("get_agent_continuation_state").at(-1), toolResult({ agent_continuation: projection }));
+  assert.equal(view.calls("acquire_agent_continuation_wake").length, 1);
+});
+
 test("ref bootstrap preserves exact identity mismatch failure", async () => {
   const view = app("mcp_agent_continuation_app.html");
   view.toolInput({ agent_continuation_ref: "~ac1" });
@@ -421,7 +481,7 @@ for (const [field, value] of Object.entries(conflicts)) {
 }
 
 for (const invalid of [
-  null, [], {},
+  null, [], {}, "invalid", 1, true,
   { ...input, agent_id: input.agent_id.replace("dagent", "agent") },
   { ...input, agent_id: `wc_dagent_${"A".repeat(32)}` },
   { ...input, agent_id: [input.agent_id] },
@@ -448,7 +508,7 @@ test("continuation accepts only parent complete input with canonical arguments",
   view.notification("ui/notifications/tool-input-partial", { arguments: input });
   assert.equal(view.calls("bind_agent_continuation").length, 0);
   assert.equal(view.nodes.status.textContent, "Waiting for Agent connection…");
-  view.notification("ui/notifications/tool-input", { input });
+  view.notification("ui/notifications/tool-input", { arguments: { input } });
   assert.equal(view.calls("bind_agent_continuation").length, 0);
   assert.equal(view.nodes.status.textContent, "Connection unavailable. Agent connection could not be verified.");
 });
