@@ -54,7 +54,7 @@ pub(super) fn role_entries(
             entry.configured_path = Some(relative.clone());
             locations.registry = entry;
         }
-        inventory.settings.device_display_name = locations.display_name;
+        inventory.diagnostic.device_display_name = locations.display_name;
         add(inventory, locations.registry);
         add(
             inventory,
@@ -70,7 +70,7 @@ pub(super) fn role_entries(
         );
         service_log(inventory, root, "runner", record);
     } else {
-        inventory.settings.device_display_name = Setting::NotApplicable;
+        inventory.diagnostic.device_display_name = Setting::NotApplicable;
         add(
             inventory,
             reference_entry(

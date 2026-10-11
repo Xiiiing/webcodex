@@ -5,10 +5,10 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use webcodex_environment::inventory::{
     append_runner_configuration_paths, append_server_configuration_paths, build_backup_manifest,
-    build_settings_export, empty_environment_inventory, inspect_environment_paths,
+    build_diagnostic_configuration, empty_environment_inventory, inspect_environment_paths,
     local_path_entry, recompute_revision, safe_build, BuildObservation, BuildSource,
-    DesktopPreferences, InventoryIssue, LogSource, LogSourceKind, PathEntry, PathInventory,
-    PathKind, PathStatus, SafetyCategory, Setting, SettingsLanguage,
+    DesktopPreferences, DiagnosticConfiguration, InventoryIssue, LogSource, LogSourceKind,
+    PathEntry, PathInventory, PathKind, PathStatus, SafetyCategory, Setting, DiagnosticLanguage,
 };
 
 mod export;
@@ -25,7 +25,6 @@ pub struct OpenInventoryRequest {
 pub enum InventoryDocument {
     Inventory,
     BackupManifest,
-    SettingsExport,
 }
 
 #[derive(Deserialize)]
@@ -77,7 +76,6 @@ impl AppState {
     pub async fn export_inventory_document(
         &self,
         request: ExportInventoryRequest,
-        locale: &crate::desktop_locale::DesktopLocaleState,
     ) -> DesktopResult<()> {
         let slot = self.core.lock().await;
         let core = slot
@@ -86,36 +84,36 @@ impl AppState {
         let root =
             webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
         let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
-        export_document(&inventory, &request, || {
-            desktop_preferences(
-                &core.config,
-                core.configuration_issue.is_some(),
-                locale.get(),
-            )
-        })
+        check_revision(&inventory, &request.expected_revision)?;
+        let bytes = match request.kind {
+            InventoryDocument::Inventory => export::bounded_json(&inventory)?,
+            InventoryDocument::BackupManifest => {
+                export::bounded_json(&build_backup_manifest(&inventory))?
+            }
+        };
+        export::write_document(&request.path, &bytes, &inventory)
     }
-}
 
-fn export_document(
-    inventory: &PathInventory,
-    request: &ExportInventoryRequest,
-    preferences: impl FnOnce() -> Setting<DesktopPreferences>,
-) -> DesktopResult<()> {
-    check_revision(inventory, &request.expected_revision)?;
-    let bytes = match request.kind {
-        InventoryDocument::Inventory => export::bounded_json(inventory)?,
-        InventoryDocument::BackupManifest => {
-            export::bounded_json(&build_backup_manifest(inventory))?
-        }
-        InventoryDocument::SettingsExport => {
-            // The UI previews locations, not settings values. Fence that context,
-            // then capture the current owned preferences for this explicit export.
-            let mut settings = build_settings_export(inventory);
-            settings.desktop_preferences = preferences();
-            export::bounded_json(&settings)?
-        }
-    };
-    export::write_document(&request.path, &bytes, inventory)
+    pub async fn diagnostic_configuration(
+        &self,
+        locale: &crate::desktop_locale::DesktopLocaleState,
+    ) -> DesktopResult<DiagnosticConfiguration> {
+        let slot = self.core.lock().await;
+        let core = slot
+            .as_ref()
+            .ok_or_else(|| inventory_error("desktop_operation_busy"))?;
+        let root =
+            webcodex_environment::default_environment_dir().map_err(environment::desktop_error)?;
+        let inventory = desktop_inventory(core, &root, self.desktop_data_dir.source.label());
+        let mut configuration = build_diagnostic_configuration(&inventory);
+        configuration.desktop_preferences = desktop_preferences(
+            &core.config,
+            core.configuration_issue.is_some(),
+            locale.get(),
+        );
+        export::bounded_json(&configuration)?;
+        Ok(configuration)
+    }
 }
 
 fn check_revision(inventory: &PathInventory, expected: &str) -> DesktopResult<()> {
@@ -449,7 +447,7 @@ fn append_legacy_locations(inventory: &mut PathInventory, core: &InventoryContex
             }
         }
     } else {
-        inventory.settings.device_display_name = Setting::NotApplicable;
+        inventory.diagnostic.device_display_name = Setting::NotApplicable;
         inventory.entries.push(reference(
             "runner.configuration",
             "runner",
@@ -491,16 +489,16 @@ fn desktop_preferences(
     }
 }
 
-fn settings_language(locale: crate::desktop_locale::DesktopLocale) -> SettingsLanguage {
+fn settings_language(locale: crate::desktop_locale::DesktopLocale) -> DiagnosticLanguage {
     use crate::desktop_locale::DesktopLocale;
     match locale {
-        DesktopLocale::EnUs => SettingsLanguage::EnUs,
-        DesktopLocale::ZhCn => SettingsLanguage::ZhCn,
-        DesktopLocale::ZhTw => SettingsLanguage::ZhTw,
-        DesktopLocale::DeDe => SettingsLanguage::DeDe,
-        DesktopLocale::FrFr => SettingsLanguage::FrFr,
-        DesktopLocale::JaJp => SettingsLanguage::JaJp,
-        DesktopLocale::KoKr => SettingsLanguage::KoKr,
+        DesktopLocale::EnUs => DiagnosticLanguage::EnUs,
+        DesktopLocale::ZhCn => DiagnosticLanguage::ZhCn,
+        DesktopLocale::ZhTw => DiagnosticLanguage::ZhTw,
+        DesktopLocale::DeDe => DiagnosticLanguage::DeDe,
+        DesktopLocale::FrFr => DiagnosticLanguage::FrFr,
+        DesktopLocale::JaJp => DiagnosticLanguage::JaJp,
+        DesktopLocale::KoKr => DiagnosticLanguage::KoKr,
     }
 }
 

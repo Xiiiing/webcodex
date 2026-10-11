@@ -100,9 +100,9 @@ pub struct IdentityObservation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PathInventory {
     /// Allowlisted values captured by the same bounded Runner configuration read.
-    /// Only settings export emits them; they do not affect the path revision.
+    /// Only the explicit diagnostic support projection emits them; they do not affect the path revision.
     #[serde(skip)]
-    pub settings: super::SettingsObservation,
+    pub diagnostic: super::DiagnosticObservation,
     pub schema_version: u16,
     pub observed_at_ms: u64,
     pub environment_id: Option<String>,

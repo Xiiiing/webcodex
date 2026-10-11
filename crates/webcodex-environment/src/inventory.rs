@@ -1,23 +1,23 @@
 //! Bounded metadata inventory derived from the unique authoritative Environment.
 //! No setup, locks, processes, network, traversal scans, payload backup or restore.
 mod configuration;
+mod diagnostic_configuration;
 mod entries;
 mod manifest;
 mod model;
 mod paths;
-mod settings;
 use crate::storage::{read_private, validate_existing_private_directory};
 use crate::{EnvironmentRecord, SetupJournal};
 pub use configuration::{
     append_runner_configuration_paths, append_server_configuration_paths, inspect_runner_locations,
     inspect_server_locations, RunnerLocations, ServerLocations,
 };
+pub use diagnostic_configuration::*;
 pub use manifest::build_backup_manifest;
 pub use model::*;
 pub use paths::local_path_entry;
 use paths::{admissible_display_path, admissible_path, reference_entry};
 use serde::de::DeserializeOwned;
-pub use settings::*;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -45,7 +45,7 @@ pub fn empty_environment_inventory() -> PathInventory {
         issues: vec![],
         builds: vec![],
         identities: vec![],
-        settings: SettingsObservation::default(),
+        diagnostic: DiagnosticObservation::default(),
     }
 }
 
@@ -57,7 +57,7 @@ pub(super) fn safe_identifier(value: &str) -> bool {
 }
 
 /// Stable revision of the serialized path projection, excluding observation time.
-/// Internal settings observations do not revise location/manifest actions. Desktop
+/// Internal diagnostic observations do not revise location/manifest actions. Desktop
 /// calls this again after adding its own authoritative metadata. Not a capability.
 pub fn recompute_revision(inventory: &mut PathInventory) {
     // Public adapter additions share one bound. Fixed metadata callers can never

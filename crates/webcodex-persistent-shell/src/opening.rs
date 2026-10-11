@@ -273,7 +273,7 @@ impl PersistentShellManager {
                     "persistent shell exited during initialization",
                 ))
             }
-            outcome @ (WaitOutcome::TimedOut | WaitOutcome::ControlLost) => {
+            WaitOutcome::TimedOut | WaitOutcome::ControlLost => {
                 self.transition_terminal(
                     entry,
                     ShellState::Poisoned,
@@ -281,19 +281,9 @@ impl PersistentShellManager {
                     Some("initialization_sync_lost".to_string()),
                 );
                 entry.process.shutdown();
-                let failure = if matches!(outcome, WaitOutcome::TimedOut) {
-                    "timed out waiting for synchronization"
-                } else {
-                    "control synchronization was lost"
-                };
                 Err(ShellError::new(
                     "shell_reset_required",
-                    format!(
-                        "persistent shell initialization {failure} (control_received={}, stdout_synced={}, stderr_synced={})",
-                        completion.control.is_some(),
-                        completion.stdout_synced,
-                        completion.stderr_synced,
-                    ),
+                    "persistent shell initialization did not reach a synchronized state",
                 ))
             }
         }

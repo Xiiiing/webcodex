@@ -15,7 +15,7 @@ pub enum Setting<T> {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SettingsLanguage {
+pub enum DiagnosticLanguage {
     #[serde(rename = "en-US")]
     EnUs,
     #[serde(rename = "zh-CN")]
@@ -35,13 +35,13 @@ pub enum SettingsLanguage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopPreferences {
-    pub language: SettingsLanguage,
+    pub language: DiagnosticLanguage,
     pub automatic_update_download: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct SettingsObservation {
+pub struct DiagnosticObservation {
     pub device_display_name: Setting<Option<String>>,
 }
 
@@ -55,7 +55,7 @@ pub struct ProjectReference {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct EnvironmentSettings {
+pub struct DiagnosticEnvironment {
     pub environment_id: Setting<String>,
     pub local_server: Setting<bool>,
     pub local_runner: Setting<bool>,
@@ -65,20 +65,20 @@ pub struct EnvironmentSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct SettingsExport {
+pub struct DiagnosticConfiguration {
     pub schema_version: u16,
     pub kind: String,
     pub cannot_restore: bool,
     pub privacy_notice: String,
     pub inventory_revision: String,
-    pub environment: EnvironmentSettings,
+    pub environment: DiagnosticEnvironment,
     pub device_display_name: Setting<Option<String>>,
     pub desktop_preferences: Setting<DesktopPreferences>,
 }
 
 /// A small typed value projection from the existing authoritative observation.
 /// No filesystem reads, secret switch, raw extension maps or import semantics.
-pub fn build_settings_export(inventory: &PathInventory) -> SettingsExport {
+pub fn build_diagnostic_configuration(inventory: &PathInventory) -> DiagnosticConfiguration {
     fn setting<T: Clone>(value: &Option<T>) -> Setting<T> {
         value
             .as_ref()
@@ -137,21 +137,21 @@ pub fn build_settings_export(inventory: &PathInventory) -> SettingsExport {
                 .collect(),
         }
     };
-    SettingsExport {
+    DiagnosticConfiguration {
         schema_version: 1,
-        kind: "settings_export".into(),
+        kind: "diagnostic_configuration".into(),
         cannot_restore: true,
-        privacy_notice: "Contains selected nonsecret settings and private project path references. Review before sharing. Credentials, URLs, raw configuration, databases, logs and project contents are excluded. This is not a restorable backup.".into(),
+        privacy_notice: "Support diagnostic configuration with selected nonsecret values and private project path references. Review before sharing. Credentials, URLs, raw configuration, databases, logs and project contents are excluded. This is not a restorable backup.".into(),
         inventory_revision: inventory.revision.clone(),
-        environment: EnvironmentSettings {
+        environment: DiagnosticEnvironment {
             environment_id: setting(&inventory.environment_id),
             local_server: setting(&inventory.local_server),
             local_runner: setting(&inventory.local_runner),
             service_scope: setting(&inventory.service_scope),
             projects,
         },
-        device_display_name: inventory.settings.device_display_name.clone(),
-        // Desktop captures its current preferences only at explicit export.
+        device_display_name: inventory.diagnostic.device_display_name.clone(),
+        // Desktop captures its current preferences only for an explicit support bundle.
         desktop_preferences: Setting::NotApplicable,
     }
 }

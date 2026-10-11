@@ -232,7 +232,7 @@ pub fn inspect_runner_locations(config: &Path, default_registry: &Path) -> Runne
         None => Setting::Known { value: None },
         Some(value) => value
             .as_str()
-            .filter(|value| settings::safe_display_name(value))
+            .filter(|value| diagnostic_configuration::safe_display_name(value))
             .map_or(Setting::Unknown, |value| Setting::Known {
                 value: Some(value.into()),
             }),
@@ -354,7 +354,7 @@ pub fn append_runner_configuration_paths(
         locations.registry.directory_to_open = None;
         locations.display_name = Setting::Unknown;
     }
-    inventory.settings.device_display_name = locations.display_name;
+    inventory.diagnostic.device_display_name = locations.display_name;
     add(inventory, locations.registry);
 }
 
