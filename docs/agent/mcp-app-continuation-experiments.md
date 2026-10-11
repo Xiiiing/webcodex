@@ -12,7 +12,7 @@ This note records durable findings from the September 11-12, 2026 MCP App presen
 Issues #1018 and #1013 report missing continuation presentation entries. The
 restoration makes both Agent and Job presentation tools dedicated Direct tools
 again, retaining the existing App protocol, generation fences and uncertainty
-handling. Current resources are Agent v18 and Job v2. After presenting, output a
+handling. Current resources are Agent v20 and Job v2. After presenting, output a
 normal assistant final response to complete the original turn; the tool result
 and card alone are insufficient. This source change does not establish current
 ChatGPT automatic-resume support. The [acceptance procedure](../implementation/mcp-app-auto-resume-restoration.md)
