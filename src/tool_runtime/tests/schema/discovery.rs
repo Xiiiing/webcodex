@@ -935,8 +935,8 @@ fn tool_manifest_recommended_flows_reference_visible_defined_tools() {
         .as_array()
         .expect("read_tool_manifest recommended_flows");
     assert_eq!(flows.len(), model_visible_recommended_flows().count());
-    for inactive in ["agent_continuation_setup", "goal_agent_wait_orchestration"] {
-        assert!(!flows.iter().any(|flow| flow["name"] == inactive));
+    for restored in ["agent_continuation_setup", "goal_agent_wait_orchestration"] {
+        assert!(flows.iter().any(|flow| flow["name"] == restored));
     }
 
     for (actual, expected) in flows.iter().zip(model_visible_recommended_flows()) {
@@ -2511,7 +2511,7 @@ async fn tool_manifest_routing_metadata_uses_canonical_adaptive_routes() {
         ("import_host_files", "direct", None),
         ("inspect_project_artifact", "direct", None),
         ("read_session_discussion_summary", "direct", None),
-        ("list_jobs", "gateway", Some("call_runtime_tool")),
+        ("list_jobs", "direct", None),
         ("review_changes", "direct", None),
         (
             "read_workspace_changes",

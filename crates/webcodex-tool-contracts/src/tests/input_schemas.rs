@@ -1333,7 +1333,7 @@ fn job_terminal_continuation_app_contract_is_exact_wait_plus_private_view_fence_
     )
     .is_ok());
 
-    assert!(!registered_tool_specs()
+    assert!(registered_tool_specs()
         .iter()
         .any(|spec| spec.name == "present_job_terminal_continuation"));
     let present = input_schema_for_tool("present_job_terminal_continuation");
@@ -1471,11 +1471,62 @@ fn project_validation_python_adapter_is_public_without_a_pytest_tool() {
         .as_str()
         .unwrap_or_default();
     assert!(adapter_description.contains("Python supports test through pytest"));
-    assert!(adapter_description.contains("Node returns unavailable"));
+    assert!(adapter_description
+        .contains("Node supports native script check and opt-in native TAP test"));
     assert!(
         schema.to_string().contains("pytest -k"),
         "project_validate schema must expose the Python pytest -k filter contract"
     );
     assert!(ToolCall::from_tool_name("project_validate", value).is_ok());
     assert!(ToolCall::from_tool_name("pytest", json!({"project":"demo"})).is_err());
+}
+
+#[test]
+fn project_validation_node_contract_advertises_bounded_test_and_execution_effects() {
+    let specs = registered_tool_specs();
+    let spec = spec_named(&specs, "project_validate");
+    let description = spec.description.as_str();
+    assert!(description.contains("Node >=22.3: check via node --run"));
+    assert!(description.contains(
+        "native TAP test when scripts.test equals node --test or node --test --test-reporter=tap"
+    ));
+    assert!(description.contains("fixed Runner argv"));
+    assert!(description.contains("Node TAP rejects filters"));
+    assert!(description.contains("Project scripts may modify files or use network"));
+    assert_eq!(
+        lookup_tool_definition("project_validate")
+            .unwrap()
+            .metadata()
+            .effect,
+        ToolEffect::Execute
+    );
+
+    let schema = &spec.input_schema;
+    assert_eq!(schema["additionalProperties"], false);
+    for action in ["check", "test"] {
+        let value = json!({"project":"demo", "adapter":"node", "action":action});
+        assert!(test_support::validate_schema_instance(&value, schema).is_ok());
+        assert!(ToolCall::from_tool_name("project_validate", value).is_ok());
+    }
+    let with_count = json!({"project":"demo", "adapter":"node", "action":"test",
+        "test":{"require_tests":false, "min_tests":2}});
+    assert!(test_support::validate_schema_instance(&with_count, schema).is_ok());
+    assert!(ToolCall::from_tool_name("project_validate", with_count).is_ok());
+    for (field, value) in [
+        ("executable", json!("node")),
+        ("argv", json!(["--test"])),
+        ("shell", json!("sh")),
+        ("script", json!("test")),
+    ] {
+        let mut invalid = json!({"project":"demo", "adapter":"node", "action":"test"});
+        invalid[field] = value;
+        assert!(
+            test_support::validate_schema_instance(&invalid, schema).is_err(),
+            "{field}"
+        );
+        assert!(
+            ToolCall::from_tool_name("project_validate", invalid).is_err(),
+            "{field}"
+        );
+    }
 }

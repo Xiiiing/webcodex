@@ -26,7 +26,7 @@
 npm install -g @yyjeqhc/webcodex
 ```
 
-支持 Linux x64、Linux arm64、macOS x64、macOS arm64、Windows x64 与 Windows arm64。Windows 支持 CLI + Runner、显式前台 Server，以及显式本机 `webcodex share --tunnel cloudflare|openai|none`。Windows x64 支持 managed Cloudflare 获取；固定版本 upstream 没有官方 Windows ARM64 artifact，因此 ARM64 使用 Cloudflare 时需要受信任的显式/`PATH` binary。原生 OpenAI Tunnel 支持 Windows x64/arm64。旧 `server install` / `runner install` 命令不托管 Windows 服务，仍可使用下文前台流程。新的 `environment` 流程实现了 SCM 服务与显式账户要求；参见[统一安装指南](unified-installation.zh-CN.md#服务与凭据)及待完成的原生验收。npm 包装器要求 Node.js 18 或更新。Linux x64 native artifact 以 glibc 2.17 或更新为兼容基线。
+支持 Linux x64、Linux arm64、macOS x64、macOS arm64、Windows x64 与 Windows arm64。Windows 支持 CLI + Runner、显式前台 Server，以及显式本机 `webcodex share --tunnel cloudflare|openai|none`。Windows x64 支持 managed Cloudflare 获取；固定版本 upstream 没有官方 Windows ARM64 artifact，因此 ARM64 使用 Cloudflare 时需要受信任的显式/`PATH` binary。原生 OpenAI Tunnel 支持 Windows x64/arm64。旧 `server install` / `runner install` 命令不托管 Windows 服务，仍可使用下文前台流程。新的 `environment` 配置默认使用 user scope，在 Windows 上由已登录用户的计划任务托管。显式 `--scope system` 才选择 SCM 服务，并要求 OS 授权与账户配置；已有环境保留其已保存范围和所有者。user scope 不保证登录前或注销后运行；参见[统一安装指南](unified-installation.zh-CN.md#服务与凭据)及待完成的原生验收。npm 包装器要求 Node.js 18 或更新。Linux x64 native artifact 以 glibc 2.17 或更新为兼容基线。
 
 从源码构建：
 
@@ -168,6 +168,18 @@ WEBCODEX_MCP_HOST_PROFILE=host_code_mode
 # 可选：host_code_mode 本身默认就是 55 秒。
 WEBCODEX_MCP_HOST_BUDGET_SECS=55
 ```
+
+如果需要独立测试有界的 **Server 端等待上限**，可以显式配置以下两个可选变量；不配置时维持当前默认行为：
+
+```text
+# 可选；未设置时 host_code_mode 仍采用原有的 5 秒派生值。
+WEBCODEX_MCP_HOST_SYNC_WAIT_MAX_SECS=8
+WEBCODEX_MCP_HOST_CONTINUATION_WAIT_MAX_SECS=5
+```
+
+前者控制已启动的 structured Job 同步等待多久后移交续接（整数 1–60 秒）；后者控制普通 `observe_jobs`／`job_tail` 等待及生成的续接等待（整数 1–100 秒）。变量无效或超出范围时，Server 在启动阶段明确报错，错误文本只包含变量名称和合法范围，不回显输入值。两个数值还受到所选请求的 Host budget 减去 5 秒返回预留时间的约束；客户端通过请求头切换 profile 或缩小预算，不会绕过部署上限。`wait_for_job_readiness` 仍独立按照 Host budget 计算。
+
+这两个设置在 Server 重启后生效，不改变 Job 真实执行超时，也不是模型工具参数。上述数值仅用于**实验**，不是推荐的全局默认值；评估时应同时观察 Host 请求耗时及最终 Job 结果。`get_runtime_status.effective_config.mcp_host` 展示非敏感的部署生效值，而不是每次请求头缩小后的值。
 
 `WEBCODEX_MCP_HOST_BUDGET_SECS` 表示 Host 侧单次 MCP call / composition 的预算，不是 command runtime。工具的 `timeout_secs` 仍表示真实 execution lifetime，可以远大于 Host budget。WebCodex 不会根据 `clientInfo`、User-Agent 或 Host 产品名自动推断 profile。
 

@@ -686,6 +686,38 @@ async fn oauth2_mcp_tool_call_requires_project_write_for_edit_tools() {
 }
 
 #[tokio::test]
+async fn oauth2_list_jobs_direct_and_gateway_require_runtime_read() {
+    for stateless in [false, true] {
+        for scopes in ["runtime:read", "project:read"] {
+            let (_tmp, service, token) = oauth_mcp_service(scopes);
+            for params in [
+                json!({"name":"list_jobs", "arguments":{}}),
+                adaptive_gateway_params("list_jobs", json!({})),
+            ] {
+                let params = if stateless {
+                    mcp_2026_params(params)
+                } else {
+                    params
+                };
+                let (status, body, challenge) =
+                    oauth_mcp_request(&service, &token, "tools/call", params).await;
+                if scopes == "runtime:read" {
+                    assert_eq!(status, StatusCode::OK, "{body:?}");
+                    assert_eq!(body["result"]["structuredContent"]["success"], true);
+                } else {
+                    assert_mcp_oauth_scope_rejected(
+                        status,
+                        &body,
+                        challenge.as_deref(),
+                        Some(crate::auth::SCOPE_RUNTIME_READ),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn oauth2_mcp_tool_call_requires_job_run_for_run_shell() {
     let (_tmp, service, token) = oauth_mcp_service("job:run");
     let (status, body, _) = oauth_mcp_request(
@@ -769,10 +801,10 @@ async fn oauth2_mcp_unknown_tool_fails_closed() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body:?}");
     assert_eq!(body["error"]["code"], -32602);
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap_or("")
-        .contains("call_runtime_tool"));
+    let message = body["error"]["message"].as_str().unwrap_or("");
+    assert!(message.contains("unavailable"), "{message}");
+    assert!(message.contains("tools/list"), "{message}");
+    assert!(!message.contains("call_runtime_tool"), "{message}");
     assert!(challenge.is_none());
 }
 

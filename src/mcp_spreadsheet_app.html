@@ -608,8 +608,9 @@ const WebCodexSpreadsheet = (() => {
   const maxBytes = 5 * 1024 * 1024, chunkBytes = 512 * 1024;
   const pending = new Map();
   let nextId = 0, initialized = false, disposed = false, generation = 0;
-  let source = null, loadingEpoch = -1, worker = null, workbook = null, sheetIndex = 0;
+  let source = null, loadingEpoch = -1, worker = null, workbook = null, sheetIndex = -1;
   let cells = new Map(), selected = [0, 0], frame = null;
+  const sheetPositions = new Map();
   const rowHeight = 32, columnWidth = 144, gutter = 44;
   const { columnName, visibleRange } = WebCodexSpreadsheet;
   const status = message => { el('status').textContent = message; };
@@ -644,19 +645,42 @@ const WebCodexSpreadsheet = (() => {
     }
     return null;
   }
+  function canonicalEnvelope(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value)
+      && typeof value.success === 'boolean'
+      && (Object.prototype.hasOwnProperty.call(value, 'output') || Object.prototype.hasOwnProperty.call(value, 'error'));
+  }
+  function textEnvelope(candidate) {
+    if (!Array.isArray(candidate.content)) return null;
+    for (const block of candidate.content) {
+      if (!block || block.type !== 'text' || typeof block.text !== 'string' || block.text.length > 400000) continue;
+      try {
+        const parsed = JSON.parse(block.text);
+        if (canonicalEnvelope(parsed)) return parsed;
+      } catch (_) {}
+    }
+    return null;
+  }
+  // Hosts can project structuredContent independently of the Server envelope.
+  // Prefer the Server text copy, then the private Server copy, and accept a
+  // Host projection only when it is still a canonical success/output envelope.
   function envelope(result, privateKey) {
-    for (const candidate of [result, result?.result, result?.toolResult, result?.tool_result]) {
-      if (!candidate || typeof candidate !== 'object') continue;
-      if (typeof candidate.success === 'boolean') return candidate;
-      const structured = candidate.structuredContent ?? candidate.structured_content;
-      if (structured && typeof structured === 'object') return structured;
+    const candidates = [result, result?.result, result?.toolResult, result?.tool_result]
+      .filter(candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate));
+    // Apply source precedence across every supported wrapper, not just inside
+    // one wrapper: an outer Host projection must not mask a nested Server error.
+    for (const candidate of candidates) {
+      if (canonicalEnvelope(candidate)) return candidate;
+      const text = textEnvelope(candidate);
+      if (text) return text;
+    }
+    for (const candidate of candidates) {
       const privateResult = privateKey && privateMetadata(candidate, privateKey);
-      if (privateResult) return privateResult;
-      for (const block of candidate.content || []) {
-        if (block.type === 'text' && typeof block.text === 'string' && block.text.length <= 400000) {
-          try { const parsed = JSON.parse(block.text); if (typeof parsed?.success === 'boolean') return parsed; } catch (_) {}
-        }
-      }
+      if (canonicalEnvelope(privateResult)) return privateResult;
+    }
+    for (const candidate of candidates) {
+      const structured = candidate.structuredContent ?? candidate.structured_content;
+      if (canonicalEnvelope(structured)) return structured;
     }
     return null;
   }
@@ -689,9 +713,10 @@ const WebCodexSpreadsheet = (() => {
     if (initialized) void load();
   }
   function clearView() {
-    workbook = null; cells.clear();
+    workbook = null; cells.clear(); sheetPositions.clear(); sheetIndex = -1; selected = [0, 0];
     el('sheets').replaceChildren(); el('cells').replaceChildren(); el('columns').replaceChildren();
     el('address').textContent = ''; el('value').textContent = ''; el('grid').hidden = true;
+    el('viewport').scrollTop = 0; el('viewport').scrollLeft = 0;
   }
   function stopWorker() { if (worker) { worker.cancel(); worker = null; } }
   function parse(bytes, filename) {
@@ -751,7 +776,6 @@ const WebCodexSpreadsheet = (() => {
       const parsed = await parse(bytes, expected.name);
       if (disposed || epoch !== generation) return;
       workbook = parsed;
-      sheetIndex = 0;
       workbook.sheets.forEach((sheet, index) => {
         const button = document.createElement('button');
         button.type = 'button'; button.className = 'sheet-tab'; button.setAttribute('role', 'tab');
@@ -768,20 +792,26 @@ const WebCodexSpreadsheet = (() => {
   }
   function sheet() { return workbook?.sheets[sheetIndex]; }
   function showSheet(index) {
-    if (!workbook) return;
-    sheetIndex = index; selected = [0, 0];
+    if (!workbook?.sheets[index] || index === sheetIndex) return;
+    const viewport = el('viewport');
+    if (sheet()) sheetPositions.set(sheetIndex, { selected, top: viewport.scrollTop, left: viewport.scrollLeft });
+    sheetIndex = index;
     const current = sheet();
+    const position = sheetPositions.get(index);
     cells = new Map(current.cells.map(cell => [cell[0] + ':' + cell[1], cell]));
     el('grid').hidden = false;
     el('grid').setAttribute('aria-labelledby', 'sheet-' + index);
     Array.from(el('sheets').children).forEach((button, position) => button.setAttribute('aria-selected', String(position === index)));
-    el('viewport').scrollTop = 0; el('viewport').scrollLeft = 0;
     el('viewport').setAttribute('aria-labelledby', 'sheet-' + index);
     el('viewport').setAttribute('aria-rowcount', String(current.rows));
     el('viewport').setAttribute('aria-colcount', String(current.columns));
     el('spacer').style.width = gutter + current.columns * columnWidth + 'px';
     el('spacer').style.height = Math.max(1, current.rows * rowHeight) + 'px';
-    select(0, 0, false);
+    // Selection content can change the document scrollbar and viewport width.
+    select(position?.selected[0] ?? 0, position?.selected[1] ?? 0, false);
+    // Size first, then clamp explicitly: old virtual cells may still overflow the spacer.
+    viewport.scrollTop = Math.min(position?.top ?? 0, Math.max(0, current.rows * rowHeight - viewport.clientHeight));
+    viewport.scrollLeft = Math.min(position?.left ?? 0, Math.max(0, gutter + current.columns * columnWidth - viewport.clientWidth));
     scheduleRender();
   }
   function select(row, column, reveal) {

@@ -33,7 +33,7 @@ For existing published runtime/CLI artifacts, the npm thin installer/wrapper rem
 npm install -g @yyjeqhc/webcodex
 ```
 
-Supported package platforms are Linux x64, Linux arm64, macOS x64, macOS arm64, Windows x64, and Windows arm64. Windows supports CLI + Runner, explicit foreground Server, and explicit local `webcodex share --tunnel cloudflare|openai|none`. Windows x64 supports managed Cloudflare acquisition; Windows ARM64 Cloudflare requires a trusted explicit/PATH binary because the pinned upstream release has no official ARM64 artifact. Native OpenAI Tunnel supports Windows x64/arm64. The legacy `server install` / `runner install` commands do not manage Windows services; the foreground examples below remain available. The new `environment` workflow implements SCM services with explicit account requirements; see [Unified installation](unified-installation.md#services-and-credentials) and its pending native acceptance. The npm wrapper
+Supported package platforms are Linux x64, Linux arm64, macOS x64, macOS arm64, Windows x64, and Windows arm64. Windows supports CLI + Runner, explicit foreground Server, and explicit local `webcodex share --tunnel cloudflare|openai|none`. Windows x64 supports managed Cloudflare acquisition; Windows ARM64 Cloudflare requires a trusted explicit/PATH binary because the pinned upstream release has no official ARM64 artifact. Native OpenAI Tunnel supports Windows x64/arm64. The legacy `server install` / `runner install` commands do not manage Windows services; the foreground examples below remain available. New `environment` setups default to user scope, which uses signed-in user scheduled tasks on Windows. Explicit `--scope system` selects SCM services with OS authorization and account requirements; existing environments retain their saved scope and owner. User scope does not promise operation before login or after logout; see [Unified installation](unified-installation.md#services-and-credentials) and its pending native acceptance. The npm wrapper
 requires Node.js 18 or newer. The native Linux x64 artifact targets glibc 2.17
 or newer.
 
@@ -193,6 +193,18 @@ WEBCODEX_MCP_HOST_PROFILE=host_code_mode
 # Optional: host_code_mode already defaults to 55 seconds.
 WEBCODEX_MCP_HOST_BUDGET_SECS=55
 ```
+
+To independently experiment with bounded **Server-owned** waiting ceilings without changing existing defaults, optionally set:
+
+```text
+# Optional; absence retains current profile-derived timing (5s in host_code_mode).
+WEBCODEX_MCP_HOST_SYNC_WAIT_MAX_SECS=8
+WEBCODEX_MCP_HOST_CONTINUATION_WAIT_MAX_SECS=5
+```
+
+The first value bounds the synchronous wait before an already-started structured Job returns for continuation (integer 1–60 seconds). The second bounds ordinary `observe_jobs` / `job_tail` waits and generated continuations (integer 1–100 seconds). Invalid or out-of-range values fail Server startup with a variable-name-only error. Both are also limited by the selected request's Host budget minus the 5-second return guard. The configured bounds remain authoritative when an MCP client changes profiles or narrows its budget through request headers. `wait_for_job_readiness` still uses its distinct Host-budget policy. These settings require a Server restart, never change actual Job execution timeouts, and are not model-facing tool arguments.
+
+Example values above are **experimental overrides**, not recommended defaults. Review both Host request duration and final Job outcomes before changing a deployment policy. `get_runtime_status.effective_config.mcp_host` shows the nonsecret deployment-effective values, not request-local narrowed values.
 
 `WEBCODEX_MCP_HOST_BUDGET_SECS` describes the Host-side MCP call/composition budget, not command runtime. Tool `timeout_secs` remains the execution lifetime and may be much larger. WebCodex never infers the profile from `clientInfo`, User-Agent, or a Host product name.
 

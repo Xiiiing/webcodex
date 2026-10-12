@@ -351,6 +351,7 @@ fn snapshot_from_request(
         stderr: ShellJobStreamSnapshot::default(),
         validation_progress: None,
         test_count_evidence: None,
+        format_mutation: None,
         activity: None,
     }
 }
@@ -379,6 +380,7 @@ fn update(
         command_execution_state: None,
         validation_progress: None,
         test_count_evidence: None,
+        format_mutation: None,
         activity: None,
         finished,
     }
@@ -540,6 +542,7 @@ async fn validation_progress_accepts_sequence_only_heartbeats_and_coalesced_gaps
                 failed_step: None,
             }),
             test_count_evidence: None,
+            format_mutation: None,
             activity,
             finished,
         }
@@ -2853,6 +2856,7 @@ fn standalone_snapshot(job_id: &str, status: &str) -> ShellJobSnapshot {
         stderr: ShellJobStreamSnapshot::default(),
         validation_progress: None,
         test_count_evidence: None,
+        format_mutation: None,
         activity: None,
     }
 }
@@ -3986,6 +3990,58 @@ async fn project_validation_ruff_admission_requires_ruff_capability_even_with_py
                 assert!(result.unwrap_err().contains("project_validation_python_ruff_v1"));
                 assert!(registry.list_jobs(Some(10)).await.is_empty());
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn project_validation_node_native_capability_rechecked_at_job_admission() {
+    use webcodex_core::project_validation::*;
+    for supported in [false, true] {
+        let registry = RunnerRegistry::default();
+        let mut registration = register_request(INSTANCE_A, empty_inventory());
+        registration.capabilities.project_validation_v1 = true;
+        registration.capabilities.project_validation_node_tap_v1 = supported;
+        registry.register(registration).await.unwrap();
+
+        let mut metadata = cargo_validation_start_metadata(Some(true), None, Some(1));
+        let validation = metadata.validation.as_mut().unwrap();
+        validation.tool = "project_validate".into();
+        validation.adapter = "node:tap:test".into();
+        validation.steps = vec![ShellJobValidationStep {
+            name: "test".into(),
+            program: "node".into(),
+            args: ["--test", "--test-reporter=tap"].map(str::to_string).to_vec(),
+            env: vec![],
+        }];
+        validation.project_validation = Some(ProjectValidationProvenance {
+            request: ProjectValidationRequest {
+                project_id: "demo".into(),
+                cwd: None,
+                action: ProjectValidationAction::Test,
+                adapter: ProjectValidationAdapter::Auto,
+                scope: None,
+                dependency_policy: None,
+                test: None,
+            },
+            backend: "node".into(),
+            recipe_root: ".".into(),
+            root_digest: "a".repeat(64),
+            manifest_digest: "b".repeat(64),
+            invocation_digest: "c".repeat(64),
+        });
+        assert!(validation.is_valid());
+        metadata.validation_steps = validation.steps.clone();
+        let result = registry
+            .start_job_with_metadata(start_request("validation"), "tester".into(), metadata)
+            .await;
+        if supported {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.starts_with("capability_unavailable:"), "{error}");
+            assert!(error.contains("project_validation_node_tap_v1"), "{error}");
+            assert!(registry.list_jobs(Some(10)).await.is_empty());
         }
     }
 }

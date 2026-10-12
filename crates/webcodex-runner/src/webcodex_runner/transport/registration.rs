@@ -246,6 +246,12 @@ pub(crate) fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabili
     capabilities.set(RunnerCapabilityId::StructuredGoTestJson, true);
     capabilities.set(RunnerCapabilityId::ProjectValidation, true);
     capabilities.set(RunnerCapabilityId::ProjectBuild, true);
+    // Complete format lifecycle with bounded planning, worker, guarded commit
+    // and durable mutation report is supported across native platforms.
+    capabilities.set(
+        RunnerCapabilityId::ProjectFormat,
+        cfg!(any(target_os = "linux", target_os = "macos", windows)),
+    );
     capabilities.set(RunnerCapabilityId::ProjectDependencyPolicy, true);
     // Go project gateways pin GO111MODULE=on and GOWORK=off after prepared shell/profile env is
     // applied. Keep this independent for mixed Server/Runner rolling upgrades.
@@ -258,6 +264,7 @@ pub(crate) fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabili
     capabilities.set(RunnerCapabilityId::ProjectValidationPythonPytest, true);
     capabilities.set(RunnerCapabilityId::ProjectValidationPythonRuff, true);
     capabilities.set(RunnerCapabilityId::ProjectValidationNodeScriptCheck, true);
+    capabilities.set(RunnerCapabilityId::ProjectValidationNodeTap, true);
     // This binary also understands the first-class go_test durable metadata
     // identity. Keep this independent from JSON parsing so an old Runner that
     // supported Connector Go evidence cannot be mistaken for a first-class
