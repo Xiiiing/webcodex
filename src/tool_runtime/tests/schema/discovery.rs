@@ -3077,3 +3077,38 @@ fn natural_language_discovery_weights_fields_and_breaks_ties_stably() {
         );
     }
 }
+
+#[tokio::test]
+async fn natural_language_discovery_exact_names_rank_first_across_admitted_catalog() {
+    use crate::tool_runtime::kernel::ToolProtocolCapabilities;
+
+    let runtime = test_runtime();
+    let catalog = runtime
+        .tool_manifest(
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            None,
+            ToolProtocolCapabilities::default(),
+        )
+        .await;
+    assert!(catalog.success, "{catalog:?}");
+    let tools = catalog.output["tools"].as_array().unwrap();
+    assert!(!tools.is_empty());
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        let result = runtime
+            .dispatch(
+                ToolCall::from_tool_name("read_tool_manifest", json!({"query": name, "limit": 1}))
+                    .unwrap(),
+            )
+            .await;
+        assert!(result.success, "{name}: {result:?}");
+        assert_eq!(result.output["tools"][0]["name"], name, "{result:?}");
+        assert_eq!(result.output["returned_count"], 1);
+    }
+}

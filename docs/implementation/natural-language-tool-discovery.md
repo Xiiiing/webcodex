@@ -51,3 +51,29 @@ and split fixed before capture, tune using development cases, freeze ranking and
 vocabulary before heldout capture, and report heldout results without further
 tuning. Offline/local evidence does not prove real ChatGPT Web discovery,
 invocation success, or end-to-end completion; record that Host evidence separately.
+
+## Recorded acceptance sample
+
+The fixed 48-case corpus contains 36 development and 12 heldout cases. Before
+this change, development Top-5 hits were 9/25 positive cases. The candidate
+retrieved an acceptable tool for 25/25 development positives and 8/8 heldout
+positives; heldout recall was 93.75%. All eight exact-name corpus cases succeeded.
+Negative rejection was 10/11 development and 4/4 heldout cases, with no forbidden
+tools returned in any captured case. These are small, fixed retrieval samples,
+not an estimate of general model accuracy or speed.
+
+Ranking and vocabulary were fixed before heldout capture. The hash record was
+written after capture generation but before scoring/inspection; there was no
+subsequent heldout tuning. This ordering is weaker than a preregistered artifact
+hash and is retained as an evidence limitation.
+
+A user-operated ChatGPT Web task then discovered tools through two English task
+expressions, read the two fixtures in one native batch, and located a test through
+source search. The final answer and persisted progress note were checked against
+the exact clean fixture. Nine Session-linked outer calls succeeded, including
+four manifest calls, two file reads and one text search. Query text and ranked
+names come from the Web answer and saved note; metadata-only audit does not retain
+the original manifest payload. Model version, exact model rounds and whole-task
+timing were not independently available. This establishes the observed task
+outcome, with no performance claim. Chinese retrieval has local corpus/contract
+coverage; this Web sample used English queries.
