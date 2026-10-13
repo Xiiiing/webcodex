@@ -604,7 +604,7 @@ fn observe_jobs_output_schema() -> Value {
             },
             "build_artifacts": build_artifacts_schema(),
             "state_changed": nullable_schema("boolean", "Authoritative file mutation outcome for project_format."),
-            "failure_kind": nullable_schema("string", "Safe closed failure kind for project_format.")
+            "failure_kind": nullable_schema("string", "Safe closed failure kind for project_format or project_build artifact observation.")
         },
         "required": [
             "job_id", "status", "exit_code", "stdout_tail", "stderr_tail",
@@ -682,7 +682,7 @@ fn observe_jobs_output_schema() -> Value {
             "validation": validation_job_projection_schema(),
             "build_artifacts": build_artifacts_schema(),
             "state_changed": nullable_schema("boolean", "Authoritative file mutation outcome for project_format."),
-            "failure_kind": nullable_schema("string", "Safe closed failure kind for project_format.")
+            "failure_kind": nullable_schema("string", "Safe closed failure kind for project_format or project_build artifact observation.")
         },
         "required": [
             "job_id", "status", "terminal", "changed", "meaningful_changed", "heartbeat_changed", "log_delta_status",

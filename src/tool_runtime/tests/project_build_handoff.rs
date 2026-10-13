@@ -370,3 +370,82 @@ async fn python_project_build_missing_outputs_preserves_native_exit_and_explicit
     assert_eq!(result.output["failure_kind"], "build_artifacts_missing");
     assert!(result.output.get("build_artifacts").is_none());
 }
+
+async fn observe_pending_python_build(missing_outputs: bool) -> serde_json::Value {
+    use crate::tool_runtime::kernel::{
+        HostFileImportTrust, ToolCallContext, ToolCallRequest, ToolTransport,
+    };
+    let runtime = setup(1).await;
+    let auth = auth_context(None, true);
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        let auth = auth.clone();
+        async move {
+            let mut input = call();
+            if let ToolCall::ProjectBuild { adapter, .. } = &mut input {
+                *adapter = Some(ProjectBuildAdapter::Python);
+            }
+            runtime.dispatch_with_auth(input, Some(&auth)).await
+        }
+    });
+    let (request, job_id) = reply_plan(&runtime).await;
+    let pending = task.await.unwrap();
+    assert_eq!(pending.output["execution_state"], "pending");
+    let artifacts = serde_json::json!([{
+        "path": "dist/demo.whl", "bytes": 4, "sha256": "a".repeat(64),
+        "mime_type": "application/zip"
+    }]);
+    let update = serde_json::from_value(serde_json::json!({
+        "client_id": CLIENT, "agent_instance_id": "inst", "job_id": job_id,
+        "request_id": request.request_id,
+        "status": if missing_outputs { "failed" } else { "completed" },
+        "exit_code": 0,
+        "error": if missing_outputs { Some("build_artifacts_missing") } else { None },
+        "build_artifacts": if missing_outputs { serde_json::Value::Null } else { artifacts },
+        "command_execution_state": "completed", "finished": true
+    }))
+    .unwrap();
+    runtime.runner_registry.update_job(update).await.unwrap();
+    let outcome = runtime
+        .call_tool_with_context(
+            ToolCallRequest {
+                tool_name: "observe_jobs".into(),
+                arguments: serde_json::json!({"items": [{"job_id": job_id}]}),
+            },
+            ToolCallContext {
+                transport: ToolTransport::Api,
+                session_id: None,
+                auth: Some(&auth),
+                window: None,
+                record_oauth_scope_denials: true,
+                host_file_import_trust: HostFileImportTrust::Untrusted,
+            },
+        )
+        .await;
+    let result = outcome.result.unwrap();
+    assert!(result.success, "{result:?}");
+    let item = result.output["items"][0].clone();
+    assert_eq!(item["job_id"], job_id);
+    assert_eq!(item["terminal"], true);
+    assert_eq!(item["exit_code"], 0);
+    item
+}
+
+#[tokio::test]
+async fn python_project_build_pending_observation_preserves_artifacts_in_model_result() {
+    let item = observe_pending_python_build(false).await;
+    assert_eq!(item["status"], "completed");
+    assert_eq!(
+        item["build_artifacts"][0]["path"], "dist/demo.whl",
+        "{item}"
+    );
+    assert_eq!(item["build_artifacts"][0]["sha256"], "a".repeat(64));
+}
+
+#[tokio::test]
+async fn python_project_build_pending_observation_preserves_artifact_failure_kind() {
+    let item = observe_pending_python_build(true).await;
+    assert_eq!(item["status"], "failed");
+    assert_eq!(item["failure_kind"], "build_artifacts_missing", "{item}");
+    assert!(item.get("build_artifacts").is_none());
+}
