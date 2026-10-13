@@ -21,6 +21,7 @@ async fn setup(grace_ms: u64) -> ToolRuntime {
         None,
         RunnerCapabilities {
             project_build_v1: true,
+            project_build_python_v1: true,
             ..Default::default()
         },
     )
@@ -60,11 +61,16 @@ async fn reply_plan(runtime: &ToolRuntime) -> (crate::runner_protocol::RunnerReq
     let semantic: ProjectBuildRequest =
         serde_json::from_str(request.content.as_deref().unwrap()).unwrap();
     assert_eq!(semantic.project_id, "agent-proj");
-    let process = canonical_project_build_process("rust", &semantic).unwrap();
+    let backend = if semantic.adapter == ProjectBuildAdapter::Python {
+        "python"
+    } else {
+        "rust"
+    };
+    let process = canonical_project_build_process(backend, &semantic).unwrap();
     let plan = ProjectBuildPlan {
         provenance: ProjectBuildProvenance {
             request: semantic,
-            backend: "rust".into(),
+            backend: backend.into(),
             recipe_root: ".".into(),
             root_digest: "a".repeat(64),
             manifest_digest: "b".repeat(64),
@@ -130,6 +136,7 @@ async fn finish_build_job(
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: true,
         })
@@ -269,4 +276,97 @@ async fn project_build_all_packages_requires_additive_runner_capability() {
     assert!(result.error.unwrap().contains("project_all_packages_v1"));
     assert!(runtime.runner_registry.list_jobs(Some(10)).await.is_empty());
     assert!(probe_patch_agent_request(&runtime, CLIENT).await.is_none());
+}
+
+#[tokio::test]
+async fn python_project_build_success_projects_observed_artifacts_without_correctness_claims() {
+    let runtime = setup(500).await;
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        async move {
+            let mut input = call();
+            if let ToolCall::ProjectBuild { adapter, .. } = &mut input {
+                *adapter = Some(ProjectBuildAdapter::Python);
+            }
+            runtime
+                .dispatch_with_auth(input, Some(&auth_context(None, true)))
+                .await
+        }
+    });
+    let (request, job_id) = reply_plan(&runtime).await;
+    assert_eq!(
+        request.process.as_ref().unwrap().args,
+        ["-m", "build", "--no-isolation"]
+    );
+    let artifacts = vec![webcodex_core::project_build::ProjectBuildArtifact {
+        path: "dist/existing.whl".into(),
+        bytes: 4,
+        sha256: "a".repeat(64),
+        mime_type: Some("application/zip".into()),
+    }];
+    runtime
+        .runner_registry
+        .update_job(RunnerJobUpdateRequest {
+            client_id: CLIENT.into(),
+            runner_instance_id: "inst".into(),
+            update_seq: None,
+            job_id: job_id.clone(),
+            request_id: Some(request.request_id),
+            status: "completed".into(),
+            stdout_chunk: None,
+            stderr_chunk: None,
+            log_snapshot: None,
+            exit_code: Some(0),
+            duration_ms: Some(25),
+            error: None,
+            command_execution_state: Some(ShellCommandExecutionState::Completed),
+            validation_progress: None,
+            test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: Some(artifacts.clone()),
+            activity: None,
+            finished: true,
+        })
+        .await
+        .unwrap();
+    let result = task.await.unwrap();
+    assert!(result.success, "{result:?}");
+    assert_eq!(result.output["backend"], "python");
+    assert_eq!(
+        result.output["build_artifacts"],
+        serde_json::to_value(artifacts).unwrap()
+    );
+    assert!(result.output.get("tests_detected").is_none());
+    assert!(result.output.get("source_state").is_none());
+}
+
+#[tokio::test]
+async fn python_project_build_missing_outputs_preserves_native_exit_and_explicit_failure() {
+    let runtime = setup(500).await;
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        async move {
+            let mut input = call();
+            if let ToolCall::ProjectBuild { adapter, .. } = &mut input {
+                *adapter = Some(ProjectBuildAdapter::Python);
+            }
+            runtime
+                .dispatch_with_auth(input, Some(&auth_context(None, true)))
+                .await
+        }
+    });
+    let (request, job_id) = reply_plan(&runtime).await;
+    let update = serde_json::from_value(serde_json::json!({
+        "client_id": CLIENT, "agent_instance_id": "inst", "job_id": job_id,
+        "request_id": request.request_id, "status": "failed", "exit_code": 0,
+        "error": "build_artifacts_missing", "command_execution_state": "completed", "finished": true
+    }))
+    .unwrap();
+    runtime.runner_registry.update_job(update).await.unwrap();
+    let result = task.await.unwrap();
+    assert!(!result.success);
+    assert_eq!(result.output["exit_code"], 0);
+    assert_eq!(result.output["execution_state"], "completed");
+    assert_eq!(result.output["failure_kind"], "build_artifacts_missing");
+    assert!(result.output.get("build_artifacts").is_none());
 }
