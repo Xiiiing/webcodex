@@ -560,6 +560,7 @@ fn failed_task_fans_out_to_every_active_goal_and_survives_reopen() {
                 GoalPatch {
                     title: None,
                     objective: None,
+                    completion_conditions: None,
                     controller_agent_id: None,
                     lifecycle: Some(GoalLifecycle::Completed),
                     terminal_reason: Some(
@@ -791,6 +792,7 @@ fn terminal_attention_uses_continuation_without_requiring_live_task_attempt() {
             GoalPatch {
                 title: None,
                 objective: None,
+                completion_conditions: None,
                 controller_agent_id: None,
                 lifecycle: Some(GoalLifecycle::Completed),
                 terminal_reason: Some("Another turn completed the Goal first".to_string()),

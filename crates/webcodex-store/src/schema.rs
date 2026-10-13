@@ -100,6 +100,20 @@ impl Database {
                 terminal_observed_at INTEGER NOT NULL,
                 expires_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS workbench_preferences (
+                principal_kind TEXT NOT NULL,
+                principal_digest TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                PRIMARY KEY(principal_kind, principal_digest)
+            );
+            CREATE TABLE IF NOT EXISTS workbench_submissions (
+                principal_kind TEXT NOT NULL,
+                principal_digest TEXT NOT NULL,
+                submission_key TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                task_id TEXT REFERENCES wc_agent_tasks(task_id),
+                PRIMARY KEY(principal_kind, principal_digest, submission_key)
+            );
             CREATE INDEX IF NOT EXISTS idx_job_receipts_expiry ON wc_job_receipts(expires_at);
             CREATE INDEX IF NOT EXISTS idx_job_receipts_runner_history
                 ON wc_job_receipts(client_id, terminal_observed_at DESC, job_id DESC);

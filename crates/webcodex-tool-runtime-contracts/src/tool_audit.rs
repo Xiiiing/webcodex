@@ -796,6 +796,7 @@ impl ToolCallAuditProjection for ToolCall {
                 expected_revision,
                 title,
                 objective,
+                completion_conditions: _,
                 controller_agent_id,
                 lifecycle,
                 terminal_reason,
