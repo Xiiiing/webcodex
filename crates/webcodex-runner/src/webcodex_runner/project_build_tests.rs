@@ -528,6 +528,8 @@ fn python_packaging_plans_manifest_and_backend_input_fences() {
 fn python_artifact_observation_uses_existing_metadata_and_bounds() {
     use std::sync::atomic::AtomicBool;
     let (_tmp, root, registry, policy) = fixture("pyproject.toml");
+    // Observation receives the canonical recipe cwd from planning, as native Jobs do.
+    let (_, cwd) = project_build::plan(&policy, &registry, &request()).unwrap();
     fs::create_dir(root.join("dist")).unwrap();
     fs::write(root.join("dist/demo.whl"), b"PK\x05\x06fixture").unwrap();
     fs::write(root.join("dist/demo.tar.gz"), b"\x1f\x8b\x08fixture").unwrap();
@@ -535,7 +537,7 @@ fn python_artifact_observation_uses_existing_metadata_and_bounds() {
         &policy,
         &registry,
         &request(),
-        &root,
+        &cwd,
         std::time::Instant::now() + std::time::Duration::from_secs(5),
         &AtomicBool::new(false),
     )
@@ -557,7 +559,7 @@ fn python_artifact_observation_uses_existing_metadata_and_bounds() {
         &policy,
         &registry,
         &request(),
-        &root,
+        &cwd,
         std::time::Instant::now() + std::time::Duration::from_secs(5),
         &AtomicBool::new(false),
     )
@@ -573,7 +575,7 @@ fn python_artifact_observation_uses_existing_metadata_and_bounds() {
         &policy,
         &registry,
         &request(),
-        &root,
+        &cwd,
         std::time::Instant::now() + std::time::Duration::from_secs(5),
         &AtomicBool::new(false)
     )
@@ -586,7 +588,7 @@ fn python_artifact_observation_uses_existing_metadata_and_bounds() {
         &policy,
         &registry,
         &request(),
-        &root,
+        &cwd,
         std::time::Instant::now() + std::time::Duration::from_secs(5),
         &AtomicBool::new(false)
     )
@@ -599,6 +601,8 @@ fn python_artifact_observation_uses_existing_metadata_and_bounds() {
 fn python_packaging_rejects_redirected_dist_and_artifact_symlinks() {
     use std::{os::unix::fs::symlink, sync::atomic::AtomicBool};
     let (tmp, root, registry, policy) = fixture("pyproject.toml");
+    // Observation receives the canonical recipe cwd from planning, as native Jobs do.
+    let (_, cwd) = project_build::plan(&policy, &registry, &request()).unwrap();
     symlink(tmp.path(), root.join("dist")).unwrap();
     assert!(
         matches!(project_build::plan(&policy,&registry,&request()),Err(ProjectBuildPlanningResult::Unavailable { code,.. }) if code == "build_artifact_path_invalid")
@@ -610,7 +614,7 @@ fn python_packaging_rejects_redirected_dist_and_artifact_symlinks() {
         &policy,
         &registry,
         &request(),
-        &root,
+        &cwd,
         std::time::Instant::now() + std::time::Duration::from_secs(5),
         &AtomicBool::new(false)
     )
@@ -622,6 +626,8 @@ fn python_packaging_rejects_redirected_dist_and_artifact_symlinks() {
 fn python_artifact_observation_reports_missing_directory_and_incomplete_outputs() {
     use std::sync::atomic::AtomicBool;
     let (_tmp, root, registry, policy) = fixture("pyproject.toml");
+    // Observation receives the canonical recipe cwd from planning, as native Jobs do.
+    let (_, cwd) = project_build::plan(&policy, &registry, &request()).unwrap();
     for state in 0..3 {
         if state == 1 {
             fs::create_dir(root.join("dist")).unwrap();
@@ -634,7 +640,7 @@ fn python_artifact_observation_reports_missing_directory_and_incomplete_outputs(
                 &policy,
                 &registry,
                 &request(),
-                &root,
+                &cwd,
                 std::time::Instant::now() + std::time::Duration::from_secs(5),
                 &AtomicBool::new(false)
             )
@@ -642,4 +648,55 @@ fn python_artifact_observation_reports_missing_directory_and_incomplete_outputs(
             "build_artifacts_missing"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn python_artifact_observation_uses_planned_cwd_for_registered_project_alias() {
+    use std::{os::unix::fs::symlink, sync::atomic::AtomicBool};
+    let (tmp, root, registry, policy) = fixture("pyproject.toml");
+    let alias = tmp.path().join("project-alias");
+    symlink(&root, &alias).unwrap();
+    fs::write(
+        registry.join("demo.toml"),
+        format!(
+            "id = 'demo'\nname = 'Demo'\npath = {}\nallow_patch = true\n",
+            serde_json::to_string(alias.to_str().unwrap()).unwrap()
+        ),
+    )
+    .unwrap();
+    let (_, cwd) = project_build::plan(&policy, &registry, &request()).unwrap();
+    assert_eq!(cwd, root.canonicalize().unwrap());
+    assert_ne!(cwd, alias);
+    fs::create_dir(root.join("dist")).unwrap();
+    fs::write(root.join("dist/demo.whl"), b"PK\x05\x06fixture").unwrap();
+    fs::write(root.join("dist/demo.tar.gz"), b"\x1f\x8b\x08fixture").unwrap();
+    let artifacts = project_build::observe_python_artifacts(
+        &policy,
+        &registry,
+        &request(),
+        &cwd,
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert!(artifacts
+        .iter()
+        .all(|artifact| artifact.path.starts_with("dist/")));
+    // Alias acceptance at Project admission does not permit redirected output reads.
+    fs::remove_file(root.join("dist/demo.whl")).unwrap();
+    symlink(root.join("pyproject.toml"), root.join("dist/demo.whl")).unwrap();
+    assert_eq!(
+        project_build::observe_python_artifacts(
+            &policy,
+            &registry,
+            &request(),
+            &cwd,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err(),
+        "build_artifact_path_invalid"
+    );
 }
