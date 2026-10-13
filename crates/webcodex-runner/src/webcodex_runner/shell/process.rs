@@ -164,6 +164,7 @@ pub(crate) fn run_process_with_profiles_and_execution_state_with_internal_env_an
         on_prepared,
         false,
         None,
+        false,
     )
 }
 
@@ -202,6 +203,45 @@ pub(crate) fn run_format_candidate(
         None,
         true,
         deadline,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_python_build_with_start_hook(
+    generation: u64,
+    policy: &RunnerPolicy,
+    shell: &ShellConfig,
+    project_registry_dir: &Path,
+    cache: &PreparedShellProfileCache,
+    cwd: Option<&str>,
+    args: &[String],
+    timeout_secs: u64,
+    stop_requested: Option<&AtomicBool>,
+    on_started: Option<&dyn Fn()>,
+    on_prepared: Option<&dyn Fn() -> Result<(), String>>,
+) -> ShellCommandResult {
+    let deadline =
+        Instant::now() + Duration::from_secs(timeout_secs.min(policy.max_timeout_secs).max(1));
+    run_process_with_output(
+        generation,
+        policy,
+        shell,
+        project_registry_dir,
+        cache,
+        cwd,
+        "python",
+        args,
+        None,
+        timeout_secs,
+        stop_requested,
+        &[],
+        &[],
+        on_started,
+        on_prepared,
+        false,
+        Some(deadline),
+        true,
     )
 }
 
@@ -224,6 +264,7 @@ fn run_process_with_output(
     on_prepared: Option<&dyn Fn() -> Result<(), String>>,
     exact_utf8: bool,
     deadline: Option<Instant>,
+    python_build: bool,
 ) -> ShellCommandResult {
     // Structured execution intentionally receives the same policy treatment
     // as run_shell. Absence of shell syntax is not a permission bypass.
@@ -271,13 +312,19 @@ fn run_process_with_output(
             })
         }
     };
-    let mut cmd = match configured_process_command(
-        shell,
-        profile.as_deref(),
-        executable,
-        args,
-        Some(&cwd_path),
-    ) {
+    let command = if python_build {
+        super::commands::configured_python_build_job_command(
+            shell,
+            profile.as_deref(),
+            args,
+            &cwd_path,
+            stop_requested,
+            deadline.expect("Python build deadline"),
+        )
+    } else {
+        configured_process_command(shell, profile.as_deref(), executable, args, Some(&cwd_path))
+    };
+    let mut cmd = match command {
         Ok(cmd) => cmd,
         Err(error) => {
             return ShellCommandResult::not_started(CommandResult {
@@ -295,8 +342,17 @@ fn run_process_with_output(
     for (key, value) in env_overrides {
         cmd.env(key, value);
     }
-    if let Some(check) = on_prepared {
-        if let Err(error) = check() {
+    if python_build && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return ShellCommandResult::not_started(CommandResult {
+            exit_code: None,
+            stdout: None,
+            stderr: None,
+            duration_ms: Some(start.elapsed().as_millis() as u64),
+            error: Some("build_timeout".into()),
+        });
+    }
+    if let Some(on_prepared) = on_prepared {
+        if let Err(error) = on_prepared() {
             return ShellCommandResult::not_started(CommandResult {
                 exit_code: None,
                 stdout: None,

@@ -521,6 +521,7 @@ impl JobManager {
                     validation_progress: final_progress,
                     test_count_evidence,
                     format_mutation: None,
+                    build_artifacts: None,
                     activity: None,
                     finished: true,
                 },

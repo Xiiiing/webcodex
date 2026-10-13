@@ -712,6 +712,7 @@ async fn update_agent_shell_job(
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished,
         })
@@ -2281,6 +2282,7 @@ pub(super) async fn mark_next_agent_job_running(runtime: &ToolRuntime, client_id
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })

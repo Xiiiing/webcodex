@@ -291,6 +291,7 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             project_build_v1: false,
             project_build_node_v1: false,
             project_validation_node_json_v1: false,
+            project_build_python_v1: false,
             project_format_v1: false,
             project_dependency_policy_v1: false,
             // Go project single-module semantics are implemented and advertised
