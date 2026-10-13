@@ -425,6 +425,11 @@ impl Database {
                 [],
                 |row| row.get(0),
             )?;
+            let endpoint_pin_exists: bool = endpoint_execution_table_exists && transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('wc_agent_task_endpoint_executions') WHERE name = 'pinned_endpoint_id')",
+                [],
+                |row| row.get(0),
+            )?;
             if endpoint_execution_table_exists {
                 transaction.execute_batch(
                     "ALTER TABLE wc_agent_task_endpoint_executions RENAME TO wc_agent_task_endpoint_executions_pre_attention;
@@ -581,19 +586,44 @@ impl Database {
                         endpoint_controller_generation INTEGER,
                         created_at_unix_ms INTEGER NOT NULL,
                         updated_at_unix_ms INTEGER NOT NULL,
+                        pinned_endpoint_id TEXT REFERENCES wc_agent_endpoints(endpoint_id),
+                        pinned_endpoint_controller_generation INTEGER,
                         PRIMARY KEY(task_id, attempt_id),
                         CHECK(
                             (endpoint_id IS NULL AND endpoint_controller_generation IS NULL)
                             OR (endpoint_id IS NOT NULL AND endpoint_controller_generation >= 1)
+                        ),
+                        CHECK(
+                            (pinned_endpoint_id IS NULL AND pinned_endpoint_controller_generation IS NULL)
+                            OR (pinned_endpoint_id IS NOT NULL AND pinned_endpoint_controller_generation >= 1)
                         ),
                         FOREIGN KEY(task_id) REFERENCES wc_agent_tasks(task_id),
                         FOREIGN KEY(attempt_id) REFERENCES wc_agent_task_attempts(attempt_id),
                         FOREIGN KEY(wake_id) REFERENCES wc_agent_wakes(wake_id),
                         FOREIGN KEY(endpoint_id) REFERENCES wc_agent_endpoints(endpoint_id)
                      );
-                     INSERT INTO wc_agent_task_endpoint_executions
-                         SELECT * FROM wc_agent_task_endpoint_executions_pre_attention;
-                     DROP TABLE wc_agent_task_endpoint_executions_pre_attention;
+                     INSERT INTO wc_agent_task_endpoint_executions (
+                         task_id, attempt_id, wake_id, start_identity_fingerprint,
+                         endpoint_id, endpoint_controller_generation,
+                         created_at_unix_ms, updated_at_unix_ms
+                     ) SELECT task_id, attempt_id, wake_id, start_identity_fingerprint,
+                              endpoint_id, endpoint_controller_generation,
+                              created_at_unix_ms, updated_at_unix_ms
+                       FROM wc_agent_task_endpoint_executions_pre_attention;",
+                )?;
+                if endpoint_pin_exists {
+                    transaction.execute_batch(
+                        "UPDATE wc_agent_task_endpoint_executions
+                         SET (pinned_endpoint_id, pinned_endpoint_controller_generation) = (
+                             SELECT pinned_endpoint_id, pinned_endpoint_controller_generation
+                             FROM wc_agent_task_endpoint_executions_pre_attention old
+                             WHERE old.task_id = wc_agent_task_endpoint_executions.task_id
+                               AND old.attempt_id = wc_agent_task_endpoint_executions.attempt_id
+                         );",
+                    )?;
+                }
+                transaction.execute_batch(
+                    "DROP TABLE wc_agent_task_endpoint_executions_pre_attention;
                      CREATE INDEX idx_wc_agent_task_endpoint_executions_task
                          ON wc_agent_task_endpoint_executions(task_id, updated_at_unix_ms DESC);",
                 )?;
@@ -615,6 +645,11 @@ impl Database {
         if wake_table_exists && !has_wait_source {
             let endpoint_execution_table_exists: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'wc_agent_task_endpoint_executions')",
+                [],
+                |row| row.get(0),
+            )?;
+            let endpoint_pin_exists: bool = endpoint_execution_table_exists && transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('wc_agent_task_endpoint_executions') WHERE name = 'pinned_endpoint_id')",
                 [],
                 |row| row.get(0),
             )?;
@@ -772,17 +807,40 @@ impl Database {
                         endpoint_controller_generation INTEGER,
                         created_at_unix_ms INTEGER NOT NULL,
                         updated_at_unix_ms INTEGER NOT NULL,
+                        pinned_endpoint_id TEXT REFERENCES wc_agent_endpoints(endpoint_id),
+                        pinned_endpoint_controller_generation INTEGER,
                         PRIMARY KEY(task_id, attempt_id),
                         CHECK((endpoint_id IS NULL AND endpoint_controller_generation IS NULL)
                            OR (endpoint_id IS NOT NULL AND endpoint_controller_generation >= 1)),
+                        CHECK((pinned_endpoint_id IS NULL AND pinned_endpoint_controller_generation IS NULL)
+                           OR (pinned_endpoint_id IS NOT NULL AND pinned_endpoint_controller_generation >= 1)),
                         FOREIGN KEY(task_id) REFERENCES wc_agent_tasks(task_id),
                         FOREIGN KEY(attempt_id) REFERENCES wc_agent_task_attempts(attempt_id),
                         FOREIGN KEY(wake_id) REFERENCES wc_agent_wakes(wake_id),
                         FOREIGN KEY(endpoint_id) REFERENCES wc_agent_endpoints(endpoint_id)
                      );
-                     INSERT INTO wc_agent_task_endpoint_executions
-                         SELECT * FROM wc_agent_task_endpoint_executions_pre_wait;
-                     DROP TABLE wc_agent_task_endpoint_executions_pre_wait;
+                     INSERT INTO wc_agent_task_endpoint_executions (
+                         task_id, attempt_id, wake_id, start_identity_fingerprint,
+                         endpoint_id, endpoint_controller_generation,
+                         created_at_unix_ms, updated_at_unix_ms
+                     ) SELECT task_id, attempt_id, wake_id, start_identity_fingerprint,
+                              endpoint_id, endpoint_controller_generation,
+                              created_at_unix_ms, updated_at_unix_ms
+                       FROM wc_agent_task_endpoint_executions_pre_wait;",
+                )?;
+                if endpoint_pin_exists {
+                    transaction.execute_batch(
+                        "UPDATE wc_agent_task_endpoint_executions
+                         SET (pinned_endpoint_id, pinned_endpoint_controller_generation) = (
+                             SELECT pinned_endpoint_id, pinned_endpoint_controller_generation
+                             FROM wc_agent_task_endpoint_executions_pre_wait old
+                             WHERE old.task_id = wc_agent_task_endpoint_executions.task_id
+                               AND old.attempt_id = wc_agent_task_endpoint_executions.attempt_id
+                         );",
+                    )?;
+                }
+                transaction.execute_batch(
+                    "DROP TABLE wc_agent_task_endpoint_executions_pre_wait;
                      CREATE INDEX idx_wc_agent_task_endpoint_executions_task
                          ON wc_agent_task_endpoint_executions(task_id, updated_at_unix_ms DESC);",
                 )?;

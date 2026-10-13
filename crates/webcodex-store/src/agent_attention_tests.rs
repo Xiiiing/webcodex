@@ -1095,11 +1095,24 @@ fn legacy_wake_schema_migration_preserves_existing_task_wake() {
     let path = temp.path().join("legacy-wake.db");
     let owner = principal('8');
     let legacy_wake_id = format!("{AGENT_WAKE_ID_PREFIX}{}", "a".repeat(16));
-    let (assignee, task_id, attempt_id) = {
+    let (assignee, task_id, attempt_id, endpoint_id, endpoint_generation) = {
         let db = Database::open(&path).unwrap();
         let assignee = create_agent(&db, &owner, "legacy-worker");
         let (task_id, attempt_id, _fence) =
             create_task_and_attempt(&db, &owner, &assignee, "legacy", T0);
+        let endpoint = db
+            .attach_agent_endpoint(
+                &owner,
+                NewAgentEndpoint {
+                    agent_id: assignee.clone(),
+                    host: "ChatGPT".to_string(),
+                    client_attachment_id: Some("legacy-window".to_string()),
+                    wake_capable: true,
+                    idempotency_key: "legacy-endpoint".to_string(),
+                },
+            )
+            .unwrap()
+            .endpoint;
         let conn = db.conn_for_tests();
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         conn.execute_batch(
@@ -1165,9 +1178,33 @@ fn legacy_wake_schema_migration_preserves_existing_task_wake() {
             params![legacy_wake_id, assignee, task_id, attempt_id, T0 + 2],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO wc_agent_task_endpoint_executions (
+                task_id, attempt_id, wake_id, start_identity_fingerprint,
+                endpoint_id, endpoint_controller_generation,
+                created_at_unix_ms, updated_at_unix_ms,
+                pinned_endpoint_id, pinned_endpoint_controller_generation
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?5, ?6, ?7)",
+            params![
+                task_id,
+                attempt_id,
+                legacy_wake_id,
+                "a".repeat(64),
+                T0 + 2,
+                endpoint.endpoint_id,
+                endpoint.controller_generation,
+            ],
+        )
+        .unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         drop(conn);
-        (assignee, task_id, attempt_id)
+        (
+            assignee,
+            task_id,
+            attempt_id,
+            endpoint.endpoint_id,
+            endpoint.controller_generation,
+        )
     };
 
     let reopened = Database::open(&path).unwrap();
@@ -1181,6 +1218,16 @@ fn legacy_wake_schema_migration_preserves_existing_task_wake() {
     );
     assert_eq!(wake.source_event_id, None);
     assert_eq!(wake.state, AgentWakeState::Pending);
+    let pinned: (String, i64) = reopened
+        .conn_for_tests()
+        .query_row(
+            "SELECT pinned_endpoint_id, pinned_endpoint_controller_generation
+             FROM wc_agent_task_endpoint_executions WHERE wake_id = ?1",
+            [&legacy_wake_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(pinned, (endpoint_id, endpoint_generation));
     let has_source_event: bool = reopened
         .conn_for_tests()
         .query_row(
