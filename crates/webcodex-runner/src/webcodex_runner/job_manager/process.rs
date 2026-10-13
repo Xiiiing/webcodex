@@ -216,6 +216,11 @@ impl JobManager {
                 }
                 ShellCommandExecutionState::Completed => "failed",
             };
+            // A stop can arrive after artifact observation succeeds. The wire
+            // contract allows metadata only on a completed terminal report.
+            if status != "completed" {
+                build_artifacts = None;
+            }
             manager.update_and_send(
                 &job_id,
                 RunnerJobDelta {

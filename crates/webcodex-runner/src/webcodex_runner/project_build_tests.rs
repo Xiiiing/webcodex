@@ -12,6 +12,9 @@ fn fixture(marker: &str) -> (tempfile::TempDir, PathBuf, PathBuf, RunnerPolicy) 
     let root = tmp.path().join("remote-project");
     let registry = tmp.path().join("registry");
     fs::create_dir_all(&root).unwrap();
+    // Production plans supply a canonical cwd. Temporary roots may contain
+    // aliases on macOS or lack the canonical Windows verbatim prefix.
+    let root = root.canonicalize().unwrap();
     fs::create_dir_all(&registry).unwrap();
     fs::write(root.join(marker), "").unwrap();
     fs::write(

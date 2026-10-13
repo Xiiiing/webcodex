@@ -887,6 +887,9 @@ pub(crate) fn agent_job_summary_value(job: &ShellJobInfo) -> Value {
     if let Some(artifacts) = &job.build_artifacts {
         summary["build_artifacts"] = json!(artifacts);
     }
+    if let Some(kind) = super::project_build::artifact_observation_failure_kind(job) {
+        summary["failure_kind"] = json!(kind);
+    }
     if job.kind == "project_format" {
         summary["state_changed"] = json!(job.format_mutation.unwrap_or_default().state_changed());
         summary["failure_kind"] =
@@ -1919,6 +1922,9 @@ impl ToolRuntime {
                 });
                 if let Some(artifacts) = &job.build_artifacts {
                     output["build_artifacts"] = json!(artifacts);
+                }
+                if let Some(kind) = super::project_build::artifact_observation_failure_kind(&job) {
+                    output["failure_kind"] = json!(kind);
                 }
                 if job.kind == "project_format" {
                     output["state_changed"] =
