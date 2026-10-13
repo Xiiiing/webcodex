@@ -28,7 +28,39 @@ FORMAT_VERSION = 1
 EXTENSIONS = frozenset(".md .markdown .txt .rst .adoc .rs .py .js .jsx .ts .tsx .mjs .cjs .c .h .cpp .hpp .cc .cs .go .java .kt .kts .swift .rb .php .sh .bash .zsh .fish .ps1 .sql .html .css .scss .vue .svelte .lua .r .jl .ex .exs .erl .hrl .hs .scala .dart .toml .yaml .yml .json .xml .proto .graphql".split())
 NAMES = frozenset({"Dockerfile", "Makefile", "CMakeLists.txt", "LICENSE"})
 SENSITIVE_PART = re.compile(r"(?:^|[._-])(?:secrets?|credentials?|tokens?|passwords?|private[-_]?keys?)(?:$|[._-])", re.I)
-SENSITIVE_TEXT = re.compile(r"-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----|\bAKIA[0-9A-Z]{16}\b|\b(?:ghp_|github_pat_)[A-Za-z0-9_]{20,}|\b(?:sk-live-|sk-proj-)[A-Za-z0-9_-]{16,}|(?i:(?<![\w])[\"']?[\w.-]*(?:secret|password|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)[\w.-]*[\"']?\s*[:=]\s*[\"']?[^\s\"'<>]{12,})")
+SENSITIVE_TEXT = re.compile(r"-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----|\bAKIA[0-9A-Z]{16}\b|\b(?:ghp_|github_pat_)[A-Za-z0-9_]{20,}|\b(?:sk-live-|sk-proj-)[A-Za-z0-9_-]{16,}")
+# Start only at the beginning of a complete key token. Retrying a greedy key
+# prefix at every '-' or '.' makes otherwise bounded source scans quadratic.
+ASSIGNMENT = re.compile(r"(?<![\w.-])[\"']?([\w.-]+)[\"']?\s*[:=]")
+SENSITIVE_KEY = re.compile(r"secret|password|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key", re.I)
+SENSITIVE_VALUE = re.compile(r"\s*[\"']?[^\s\"'<>]{12}")
+
+
+def sensitive_text(text):
+    return bool(SENSITIVE_TEXT.search(text)) or any(
+        SENSITIVE_KEY.search(match[1]) and SENSITIVE_VALUE.match(text, match.end())
+        for match in ASSIGNMENT.finditer(text)
+    )
+
+
+def valid_metadata(value):
+    counts = {"indexed_at_unix", "eligible_files", "indexed_files", "indexed_bytes",
+              "chunks", "excluded_entries", "skipped_files", "oversized_lines_omitted",
+              "unprocessed_files"}
+    if not isinstance(value, dict) or set(value) != counts | {"format_version", "revision", "stop_reason"}:
+        return False
+    if type(value["format_version"]) is not int or value["format_version"] != FORMAT_VERSION:
+        return False
+    if any(type(value[key]) is not int or value[key] < 0 for key in counts):
+        return False
+    revision = value["revision"]
+    return (
+        (revision is None or isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision) is not None)
+        and value["stop_reason"] in ("complete", "time_limit", "file_limit", "corpus_limit")
+        and value["indexed_files"] <= MAX_FILES
+        and value["indexed_bytes"] <= MAX_CORPUS_BYTES
+        and value["eligible_files"] == value["indexed_files"] + value["skipped_files"] + value["unprocessed_files"]
+    )
 
 
 class KnowledgeError(Exception):
@@ -268,7 +300,7 @@ class Knowledge:
                 for descriptor in reversed(current):
                     os.close(descriptor)
             text = data.decode("utf-8")
-            if "\0" in text or any(ord(char) < 32 and char not in "\t\n\r" for char in text) or SENSITIVE_TEXT.search(text):
+            if "\0" in text or any(ord(char) < 32 and char not in "\t\n\r" for char in text) or sensitive_text(text):
                 raise KnowledgeError("Binary or potentially sensitive source is excluded.")
             return bytes(data), text
         except (OSError, UnicodeError):
@@ -279,20 +311,25 @@ class Knowledge:
 
     def connect(self):
         self.require_initialized()
+        connection = None
         try:
             info = self.database.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (os.name == "posix" and (info.st_uid != os.getuid() or info.st_mode & 0o077)):
                 raise KnowledgeError("Derived cache is not an ordinary private file; rebuild it locally.")
             connection = sqlite3.connect("file:" + quote(str(self.database)) + "?mode=ro", uri=True, timeout=1)
             connection.row_factory = sqlite3.Row
-            metadata = json.loads(connection.execute("SELECT value FROM metadata").fetchone()[0])
-            if metadata.get("format_version") != FORMAT_VERSION:
-                connection.close()
-                raise KnowledgeError("Derived cache format changed; rebuild the index.")
+            rows = connection.execute("SELECT substr(value, 1, 4097) FROM metadata LIMIT 2").fetchall()
+            if len(rows) != 1 or not isinstance(rows[0][0], str) or len(rows[0][0]) > 4096:
+                raise ValueError("invalid metadata record")
+            metadata = json.loads(rows[0][0])
+            if not valid_metadata(metadata):
+                raise ValueError("invalid metadata structure")
             return connection, metadata
         except FileNotFoundError:
             raise KnowledgeError("No derived index exists; call index first.") from None
-        except (OSError, sqlite3.Error, ValueError, TypeError):
+        except (OSError, sqlite3.Error, ValueError, TypeError, RecursionError):
+            if connection is not None:
+                connection.close()
             raise KnowledgeError("Derived index is unavailable; rebuild the index.") from None
 
     def status(self):

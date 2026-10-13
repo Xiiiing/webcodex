@@ -60,6 +60,15 @@ class Fixture(unittest.TestCase):
 
 
 class KnowledgeTests(Fixture):
+    def test_sensitive_assignments_preserve_key_and_value_detection(self):
+        for text in ["PASSWORD='abcdefghijkl'", '"service.api-key":"abcdefghijkl"',
+                     "foo=abcdefghijkl;api_key=abcdefghijkl", "app-private_key=abcdefghijkl"]:
+            with self.subTest(text=text):
+                self.assertTrue(knowledge.sensitive_text(text))
+        for text in ["password='short'", "ordinary_key=abcdefghijkl", "api_key = 'short'"]:
+            with self.subTest(text=text):
+                self.assertFalse(knowledge.sensitive_text(text))
+
     def test_actual_fts5_capability_probe_and_failure(self):
         knowledge.probe_fts5()
         with patch.object(knowledge.sqlite3, "connect", side_effect=sqlite3.OperationalError("hidden diagnostic")):
@@ -126,6 +135,32 @@ class KnowledgeTests(Fixture):
         hit = self.provider.search("parseHTTPRequest")["hits"][0]
         self.assertIn("def parseHTTPRequest", hit["text"])
         self.assertNotIn("fabricated", hit["text"])
+
+    def test_corrupt_metadata_is_a_known_rebuildable_failure(self):
+        coverage = self.provider.index()["coverage"]
+        malformed = [None, "[]", "null", "{}", '{"format_version":1}',
+                     json.dumps(dict(coverage, indexed_files=True)),
+                     json.dumps(dict(coverage, revision="invalid")),
+                     json.dumps(dict(coverage, stop_reason="unknown")),
+                     json.dumps(dict(coverage, unprocessed_files=-1)),
+                     json.dumps(dict(coverage, eligible_files=999)),
+                     "[" * 1800 + "0" + "]" * 1800, "x" * 4097]
+        for value in malformed:
+            with self.subTest(value=str(value)[:60]):
+                with sqlite3.connect(self.provider.database) as connection:
+                    connection.execute("DELETE FROM metadata")
+                    if value is not None:
+                        connection.execute("INSERT INTO metadata VALUES (?)", (value,))
+                for operation in [self.provider.status, lambda: self.provider.search("request")]:
+                    with self.assertRaisesRegex(knowledge.KnowledgeError, "Derived index is unavailable; rebuild"):
+                        operation()
+        self.provider.index()
+        with sqlite3.connect(self.provider.database) as connection:
+            connection.execute("INSERT INTO metadata VALUES (?)", (json.dumps(coverage),))
+        with self.assertRaises(knowledge.KnowledgeError):
+            self.provider.status()
+        self.assertTrue(self.provider.index()["indexed"])
+        self.assertTrue(self.provider.search("request")["hits"])
 
     def test_tracked_only_sensitive_binary_oversize_hardlink_and_symlink_guards(self):
         self.write("untracked.md", "hiddenuntracked\n")
@@ -285,10 +320,10 @@ class NativeProtocolTests(Fixture):
         environment.pop("PYTHONUNBUFFERED", None)
         return environment
 
-    def run_wire(self, data, command=None, environment=None):
+    def run_wire(self, data, command=None, environment=None, timeout=30):
         result = subprocess.run(command or [sys.executable, "-B", str(SCRIPT)], input=data,
                                 cwd=self.root, env=environment or self.environment(),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, b"")
         responses = []
@@ -299,6 +334,36 @@ class NativeProtocolTests(Fixture):
                 self.assertLessEqual(knowledge.encoded_size(response["result"]), knowledge.MAX_RESULT_BYTES)
             responses.append(response)
         return responses
+
+    def test_long_punctuation_source_completes_without_quadratic_sensitive_scan(self):
+        text = "-." * ((knowledge.MAX_FILE_BYTES - 32) // 2) + "\nlongpunctuationneedle\n"
+        self.write("punctuation.md", text)
+        self.git("add", "punctuation.md")
+        messages = [rpc("initialize", protocolVersion="webcodex-plugin-v1"), call("index"),
+                    call("search", query="longpunctuationneedle"),
+                    call("read", path="punctuation.md", source_hash=knowledge.digest(text.encode()),
+                         start_line=2, end_line=2)]
+        responses = self.run_wire(b"".join(frame(request) for request in messages), timeout=5)
+        self.assertEqual(responses[1]["result"]["structuredContent"]["coverage"]["indexed_files"], 3)
+        self.assertEqual(responses[2]["result"]["structuredContent"]["hits"][0]["path"], "punctuation.md")
+        self.assertEqual(responses[3]["result"]["structuredContent"]["text"], "longpunctuationneedle\n")
+
+    def test_corrupt_metadata_does_not_terminate_protocol(self):
+        provider = knowledge.Knowledge(self.root, self.base / "protocol-cache" / "webcodex-project-knowledge")
+        provider.initialize()
+        provider.index()
+        for value in ["[]", '{"format_version":1}']:
+            with self.subTest(value=value):
+                with sqlite3.connect(provider.database) as connection:
+                    connection.execute("UPDATE metadata SET value=?", (value,))
+                messages = [rpc("initialize", protocolVersion="webcodex-plugin-v1"),
+                            call("status"), call("search", query="request"), call("index"), call("status")]
+                responses = self.run_wire(b"".join(frame(request) for request in messages))
+                for response in responses[1:3]:
+                    self.assertTrue(response["result"]["isError"])
+                    self.assertEqual(response["result"]["content"][0]["text"],
+                                     "Derived index is unavailable; rebuild the index.")
+                self.assertTrue(responses[-1]["result"]["structuredContent"]["indexed"])
 
     def test_initialize_catalog_index_search_and_read_real_protocol(self):
         messages = [rpc("initialize", protocolVersion="webcodex-plugin-v1"), rpc("tools/list"), call("status"), call("index"), call("search", query="项目知识"), call("search", query="parseHTTPRequest")]

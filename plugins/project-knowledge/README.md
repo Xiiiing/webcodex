@@ -34,6 +34,8 @@ index/search/read, interactive flush before EOF, FTS5 failure, stale and deleted
 sources, source/root replacement, sensitive and binary content, output bounds,
 and retention of the last published index after a failed rebuild. They do not
 claim live Runner admission or `plugin_tool` permission/binding coverage.
+Regressions also cover full-size punctuation-heavy sources and malformed cache
+metadata; invalid metadata returns a known rebuild error without stopping the provider.
 
 After building dogfood Server/Runner binaries, run the separate real MCP →
 Server → WebSocket Runner → native provider smoke:
