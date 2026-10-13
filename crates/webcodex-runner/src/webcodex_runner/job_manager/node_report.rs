@@ -134,5 +134,4 @@ fn parse_report(bytes: &[u8], process_passed: bool) -> Option<(u64, u64)> {
 }
 
 #[cfg(test)]
-#[path = "../job_manager_tests/node_report.rs"]
 mod tests;
