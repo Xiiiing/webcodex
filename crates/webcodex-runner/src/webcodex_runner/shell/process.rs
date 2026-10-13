@@ -122,6 +122,7 @@ pub(crate) fn run_process_with_profiles_and_execution_state_with_start_hook(
         stop_requested,
         &[],
         on_started,
+        None,
     )
 }
 
@@ -143,6 +144,7 @@ pub(crate) fn run_process_with_profiles_and_execution_state_with_internal_env_an
     stop_requested: Option<&AtomicBool>,
     env_overrides: &[(&str, &str)],
     on_started: Option<&dyn Fn()>,
+    on_prepared: Option<&dyn Fn() -> Result<(), String>>,
 ) -> ShellCommandResult {
     run_process_with_output(
         generation,
@@ -159,6 +161,7 @@ pub(crate) fn run_process_with_profiles_and_execution_state_with_internal_env_an
         env_overrides,
         &[],
         on_started,
+        on_prepared,
         false,
         None,
     )
@@ -196,6 +199,7 @@ pub(crate) fn run_format_candidate(
         env_overrides,
         env_removals,
         None,
+        None,
         true,
         deadline,
     )
@@ -217,6 +221,7 @@ fn run_process_with_output(
     env_overrides: &[(&str, &str)],
     env_removals: &[&str],
     on_started: Option<&dyn Fn()>,
+    on_prepared: Option<&dyn Fn() -> Result<(), String>>,
     exact_utf8: bool,
     deadline: Option<Instant>,
 ) -> ShellCommandResult {
@@ -289,6 +294,17 @@ fn run_process_with_output(
     }
     for (key, value) in env_overrides {
         cmd.env(key, value);
+    }
+    if let Some(check) = on_prepared {
+        if let Err(error) = check() {
+            return ShellCommandResult::not_started(CommandResult {
+                exit_code: None,
+                stdout: None,
+                stderr: None,
+                duration_ms: Some(start.elapsed().as_millis() as u64),
+                error: Some(error),
+            });
+        }
     }
     super::execution::execute_configured_command_with_output(
         policy,

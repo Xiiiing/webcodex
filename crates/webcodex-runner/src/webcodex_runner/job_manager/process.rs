@@ -73,6 +73,13 @@ impl JobManager {
                 RunnerJobOperation::StartBuild(request) => {
                     let env_overrides = if request.provenance.backend == "go" {
                         &GO_PROJECT_SINGLE_MODULE_ENV[..]
+                    } else if request.provenance.backend == "node" {
+                        &[
+                            ("COREPACK_ENABLE_NETWORK", "0"),
+                            ("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),
+                            ("COREPACK_ENV_FILE", "0"),
+                            ("COREPACK_ENABLE_AUTO_PIN", "0"),
+                        ][..]
                     } else {
                         &[]
                     };
@@ -90,6 +97,13 @@ impl JobManager {
                         Some(stop_requested.as_ref()),
                         env_overrides,
                         Some(&on_started),
+                        Some(&|| {
+                            crate::webcodex_runner::project_build::fence(
+                                &policy,
+                                &project_registry_dir,
+                                &operation,
+                            )
+                        }),
                     )
                 }
                 RunnerJobOperation::StartProcess(request) => {

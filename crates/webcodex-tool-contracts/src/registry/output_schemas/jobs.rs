@@ -1068,7 +1068,7 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
                 "backend".to_string(),
                 json!({
                     "type": "string",
-                    "enum": ["rust", "go"],
+                    "enum": ["rust", "go", "node"],
                     "description": "Runner-resolved canonical build backend."
                 }),
             );

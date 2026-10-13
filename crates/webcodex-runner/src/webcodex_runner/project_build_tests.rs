@@ -100,6 +100,7 @@ fn start_build_operation(plan: &ProjectBuildPlan, cwd: &std::path::Path) -> Runn
             command_preview: match plan.provenance.backend.as_str() {
                 "rust" => "cargo build".into(),
                 "go" => "go build".into(),
+                "node" => format!("{} run --silent build", plan.process.executable),
                 _ => unreachable!(),
             },
             validation_steps: Vec::new(),
@@ -190,7 +191,7 @@ fn project_build_backend_selection_is_nearest_explicit_and_fail_closed() {
             if code == "build_recipe_ambiguous"
     ));
 
-    for (marker, backend) in [("package.json", "node"), ("pyproject.toml", "python")] {
+    for (marker, backend) in [("pyproject.toml", "python")] {
         let (_tmp, _root, registry, policy) = fixture(marker);
         assert_eq!(
             project_build::plan(&policy, &registry, &request()).unwrap_err(),
@@ -480,4 +481,40 @@ fn project_build_all_packages_rejects_excluded_recipe_cwd() {
     );
     req.cwd = Some("app".into());
     assert!(project_build::plan(&policy, &registry, &req).is_ok());
+}
+
+#[test]
+fn node_build_manifest_script_manager_scope_and_stale_fence() {
+    let (_tmp, root, registry, policy) = fixture("package.json");
+    fs::write(
+        root.join("package.json"),
+        r#"{"packageManager":"pnpm@9","scripts":{"build":"node build.js"}}"#,
+    )
+    .unwrap();
+    let mut req = request();
+    req.adapter = ProjectBuildAdapter::Node;
+    let (plan, cwd) = project_build::plan(&policy, &registry, &req).unwrap();
+    assert!(plan.is_valid());
+    assert_eq!(plan.process.executable, "pnpm");
+    assert_eq!(plan.process.args, ["run", "--silent", "build"]);
+    let operation = start_build_operation(&plan, &cwd);
+    project_build::fence(&policy, &registry, &operation).unwrap();
+    fs::write(root.join("pnpm-lock.yaml"), "lock").unwrap();
+    assert!(project_build::fence(&policy, &registry, &operation)
+        .unwrap_err()
+        .contains("build_plan_stale"));
+    req.scope = Some(ProjectBuildScope {
+        packages: vec![],
+        all_packages: true,
+    });
+    assert!(
+        matches!(project_build::plan(&policy, &registry, &req), Err(ProjectBuildPlanningResult::Unavailable { code, .. }) if code == "build_scope_unsupported")
+    );
+    req.scope = None;
+    req.dependency_policy = Some(ProjectDependencyPolicy {
+        mode: ProjectDependencyMode::Locked,
+    });
+    assert!(
+        matches!(project_build::plan(&policy, &registry, &req), Err(ProjectBuildPlanningResult::Unavailable { code, .. }) if code == "dependency_policy_unsupported")
+    );
 }
