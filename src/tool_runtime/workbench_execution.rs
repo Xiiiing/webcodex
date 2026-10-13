@@ -421,18 +421,27 @@ impl ToolRuntime {
                 "attempt",
             );
         };
-        let (tool, args) = if input.execution.kind == "chat" {
-            (
-                "start_agent_task_endpoint_continuation",
-                json!({"attempt_ref":attempt_ref}),
+        let dispatched = if input.execution.kind == "chat" {
+            self.start_workbench_agent_task_endpoint_continuation(
+                auth,
+                attempt_ref.to_owned(),
+                input
+                    .execution
+                    .endpoint_id
+                    .expect("validated chat endpoint"),
+                input
+                    .execution
+                    .expected_controller_generation
+                    .expect("validated chat generation"),
             )
         } else {
-            (
+            self.workbench_call(
                 "start_agent_task_coding_run",
                 json!({"project":input.project,"attempt_ref":attempt_ref,"provider_id":input.execution.provider_id}),
-            )
+                auth,
+                window,
+            ).await
         };
-        let dispatched = self.workbench_call(tool, args, auth, window).await;
         if !dispatched.success {
             return submission_failure(dispatched, &task_id, "dispatch");
         }

@@ -608,4 +608,14 @@ async fn workbench_chat_executor_is_projected_and_usable_only_in_its_bound_windo
             .unwrap(),
         1
     );
+    let pinned: (String, i64) = db
+        .conn_for_tests()
+        .query_row(
+            "SELECT pinned_endpoint_id, pinned_endpoint_controller_generation
+             FROM wc_agent_task_endpoint_executions",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(pinned, (endpoint_id, generation));
 }

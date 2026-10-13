@@ -2555,6 +2555,9 @@ fn retire_stale_agent_task_wakes_for_agent(
                        SELECT 1
                        FROM wc_agent_tasks t
                        JOIN wc_agent_task_attempts a ON a.attempt_id = w.source_task_attempt_id
+                       JOIN wc_agent_task_endpoint_executions e ON e.wake_id = w.wake_id
+                       LEFT JOIN wc_agent_endpoints p ON p.endpoint_id = e.pinned_endpoint_id
+                       JOIN wc_agent_identities i ON i.agent_id = w.target_agent_id
                        WHERE t.task_id = w.source_task_id
                          AND t.latest_attempt_id = a.attempt_id
                          AND t.assignee_agent_id = w.target_agent_id
@@ -2562,6 +2565,12 @@ fn retire_stale_agent_task_wakes_for_agent(
                          AND t.state = 'active'
                          AND a.state = 'active'
                          AND a.lease_expires_at_unix_ms > ?2
+                         AND (e.pinned_endpoint_id IS NULL OR (
+                             p.agent_id = w.target_agent_id AND p.lifecycle = 'attached'
+                             AND p.wake_capable = 1 AND p.lease_expires_at_unix_ms > ?2
+                             AND p.controller_generation = e.pinned_endpoint_controller_generation
+                             AND i.current_controller_generation = e.pinned_endpoint_controller_generation
+                         ))
                    )",
             )
             .map_err(store_error)?;
@@ -2586,6 +2595,26 @@ fn bind_agent_task_wake_carrier(
     endpoint_controller_generation: i64,
     now: i64,
 ) -> Result<(), CommunicationStoreError> {
+    // The claim's mutable carrier binding must never replace an explicit
+    // submission target, including after restart or endpoint-loss recovery.
+    let pin: (Option<String>, Option<i64>) = transaction
+        .query_row(
+            "SELECT pinned_endpoint_id, pinned_endpoint_controller_generation
+         FROM wc_agent_task_endpoint_executions WHERE wake_id = ?1",
+            params![wake.wake_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(store_error)?;
+    if pin.0.as_deref().is_some_and(|pinned| pinned != endpoint_id)
+        || pin
+            .1
+            .is_some_and(|pinned| pinned != endpoint_controller_generation)
+    {
+        return Err(CommunicationStoreError::new(
+            "agent_task_endpoint_target_stale",
+            "AgentTask continuation is pinned to another exact Endpoint generation",
+        ));
+    }
     let task_id = wake.source_task_id.as_deref().ok_or_else(|| {
         CommunicationStoreError::new(
             "agent_task_wake_invariant",

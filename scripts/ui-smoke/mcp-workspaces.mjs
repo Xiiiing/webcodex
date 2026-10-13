@@ -249,7 +249,7 @@ try {
       await frame.locator('#sharedAttention').getByRole('button', { name: 'Review' }).click();
       await frame.locator('#todoAnswer').fill('Reviewed with the requested response');
       await frame.locator('#todoDetail').getByRole('button', { name: 'Complete message' }).click();
-      await frame.locator('#todoDetail').waitFor({ state: 'detached' });
+      await frame.locator('#todoDetail').waitFor({ state: 'hidden' });
       const calls = await page.evaluate(() => fixture.calls);
       assert.deepEqual(calls.find(call => call.name === 'cancel_coding_agent').arguments, { run_id: 'wc_agent_run_abcdefghijklmnop' });
       assert.deepEqual(calls.find(call => call.name === 'observe_coding_agent').arguments, { run_id: 'wc_agent_run_abcdefghijklmnop', wait_secs: 0 });

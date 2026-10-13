@@ -477,6 +477,9 @@ impl Database {
         // Agent Wake is the shared durable continuation/outbox domain. Initialize it
         // after AgentTask and AgentWait so every source foreign key is enforceable.
         Self::ensure_agent_wake_schema(&mut conn)?;
+        // Historical Wake migrations rebuild Endpoint execution rows. Add the
+        // immutable opt-in execution target only after those migrations finish.
+        Self::ensure_agent_task_endpoint_pin_schema(&mut conn)?;
 
         // Goal is independent high-level durable intent/control state. It may
         // correlate AgentTasks and Workflow Sessions, but owns no execution authority.

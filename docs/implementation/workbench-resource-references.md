@@ -147,9 +147,13 @@ remain owner-scoped across Projects.
 
 `submit_workbench_work` requires an explicit Project, owned Agent, task content,
 and one exact available execution route. A `chat` route is the verified
-continuation for that Agent in the current Window. A `runner` route is a provider
-reported by the selected Project's Runner. The adapter calls the existing
-canonical Project, Agent, Goal, Task, Attempt, and execution tools; it does not
+continuation for that Agent in the current Window. Its selected Endpoint and
+controller generation are pinned in the durable AgentTask execution before a
+Wake can be claimed. If that binding changes while work is queued, the old
+Wake cannot execute in the replacement Window; the caller must inspect the
+original Task before requesting another attempt. A `runner` route is a provider
+reported by the selected Project's Runner. The adapter uses the existing
+canonical Project, Agent, Goal, Task, Attempt, and execution paths; it does not
 dispatch a free-form command or invent a provider. The optional Goal association
 is caller-owned. The UI retains the draft's key and unchanged payload after an
 uncertain response; callers must replay the same key and same request, or inspect
