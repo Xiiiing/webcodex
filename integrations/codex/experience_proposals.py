@@ -283,12 +283,22 @@ def approve(api, message_id, version, destination_hash):
             require(isinstance(previous, dict) and previous.get("binding") == binding, "approval_state_mismatch")
             if receipt_name in names:
                 receipt = state.read_json(receipt_name, 32768)
-                require(isinstance(receipt, dict) and receipt.get("binding") == binding
-                        and receipt.get("approval_message_id") == previous.get("approval_message_id"),
+                require(isinstance(receipt, dict)
+                        and set(receipt) == {"binding", "approval_message_id", "tool", "receipt"}
+                        and receipt.get("binding") == binding
+                        and receipt.get("approval_message_id") == previous.get("approval_message_id")
+                        and receipt.get("tool") == previous.get("tool")
+                        and isinstance(receipt.get("receipt"), dict),
                         "approval_state_mismatch")
                 note_name = key + "-note.json"
                 if note_name in names:
-                    return {"status": "already_recorded", **receipt, **state.read_json(note_name, 32768)}
+                    note = state.read_json(note_name, 32768)
+                    require(isinstance(note, dict) and set(note) == {"promotion_message_id"}
+                            and isinstance(note["promotion_message_id"], str)
+                            and MESSAGE_ID.fullmatch(note["promotion_message_id"]),
+                            "approval_state_mismatch")
+                    return {"status": "already_recorded", **receipt,
+                            "promotion_message_id": note["promotion_message_id"]}
                 return {"status": "receipt_saved_promotion_note_missing", **receipt}
             raise AdapterError("promotion_outcome_unresolved_do_not_retry")
         require(len(names) + 3 <= MAX_STATE_FILES, "approval_state_capacity")

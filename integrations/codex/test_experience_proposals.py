@@ -190,6 +190,30 @@ class ExperienceProposalsTests(unittest.TestCase):
         self.assertEqual(self.mutation_count(), 1)
         self.assertFalse(any(m["kind"] == "guidance" for m in self.messages.values()))
 
+    def test_corrupt_private_promotion_note_cannot_override_duplicate_status(self):
+        saved = self.propose()
+        self.approve(saved)
+        notes = list(Path(self.config["state_dir"]).glob("experience-*-note.json"))
+        self.assertEqual(len(notes), 1)
+        note = json.loads(notes[0].read_text())
+        note["status"] = "promoted"
+        notes[0].write_text(json.dumps(note))
+        with self.assertRaisesRegex(AdapterError, "approval_state_mismatch"):
+            self.approve(saved)
+        self.assertEqual(self.mutation_count(), 1)
+
+    def test_corrupt_private_receipt_cannot_override_duplicate_status(self):
+        saved = self.propose()
+        self.approve(saved)
+        receipts = list(Path(self.config["state_dir"]).glob("experience-*-receipt.json"))
+        self.assertEqual(len(receipts), 1)
+        receipt = json.loads(receipts[0].read_text())
+        receipt["status"] = "promoted"
+        receipts[0].write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(AdapterError, "approval_state_mismatch"):
+            self.approve(saved)
+        self.assertEqual(self.mutation_count(), 1)
+
     def test_memory_cas_update_passes_exact_revision(self):
         revision = "wc_memrev_" + "o" * 43
         self.memories["experience-fixture"] = {"project": self.config["project"],
