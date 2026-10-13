@@ -49,6 +49,9 @@ JSON 上限为 4 KiB，计入现有启动预算；交接包含新增字段后仍
 读取过文件。两个简报都会用对精确 Job/执行结果的核对建议替换执行建议，
 核对后才能考虑再次执行。规范的当前证据核对可以排除已解决的先前失败。
 诊断不会重试、派发、调度、改变权限、消费续接或改变至多一次执行语义。
+即使缺少执行状态证据，结构化的 `outcome_unknown` 失败类型仍要求核对结果。
+具有精确 Job ID 的成功异步接收记录由现有 Job 生命周期投影处理；其历史记录中
+命令尚未完成的标记不会永久触发结果未知警告。明确的结果未知证据仍优先于 Job 接收状态。
 
 参见 [Session 契约](../agent/session-model.md#explicit-handoff-recovery-and-internal-snapshot-fencing)
 及[启动投影归属](../architecture/startup-projection-boundaries.md)。

@@ -63,6 +63,11 @@ suggestions with reconciliation of the exact Job/execution before considering
 another execution. Canonical current-evidence reconciliation can exclude a
 resolved prior failure. This diagnostic never retries, dispatches, schedules,
 changes permissions, consumes a continuation, or changes at-most-once semantics.
+Structured `outcome_unknown` failure kinds require reconciliation even without
+execution-state evidence. Successful pending receipts with an exact Job ID remain
+owned by the existing Job lifecycle projection; their historical incomplete
+command flags do not create a permanent unknown-outcome warning. An explicit
+unknown outcome still takes precedence over Job acceptance.
 
 See the [Session contract](../agent/session-model.md#explicit-handoff-recovery-and-internal-snapshot-fencing)
 and [startup ownership](../architecture/startup-projection-boundaries.md).

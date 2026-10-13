@@ -1156,6 +1156,66 @@ fn feedback_for_with_jobs(
 }
 
 #[test]
+fn task_context_keeps_job_lifecycle_and_explicit_unknown_outcomes_distinct() {
+    let runtime = test_runtime();
+    let session = create_session(&runtime, "accepted Job");
+    add_instruction(&runtime, &session, "run validation", SessionMode::Normal);
+    record_validation_event(
+        &runtime,
+        &session,
+        "cargo_test",
+        true,
+        json!({
+            "job_id":"job-task-context", "execution_state":"started",
+            "command_started":true, "command_completed":false,
+            "promoted_to_job":true, "terminal":false,
+        }),
+    );
+    let summary = runtime.sessions.summary(&session, Some(200)).unwrap();
+    for (recovering, recovery_state) in [(0, "active"), (1, "recovering")] {
+        let jobs = json!({"active_count":1,"running_count":1,"recovering_count":recovering,"terminal_pending_count":0,"recent":[],"truncated":false});
+        let feedback = feedback_for_with_jobs(&runtime, &summary, &jobs, "continued");
+        assert_ne!(
+            feedback["attempt"]["task_context"]["stall"]["status"],
+            "reconcile_required"
+        );
+        assert_eq!(
+            feedback["attempt"]["jobs"]["recovery_state"],
+            recovery_state
+        );
+        if recovering > 0 {
+            assert!(
+                feedback["attempt"]["suggested_next_actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|action| action == "await recovering jobs before relying on their output"),
+                "{feedback}"
+            );
+        }
+    }
+    for field in ["failure_kind", "error_kind"] {
+        let session = create_session(&runtime, field);
+        add_instruction(&runtime, &session, "recover execution", SessionMode::Normal);
+        let mut output = json!({});
+        output[field] = json!("outcome_unknown");
+        record_validation_event(&runtime, &session, "run_process", false, output);
+        let summary = runtime.sessions.summary(&session, Some(200)).unwrap();
+        let feedback = feedback_for(&runtime, &summary, "continued");
+        assert_eq!(
+            feedback["attempt"]["task_context"]["stall"]["status"], "reconcile_required",
+            "{field}: {feedback}"
+        );
+        assert_eq!(
+            feedback["attempt"]["suggested_next_actions"],
+            json!([
+                "reconcile the exact Job or execution outcome before considering another execution"
+            ])
+        );
+    }
+}
+
+#[test]
 fn task_context_uses_canonical_runtime_diagnostics_and_never_treats_recovery_as_progress() {
     let runtime = test_runtime();
     let session = create_session(&runtime, "repeat diagnostic recovery");

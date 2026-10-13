@@ -268,6 +268,106 @@ fn task_context_replayed_ids_and_recorder_business_duplicates_cannot_make_three_
 }
 
 #[test]
+fn task_context_structured_unknown_failure_kinds_require_reconciliation() {
+    for field in ["failure_kind", "error_kind", "actual_failure_kind"] {
+        let (mut summary, mut event) = fixture();
+        event.failure_kind = None;
+        event.error_kind = None;
+        event.actual_failure_kind = None;
+        event.effect_evidence = None;
+        event.validation_output_summary = None;
+        match field {
+            "failure_kind" => event.failure_kind = Some("outcome_unknown".into()),
+            "error_kind" => event.error_kind = Some("outcome_unknown".into()),
+            _ => event.actual_failure_kind = Some("outcome_unknown".into()),
+        }
+        append(&mut summary, &event, 0);
+        assert_eq!(
+            context(&summary)["stall"]["status"],
+            "reconcile_required",
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn task_context_successful_job_handoff_does_not_remain_an_unknown_outcome() {
+    let store = SessionStore::new(4, 200);
+    let session = store.start_session(Some("project".into()), Some("task".into()));
+    let contract = SessionToolContract {
+        risk_class: "execute",
+        read_like: false,
+        write_like: false,
+        shell_like: true,
+        git_like: false,
+        change_summary_like: false,
+        project_write: false,
+        path_hint: SessionPathHint::None,
+    };
+    let started = store.record_tool_call_started(
+        Some(&session.session_id),
+        SessionTransport::Api,
+        "cargo_test",
+        &json!({"project":"project"}),
+        contract,
+    );
+    store.record_tool_call_finished(
+        started,
+        true,
+        &json!({
+            "job_id":"job-task-context", "execution_state":"started",
+            "command_started":true, "command_completed":false,
+            "promoted_to_job":true, "terminal":false,
+        }),
+        None,
+        None,
+    );
+    let accepted = store.summary(&session.session_id, Some(200)).unwrap();
+    // Pending execution belongs to the existing Job lifecycle projection;
+    // the immutable acceptance event must not invent outcome uncertainty.
+    assert_ne!(context(&accepted)["stall"]["status"], "reconcile_required");
+    let accepted_at = accepted.events.last().unwrap().timestamp;
+    assert!(store.record_validation_job_terminal(
+        &session.session_id,
+        "job-task-context",
+        &["job-task-context"],
+        "cargo_test",
+        contract,
+        Some("project".into()),
+        "target:aaaaaaaaaaaaaaaaaaaaaaaa",
+        None,
+        "completed",
+        Some(0),
+        Some(true),
+        Some(accepted_at),
+        Some(accepted_at + 1),
+        Some(1000),
+        Some(json!({"execution_state":"completed"})),
+    ));
+    let completed = store.summary(&session.session_id, Some(200)).unwrap();
+    assert_ne!(context(&completed)["stall"]["status"], "reconcile_required");
+
+    for variant in ["unknown_state", "unknown_kind", "failed_handoff", "no_job"] {
+        let mut uncertain = accepted.clone();
+        let event = finished_mut(&mut uncertain, 0);
+        match variant {
+            "unknown_state" => {
+                event.effect_evidence.as_mut().unwrap().execution_state =
+                    Some("outcome_unknown".into())
+            }
+            "unknown_kind" => event.failure_kind = Some("outcome_unknown".into()),
+            "failed_handoff" => event.status = Some("failed".into()),
+            _ => event.job_id = None,
+        }
+        assert_eq!(
+            context(&uncertain)["stall"]["status"],
+            "reconcile_required",
+            "{variant}"
+        );
+    }
+}
+
+#[test]
 fn task_context_unknown_execution_requires_reconciliation_even_after_a_read() {
     let (mut summary, mut event) = fixture();
     event.effect_evidence = Some(crate::model::ToolEffectEventEvidence {
