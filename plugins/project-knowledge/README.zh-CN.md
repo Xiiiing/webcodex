@@ -28,8 +28,8 @@ python3 -B -m unittest discover -s plugins/project-knowledge -v
 测试包含真实子进程的初始化、工具发现、索引/检索/读取和 EOF 前交互式刷新，还覆盖
 FTS5 缺失、过期/删除来源、目录与根替换、敏感/二进制内容、结果边界和失败重建后旧索引
 保留。它们不宣称验证了在线 Runner 准入或 `plugin_tool` 权限与 binding。
-回归还覆盖达到文件上限的长标点来源和损坏的缓存 metadata；metadata 非法时返回已知
-重建错误，不会终止 provider。
+回归还覆盖达到文件上限的长标点来源、损坏的缓存 metadata 和非法缓存行号。
+metadata 或行号非法时返回已知重建错误，不会终止 provider，也不会声称错误的来源范围。
 
 构建 dogfood Server/Runner 后，运行独立的真实 MCP → Server → WebSocket Runner →
 原生 provider smoke：

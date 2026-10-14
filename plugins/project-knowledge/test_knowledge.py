@@ -136,6 +136,19 @@ class KnowledgeTests(Fixture):
         self.assertIn("def parseHTTPRequest", hit["text"])
         self.assertNotIn("fabricated", hit["text"])
 
+    def test_corrupt_chunk_ranges_are_rejected_before_source_projection(self):
+        self.provider.index()
+        for first, last in [("invalid", 2), (1, "invalid"), (0, 2), (-1, 2),
+                            (2, 1), (1, 999), (1.5, 2), (1, 1.5)]:
+            with self.subTest(first=first, last=last):
+                with sqlite3.connect(self.provider.database) as connection:
+                    connection.execute("UPDATE chunks SET start_line=?, end_line=? WHERE path='src/model.py'",
+                                       (first, last))
+                with self.assertRaisesRegex(knowledge.KnowledgeError, "source ranges; rebuild"):
+                    self.provider.search("parseHTTPRequest")
+        self.provider.index()
+        self.assertEqual(self.provider.search("parseHTTPRequest")["hits"][0]["start_line"], 1)
+
     def test_corrupt_metadata_is_a_known_rebuildable_failure(self):
         coverage = self.provider.index()["coverage"]
         malformed = [None, "[]", "null", "{}", '{"format_version":1}',
@@ -364,6 +377,24 @@ class NativeProtocolTests(Fixture):
                     self.assertEqual(response["result"]["content"][0]["text"],
                                      "Derived index is unavailable; rebuild the index.")
                 self.assertTrue(responses[-1]["result"]["structuredContent"]["indexed"])
+
+    def test_corrupt_chunk_ranges_do_not_terminate_protocol(self):
+        provider = knowledge.Knowledge(self.root, self.base / "protocol-cache" / "webcodex-project-knowledge")
+        provider.initialize()
+        provider.index()
+        for first, last in [("invalid", 2), (0, 2), (1, 999)]:
+            with self.subTest(first=first, last=last):
+                with sqlite3.connect(provider.database) as connection:
+                    connection.execute("UPDATE chunks SET start_line=?, end_line=? WHERE path='src/model.py'",
+                                       (first, last))
+                messages = [rpc("initialize", protocolVersion="webcodex-plugin-v1"),
+                            call("search", query="parseHTTPRequest"), call("index"),
+                            call("search", query="parseHTTPRequest")]
+                responses = self.run_wire(b"".join(frame(request) for request in messages))
+                self.assertTrue(responses[1]["result"]["isError"])
+                self.assertIn("source ranges; rebuild", responses[1]["result"]["content"][0]["text"])
+                hit = responses[-1]["result"]["structuredContent"]["hits"][0]
+                self.assertEqual((hit["start_line"], hit["end_line"]), (1, 2))
 
     def test_initialize_catalog_index_search_and_read_real_protocol(self):
         messages = [rpc("initialize", protocolVersion="webcodex-plugin-v1"), rpc("tools/list"), call("status"), call("index"), call("search", query="项目知识"), call("search", query="parseHTTPRequest")]

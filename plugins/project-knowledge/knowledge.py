@@ -430,7 +430,7 @@ class Knowledge:
             connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
             match = " OR ".join('"' + term.replace('"', '""') + '"' for term in query_terms)
             rows = connection.execute(
-                "SELECT c.*, s.source_hash, bm25(search) AS rank FROM search JOIN chunks c ON c.id = search.rowid JOIN sources s ON s.path = c.path WHERE search MATCH ? ORDER BY rank, c.path, c.start_line LIMIT ?",
+                "SELECT c.path, c.start_line, c.end_line, s.source_hash, bm25(search) AS rank FROM search JOIN chunks c ON c.id = search.rowid JOIN sources s ON s.path = c.path WHERE search MATCH ? ORDER BY rank, c.path, c.start_line LIMIT ?",
                 (match, MAX_RESULTS * 4),
             ).fetchall()
             result = {"query": query, "hits": [], "stale_candidates_omitted": 0, "results_truncated": len(rows) == MAX_RESULTS * 4, "coverage": coverage}
@@ -449,10 +449,20 @@ class Knowledge:
                 if verified[path] is None:
                     result["stale_candidates_omitted"] += 1
                     continue
-                hit = {key: row[key] for key in ("path", "start_line", "end_line", "text", "source_hash")}
-                # Cache ranks and line coordinates are derived hints. Return
-                # current bytes, never cached text presented as current content.
-                hit["text"] = "".join(verified[path].splitlines(keepends=True)[row["start_line"] - 1:row["end_line"]])
+                # SQLite affinity does not guarantee integer coordinates. A
+                # corrupt hint must not fabricate provenance or stop the provider.
+                lines = verified[path].splitlines(keepends=True)
+                first, last = row["start_line"], row["end_line"]
+                if (type(first) is not int or type(last) is not int
+                        or not 1 <= first <= last <= len(lines)
+                        or last - first + 1 > CHUNK_LINES):
+                    raise KnowledgeError("Derived index has invalid source ranges; rebuild the index.")
+                excerpt = "".join(lines[first - 1:last])
+                if len(excerpt.encode("utf-8")) > CHUNK_BYTES:
+                    raise KnowledgeError("Derived index has invalid source ranges; rebuild the index.")
+                # Return only verified current bytes, never the cached text column.
+                hit = {key: row[key] for key in ("path", "start_line", "end_line", "source_hash")}
+                hit["text"] = excerpt
                 hit.update(index_revision=coverage["revision"], observed_revision=revision)
                 result["hits"].append(hit)
                 if len(result["hits"]) > limit or encoded_size(result) > MAX_RESULT_BYTES - 512:
