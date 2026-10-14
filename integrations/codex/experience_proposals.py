@@ -259,6 +259,30 @@ def receipt_for(tool, params, output):
     return {k: output[k] for k in ("path", "sha256", "execution_state", "state_changed")}
 
 
+def validate_saved_receipt(config, candidate, receipt):
+    """Validate retained evidence without replaying effects or requiring a current target."""
+    dest, output = candidate["destination"], receipt["receipt"]
+    if dest["kind"] == "memory":
+        valid = (receipt["tool"] == "set_memory"
+                 and set(output) == {"project", "memory_key", "memory_id", "revision", "created", "state_changed"}
+                 and output.get("project") == config["project"]
+                 and output.get("memory_key") == dest["memory_key"]
+                 and isinstance(output.get("memory_id"), str)
+                 and re.fullmatch(r"wc_mem_[A-Za-z0-9_-]{16}", output["memory_id"])
+                 and isinstance(output.get("revision"), str)
+                 and re.fullmatch(r"wc_memrev_[A-Za-z0-9_-]{43}", output["revision"])
+                 and type(output.get("created")) is bool
+                 and type(output.get("state_changed")) is bool)
+    else:
+        valid = (receipt["tool"] == "write_project_file"
+                 and set(output) == {"path", "sha256", "execution_state", "state_changed"}
+                 and output.get("path") == dest["path"]
+                 and output.get("sha256") == hashlib.sha256(guidance_content(candidate).encode()).hexdigest()
+                 and output.get("execution_state") == "completed"
+                 and type(output.get("state_changed")) is bool)
+    require(valid, "approval_state_mismatch")
+
+
 def association(config):
     return fingerprint({k: config[k] for k in (
         "server_url", "project", "project_root", "workflow_session_id", "local_session_id")})
@@ -280,7 +304,13 @@ def approve(api, message_id, version, destination_hash):
         attempt_name, receipt_name = key + "-attempt.json", key + "-receipt.json"
         if attempt_name in names:
             previous = state.read_json(attempt_name, 32768)
-            require(isinstance(previous, dict) and previous.get("binding") == binding, "approval_state_mismatch")
+            require(isinstance(previous, dict)
+                    and set(previous) == {"binding", "approval_message_id", "tool"}
+                    and previous.get("binding") == binding
+                    and isinstance(previous.get("approval_message_id"), str)
+                    and MESSAGE_ID.fullmatch(previous["approval_message_id"])
+                    and previous.get("tool") == ("set_memory" if candidate["destination"]["kind"] == "memory"
+                                                  else "write_project_file"), "approval_state_mismatch")
             if receipt_name in names:
                 receipt = state.read_json(receipt_name, 32768)
                 require(isinstance(receipt, dict)
@@ -290,6 +320,7 @@ def approve(api, message_id, version, destination_hash):
                         and receipt.get("tool") == previous.get("tool")
                         and isinstance(receipt.get("receipt"), dict),
                         "approval_state_mismatch")
+                validate_saved_receipt(api.config, candidate, receipt)
                 note_name = key + "-note.json"
                 if note_name in names:
                     note = state.read_json(note_name, 32768)

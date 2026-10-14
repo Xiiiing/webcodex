@@ -214,6 +214,45 @@ class ExperienceProposalsTests(unittest.TestCase):
             self.approve(saved)
         self.assertEqual(self.mutation_count(), 1)
 
+    def test_corrupt_nested_memory_receipt_cannot_report_already_recorded(self):
+        saved = self.propose()
+        self.approve(saved)
+        path = next(Path(self.config["state_dir"]).glob("experience-*-receipt.json"))
+        original = json.loads(path.read_text())
+        invalid = [{}, dict(original["receipt"], project="agent:foreign:project"),
+                   dict(original["receipt"], memory_key="another-key"),
+                   dict(original["receipt"], memory_id="invalid"),
+                   dict(original["receipt"], revision="invalid"),
+                   dict(original["receipt"], state_changed=1),
+                   dict(original["receipt"], created=None)]
+        for receipt in invalid:
+            with self.subTest(receipt=receipt):
+                path.write_text(json.dumps(dict(original, receipt=receipt)))
+                with self.assertRaisesRegex(AdapterError, "approval_state_mismatch"):
+                    self.approve(saved)
+        path.write_text(json.dumps(original))
+        self.assertEqual(self.approve(saved)["status"], "already_recorded")
+        self.assertEqual(self.mutation_count(), 1)
+
+    def test_corrupt_nested_skill_receipt_cannot_report_already_recorded(self):
+        self.skill()
+        saved = self.propose()
+        self.approve(saved)
+        path = next(Path(self.config["state_dir"]).glob("experience-*-receipt.json"))
+        original = json.loads(path.read_text())
+        invalid = [{}, dict(original["receipt"], path=".agents/skills/other/SKILL.md"),
+                   dict(original["receipt"], sha256="0" * 64),
+                   dict(original["receipt"], execution_state="pending"),
+                   dict(original["receipt"], state_changed=1)]
+        for receipt in invalid:
+            with self.subTest(receipt=receipt):
+                path.write_text(json.dumps(dict(original, receipt=receipt)))
+                with self.assertRaisesRegex(AdapterError, "approval_state_mismatch"):
+                    self.approve(saved)
+        path.write_text(json.dumps(original))
+        self.assertEqual(self.approve(saved)["status"], "already_recorded")
+        self.assertEqual(self.mutation_count(), 1)
+
     def test_memory_cas_update_passes_exact_revision(self):
         revision = "wc_memrev_" + "o" * 43
         self.memories["experience-fixture"] = {"project": self.config["project"],
