@@ -3,6 +3,7 @@
 use super::kernel::{
     check_runtime_tool_scope, HostFileImportTrust, ToolCallContext, ToolCallRequest, ToolTransport,
 };
+use super::permissions::{add_permission_to_result, permission_execution_denied_result};
 use super::{ToolResult, ToolRuntime};
 use crate::auth::{AuthContext, AuthKind};
 use serde_json::{json, Map, Value};
@@ -82,12 +83,25 @@ impl ToolRuntime {
             Ok(config) => config,
             Err(message) => return error("invalid_instance_name", &message),
         };
-        let override_name = match db.set_workbench_display_name(&principal, display_name.as_deref())
-        {
-            Ok(name) => name,
-            Err(store_error) => return error(store_error.code(), store_error.message()),
+        // This app-only adapter does not enter the canonical ToolCall dispatcher.
+        // Reuse its authority evaluator before persisting either a name or a clear.
+        let permission = self.permission_evaluator.evaluate_resolved_required(
+            "update_workbench_settings",
+            None,
+            "write",
+        );
+        if matches!(permission.status.as_str(), "denied" | "pending") {
+            let mut result = permission_execution_denied_result(&permission);
+            add_permission_to_result(&mut result, &permission);
+            result.output["state_changed"] = json!(false);
+            return result;
+        }
+        let mut result = match db.set_workbench_display_name(&principal, display_name.as_deref()) {
+            Ok(name) => ToolResult::ok(settings_value(config.instance_name, name)),
+            Err(store_error) => error(store_error.code(), store_error.message()),
         };
-        ToolResult::ok(settings_value(config.instance_name, override_name))
+        add_permission_to_result(&mut result, &permission);
+        result
     }
 
     /// Aggregate a bounded Workbench view from canonical, scope-checked reads.

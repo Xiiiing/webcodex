@@ -103,6 +103,65 @@ async fn workbench_upgrade_personal_titles_are_private_and_clearable_through_mcp
 }
 
 #[tokio::test]
+async fn workbench_settings_restricted_authority_denies_writes_but_keeps_reads() {
+    use crate::tool_runtime::permissions::{AuthorityMode, PermissionEvaluator};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let temp = tempfile::tempdir().unwrap();
+    let db = Arc::new(crate::Database::open(&temp.path().join("restricted-workbench.db")).unwrap());
+    let evaluations = Arc::new(AtomicUsize::new(0));
+    let runtime = ToolRuntime::new_for_tests()
+        .with_communication_database(db.clone())
+        .with_permission_evaluator(
+            PermissionEvaluator::with_mode(AuthorityMode::Restricted)
+                .with_eval_counter(evaluations.clone()),
+        );
+    let owner = auth("restricted-owner", true);
+    for name in [json!("Must not persist"), Value::Null] {
+        let denied = request(
+            &runtime,
+            Some(&owner),
+            "tools/call",
+            json!({"name":"update_workbench_settings","arguments":{"display_name":name}}),
+            true,
+        )
+        .await;
+        let result = &denied["result"]["structuredContent"];
+        assert_eq!(result["success"], false, "{denied}");
+        assert_eq!(result["output"]["error_kind"], "permission_denied");
+        assert_eq!(result["output"]["permission"]["status"], "denied");
+        assert_eq!(result["output"]["state_changed"], false);
+    }
+    assert_eq!(evaluations.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        db.conn_for_tests()
+            .query_row("SELECT COUNT(*) FROM workbench_preferences", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0,
+    );
+    let read = request(
+        &runtime,
+        Some(&owner),
+        "tools/call",
+        json!({"name":"read_workbench_state","arguments":{}}),
+        true,
+    )
+    .await;
+    assert_eq!(
+        read["result"]["structuredContent"]["success"], true,
+        "{read}"
+    );
+    assert_eq!(
+        evaluations.load(Ordering::SeqCst),
+        2,
+        "reads must not require approval"
+    );
+}
+
+#[tokio::test]
 async fn workbench_upgrade_scope_and_actual_runner_call_match_descriptors() {
     let runtime = ToolRuntime::new_for_tests();
     let reader = auth("reader", false);
