@@ -57,7 +57,7 @@ Goal Plan presentation and Wake creation are never part of `prepare_goal_workflo
 success. The Agent may remain another Coordinator's Worker/Task assignee at the same
 time. Do not infer identity from Window co-location or create a second Goal-only Agent.
 
-The Goal Plan resource is solely `ui://webcodex/goal-plan/v7`, wire version 3. It
+The Goal Plan resource is solely `ui://webcodex/goal-plan/v9`, wire version 3. It
 renders step counts, current step, bounded milestones, last checkpoint, activity,
 and a bounded read-only continuity projection. Continuity keeps production Host
 carrier readiness and the exact current Goal-stall Wake lifecycle separate from
@@ -93,7 +93,7 @@ exact consume, compact source-specific recovery messages, and no Task spawning.
 The Goal Plan JavaScript contract tests verify one exact `sync_goal_plan` App RPC,
 serial adaptive polling, hidden/visible cadence, teardown, and no conditional second
 RPC. Server idempotency remains the durable duplicate-prevention boundary. Sync
-calls carry only `goal_id`; no browser timestamp, Session, controller, Window
+calls carry `goal_id` plus an optional adapter-stripped diagnostic `app_call_id`; no browser timestamp, Session, controller, Window
 selector or claimed coverage is trusted. There is no Goal Plan `ui/message` path.
 Terminal state stops polling.
 
@@ -200,3 +200,5 @@ it makes no source-code validation claim. Four negative tool results are expecte
 changed replay, stale revision, completed-step removal and new revision after
 terminal completion. It does not establish real ChatGPT model acceptance or
 authorize deployment.
+
+Optional bounded timing diagnosis and the ChatGPT acceptance scenario are described in [MCP diagnostics](../MCP.md#goal-and-agent-continuation-timing-diagnostics).
