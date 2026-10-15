@@ -1283,3 +1283,91 @@ fn goal_completion_conditions_omission_keeps_pre_extension_replay_hash() {
         .replayed
     );
 }
+
+#[test]
+fn completion_conditions_and_plan_revision_preserve_each_others_history_and_progress() {
+    let (_temp, db, owner) = fixture();
+    let created = db
+        .create_goal_at(&owner, input("cross-operation"), T0)
+        .unwrap()
+        .goal;
+    let id = &created.summary.goal_id;
+    let checkpointed = db
+        .checkpoint_goal_at(
+            &owner,
+            id,
+            1,
+            checkpoint(&["inspect"], Some("implement"), "Inspected"),
+            "cross-checkpoint",
+            T0 + 1,
+        )
+        .unwrap()
+        .goal;
+    let conditions = vec!["Review and validation required".to_string()];
+    let edited = db
+        .update_goal_at(
+            &owner,
+            id,
+            2,
+            GoalPatch {
+                completion_conditions: Some(conditions.clone()),
+                ..Default::default()
+            },
+            "cross-conditions",
+            T0 + 2,
+        )
+        .unwrap()
+        .goal;
+    assert_eq!(edited.plan.steps, checkpointed.plan.steps);
+    let revised = db
+        .revise_goal_plan_at(
+            &owner,
+            id,
+            3,
+            replacement(
+                &[
+                    ("inspect", "inspect"),
+                    ("implement", "Implement safely"),
+                    ("new", "New step"),
+                ],
+                "Revise unfinished work",
+            ),
+            "cross-revision",
+            T0 + 3,
+        )
+        .unwrap()
+        .goal;
+    assert_eq!(revised.plan.completion_conditions, conditions);
+    assert_eq!(revised.plan.steps[0], checkpointed.plan.steps[0]);
+    assert_eq!(revised.plan_history.total_count, 1);
+    assert_eq!(revised.plan_history.revisions[0].plan, edited.plan);
+    assert_eq!(revised.plan_history.revisions[0].revision, 3);
+    let after = db
+        .update_goal_at(
+            &owner,
+            id,
+            4,
+            GoalPatch {
+                completion_conditions: Some(vec!["Final validation".to_string()]),
+                ..Default::default()
+            },
+            "cross-after-revision",
+            T0 + 4,
+        )
+        .unwrap()
+        .goal;
+    assert_eq!(after.plan_history, revised.plan_history);
+    assert_eq!(after.plan.steps, revised.plan.steps);
+    assert_eq!(after.plan.completion_conditions, ["Final validation"]);
+    assert_eq!(after.summary.revision, 5);
+    assert!(db
+        .revise_goal_plan_at(
+            &owner,
+            id,
+            3,
+            replacement(&[("inspect", "inspect")], "Stale revision"),
+            "cross-stale",
+            T0 + 5,
+        )
+        .is_err());
+}
