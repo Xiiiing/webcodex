@@ -10,6 +10,7 @@ fn existing_launch_wire_shape_and_optional_mode_roundtrip_are_compatible() {
     let launch: BrowserActToolCall = serde_json::from_value(managed.clone()).unwrap();
     assert_eq!(serde_json::to_value(launch).unwrap(), managed);
     for invalid in [
+        json!({"action":"launch","client_id":"mini","session_id":"wc_sess_accessor"}),
         json!({"action":"launch","client_id":"mini","mode":"external"}),
         json!({"action":"attach","client_id":"mini","attachment_id":"attachment_fixture","endpoint":"ws://127.0.0.1:9222"}),
         json!({"action":"launch","client_id":"mini","profile_path":"/user/Chrome/Default"}),
