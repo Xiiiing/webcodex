@@ -164,11 +164,18 @@ sources. Git-tracked status alone does not imply safety or completeness.
   and recognizable key/token/password patterns are excluded. These conservative
   heuristics can omit benign text and **cannot identify every secret**. Review
   tracked content before enabling a source-retrieval provider for a caller.
-- Index rebuilds write a new private SQLite file and publish it with atomic
-  replacement; interrupted/failed builds leave the previous index intact. An
-  index can cover only part of the eligible source set when a limit is reached;
-  inspect coverage. There are no automatic Project, Git, Memory, or guidance
-  writes, external model calls, watchers, or configuration edits.
+- Index rebuilds write a private, disposable SQLite file and publish it with
+  atomic replacement. **Reaching the 20-second budget publishes a partial index**
+  containing only completed, committed source files (`stop_reason=time_limit`),
+  rather than randomly discarding first-use progress. The build checkpoints the
+  first full file, at most every 512 further completed files, and shortly before
+  expiry. A SQLite progress interrupt may roll back the current uncommitted batch;
+  those files are counted as `unprocessed_files`, never as searchable sources.
+  Git, SQLite, cache, or other **non-budget failures** discard the temporary build
+  and leave the previous published index intact. Coverage must be inspected:
+  `indexed=true` does **not** mean full or current corpus coverage. Rebuilding
+  starts a new bounded scan, not an incremental resume. No automatic Project,
+  Git, Memory, or guidance writes, external model calls, watchers, or config edits.
 
 The Runner remains authoritative for schema admission, permissions, exact
 provider bindings, process lifecycle, deadlines, result validation, and uncertain

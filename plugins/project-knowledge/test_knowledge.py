@@ -258,7 +258,7 @@ class KnowledgeTests(Fixture):
         self.assertTrue(self.provider.search("parseHTTPRequest")["hits"])
         self.assertFalse(list(self.provider.cache.glob("build-*")))
 
-    def test_index_work_budget_and_git_output_bound_retain_previous_cache(self):
+    def test_mid_file_deadline_publishes_only_complete_sources_with_truthful_coverage(self):
         self.provider.index()
         before = self.provider.database.read_bytes()
         actual_time = knowledge.time.monotonic
@@ -267,14 +267,108 @@ class KnowledgeTests(Fixture):
 
         def delayed_chunks(text):
             for chunk in actual_chunks(text):
-                elapsed[0] = knowledge.MAX_INDEX_SECONDS + 1
+                if "parseHTTPRequest" in text:
+                    elapsed[0] = knowledge.MAX_INDEX_SECONDS + 1
                 yield chunk
 
         with patch.object(knowledge.time, "monotonic", side_effect=lambda: actual_time() + elapsed[0]):
             with patch.object(knowledge, "chunk_text", side_effect=delayed_chunks):
-                with self.assertRaisesRegex(knowledge.KnowledgeError, "work budget"):
-                    self.provider.index()
+                result = self.provider.index()
+        coverage = result["coverage"]
+        self.assertEqual(coverage["stop_reason"], "time_limit")
+        self.assertEqual((coverage["eligible_files"], coverage["indexed_files"],
+                          coverage["skipped_files"], coverage["unprocessed_files"]), (2, 1, 0, 1))
+        self.assertNotEqual(self.provider.database.read_bytes(), before)
+        self.assertEqual(self.provider.status()["coverage"], coverage)
+        with sqlite3.connect(self.provider.database) as database:
+            self.assertEqual(database.execute("SELECT path FROM sources").fetchall(), [("docs/guide.md",)])
+            self.assertEqual(database.execute("SELECT DISTINCT path FROM chunks").fetchall(), [("docs/guide.md",)])
+        hit = self.provider.search("中文检索")["hits"][0]
+        self.assertEqual(hit["path"], "docs/guide.md")
+        self.assertEqual(self.provider.read(hit["path"], hit["source_hash"],
+                                            hit["start_line"], hit["end_line"])["text"], hit["text"])
+        self.assertEqual(self.provider.search("parseHTTPRequest")["hits"], [])
+        self.assertFalse(list(self.provider.cache.glob("build-*")))
+
+    def test_source_deadline_is_not_misreported_as_skipped(self):
+        original_source = self.provider.source
+        original_time = knowledge.time.monotonic
+        elapsed = [0]
+
+        def expire_during_source(path, deadline=None):
+            if path == "src/model.py":
+                elapsed[0] = knowledge.MAX_INDEX_SECONDS + 1
+            return original_source(path, deadline)
+
+        with patch.object(knowledge.time, "monotonic", side_effect=lambda: original_time() + elapsed[0]):
+            with patch.object(self.provider, "source", side_effect=expire_during_source):
+                coverage = self.provider.index()["coverage"]
+        self.assertEqual(coverage["stop_reason"], "time_limit")
+        self.assertEqual((coverage["indexed_files"], coverage["skipped_files"],
+                          coverage["unprocessed_files"]), (1, 0, 1))
+        self.assertTrue(self.provider.search("中文检索")["hits"])
+
+    def test_sqlite_progress_interrupt_does_not_lose_prior_committed_files(self):
+        self.write("early.py", "def earlyneedle(): pass\n")
+        self.write("later.py", "def laterneedle(): pass\n")
+        self.write("middle.py", "def middleneedle(): pass\n")
+        self.git("add", "early.py", "later.py", "middle.py")
+        self.provider.index()
+        original_time = knowledge.time.monotonic
+        original_terms = knowledge.terms
+        original_connect = knowledge.sqlite3.connect
+        elapsed = [0]
+
+        class AggressiveProgress(sqlite3.Connection):
+            def set_progress_handler(self, callback, instructions):
+                return super().set_progress_handler(callback, 1 if callback is not None else 0)
+
+        def trigger_after_time_check(text):
+            if "parseHTTPRequest" in text:
+                elapsed[0] = knowledge.MAX_INDEX_SECONDS + 1
+            return original_terms(text)
+
+        def connect(*args, **kwargs):
+            return original_connect(*args, factory=AggressiveProgress, **kwargs)
+
+        with patch.object(knowledge, "INDEX_CHECKPOINT_FILES", 2):
+            with patch.object(knowledge.time, "monotonic", side_effect=lambda: original_time() + elapsed[0]):
+                with patch.object(knowledge.sqlite3, "connect", side_effect=connect):
+                    with patch.object(knowledge, "terms", side_effect=trigger_after_time_check):
+                        coverage = self.provider.index()["coverage"]
+        self.assertEqual(coverage["stop_reason"], "time_limit")
+        self.assertEqual((coverage["indexed_files"], coverage["skipped_files"],
+                          coverage["unprocessed_files"]), (3, 0, 2))
+        with sqlite3.connect(self.provider.database) as database:
+            self.assertEqual(database.execute("SELECT path FROM sources ORDER BY path").fetchall(),
+                             [("docs/guide.md",), ("early.py",), ("later.py",)])
+        self.assertTrue(self.provider.search("中文检索")["hits"])
+        self.assertTrue(self.provider.search("earlyneedle")["hits"])
+        self.assertTrue(self.provider.search("laterneedle")["hits"])
+        self.assertFalse(self.provider.search("middleneedle")["hits"])
+        self.assertFalse(self.provider.search("parseHTTPRequest")["hits"])
+        self.assertFalse(list(self.provider.cache.glob("build-*")))
+
+    def test_genuine_sqlite_failure_after_first_checkpoint_retains_published_cache(self):
+        self.provider.index()
+        before = self.provider.database.read_bytes()
+        original_chunks = knowledge.chunk_text
+
+        def fail_second_file(text):
+            if "parseHTTPRequest" in text:
+                raise sqlite3.OperationalError("opaque build failure")
+            yield from original_chunks(text)
+
+        with patch.object(knowledge, "chunk_text", side_effect=fail_second_file):
+            with self.assertRaisesRegex(knowledge.KnowledgeError, "previous complete index"):
+                self.provider.index()
         self.assertEqual(self.provider.database.read_bytes(), before)
+        self.assertTrue(self.provider.search("parseHTTPRequest")["hits"])
+        self.assertFalse(list(self.provider.cache.glob("build-*")))
+
+    def test_git_output_bound_retain_previous_cache(self):
+        self.provider.index()
+        before = self.provider.database.read_bytes()
         with patch.object(knowledge, "MAX_GIT_BYTES", 64):
             with self.assertRaisesRegex(knowledge.KnowledgeError, "Git output limit"):
                 self.provider.index()

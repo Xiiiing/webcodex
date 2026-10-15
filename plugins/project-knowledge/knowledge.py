@@ -18,6 +18,8 @@ MAX_FILES = 4096
 MAX_FILE_BYTES = 256 * 1024
 MAX_CORPUS_BYTES = 64 * 1024 * 1024
 MAX_INDEX_SECONDS = 20
+INDEX_CHECKPOINT_FILES = 512  # At most this many committed-work candidates per batch.
+INDEX_FINAL_CHECKPOINT_MARGIN = 1.0  # Publish a checkpoint shortly before expiry.
 MAX_GIT_BYTES = 8 * 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024
 MAX_PATH_CHARS = 1024
@@ -65,6 +67,10 @@ def valid_metadata(value):
 
 class KnowledgeError(Exception):
     """Known local application failure with a fixed, safe message."""
+
+
+class IndexBudgetExpired(Exception):
+    """Internal signal: stop the current file, publish prior complete files."""
 
 
 def digest(data):
@@ -351,12 +357,21 @@ class Knowledge:
         connection = None
         try:
             connection = sqlite3.connect(temporary)
-            connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
+            # The build database is private and disposable until fsync + atomic
+            # publication. Checkpoint commits retain complete-file progress if
+            # SQLite interrupts and rolls back an entire in-flight transaction.
+            connection.execute("PRAGMA journal_mode=MEMORY")
+            connection.execute("PRAGMA synchronous=OFF")
+            progress = lambda: int(time.monotonic() >= deadline)
+            connection.set_progress_handler(progress, 10000)
             connection.execute("CREATE TABLE metadata(value TEXT NOT NULL)")
             connection.execute("CREATE TABLE sources(path TEXT PRIMARY KEY, source_hash TEXT NOT NULL)")
             connection.execute("CREATE TABLE chunks(id INTEGER PRIMARY KEY, path TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, text TEXT NOT NULL)")
             connection.execute("CREATE VIRTUAL TABLE search USING fts5(tokens)")
             count = size = skipped = chunks = oversized_lines = 0
+            checkpoint = (count, size, chunks, oversized_lines)
+            final_checkpointed = False
+            connection.execute("BEGIN")
             stop_reason = "complete"
             for path in paths:
                 if time.monotonic() >= deadline:
@@ -369,24 +384,57 @@ class Knowledge:
                     data, text = self.source(path, deadline)
                 except KnowledgeError:
                     self.require_initialized()
+                    if time.monotonic() >= deadline:
+                        stop_reason = "time_limit"
+                        break  # An unfinished read is unprocessed, not skipped.
                     skipped += 1
                     continue
                 if size + len(data) > MAX_CORPUS_BYTES:
                     stop_reason = "corpus_limit"
                     break
-                connection.execute("INSERT INTO sources VALUES (?, ?)", (path, digest(data)))
-                oversized_lines += sum(len(line.encode("utf-8")) > CHUNK_BYTES for line in text.splitlines(keepends=True))
-                for first, last, chunk in chunk_text(text):
+                file_chunks = 0
+                file_oversized = sum(len(line.encode("utf-8")) > CHUNK_BYTES for line in text.splitlines(keepends=True))
+                try:
+                    # Batch inserts avoid per-source FTS5 SAVEPOINT flushes.
+                    # Only full-file checkpoint commits are publishable if the
+                    # current batch must be rolled back at its time limit.
+                    connection.execute("INSERT INTO sources VALUES (?, ?)", (path, digest(data)))
+                    for first, last, chunk in chunk_text(text):
+                        if time.monotonic() >= deadline:
+                            raise IndexBudgetExpired()
+                        tokens = " ".join(terms(path + "\n" + chunk))
+                        if not tokens:
+                            continue
+                        file_chunks += 1
+                        rowid = chunks + file_chunks
+                        connection.execute("INSERT INTO chunks VALUES (?, ?, ?, ?, ?)", (rowid, path, first, last, chunk))
+                        connection.execute("INSERT INTO search(rowid, tokens) VALUES (?, ?)", (rowid, tokens))
                     if time.monotonic() >= deadline:
-                        raise KnowledgeError("Index rebuild exceeded its local work budget; any previous complete index is retained.")
-                    tokens = " ".join(terms(path + "\n" + chunk))
-                    if not tokens:
-                        continue
-                    chunks += 1
-                    connection.execute("INSERT INTO chunks VALUES (?, ?, ?, ?, ?)", (chunks, path, first, last, chunk))
-                    connection.execute("INSERT INTO search(rowid, tokens) VALUES (?, ?)", (chunks, tokens))
+                        raise IndexBudgetExpired()
+                except (IndexBudgetExpired, sqlite3.Error) as error:
+                    connection.set_progress_handler(None, 0)
+                    # SQLITE_INTERRUPT can roll back the entire in-flight
+                    # transaction. Never report its uncommitted full files.
+                    connection.rollback()
+                    if isinstance(error, IndexBudgetExpired) or (str(error) == "interrupted" and time.monotonic() >= deadline):
+                        count, size, chunks, oversized_lines = checkpoint
+                        stop_reason = "time_limit"
+                        break
+                    raise  # Genuine DB errors retain the old published index.
+                finally:
+                    connection.set_progress_handler(progress, 10000)
                 count += 1
                 size += len(data)
+                chunks += file_chunks
+                oversized_lines += file_oversized
+                near_deadline = time.monotonic() >= deadline - INDEX_FINAL_CHECKPOINT_MARGIN
+                if count == 1 or count - checkpoint[0] >= INDEX_CHECKPOINT_FILES or (near_deadline and not final_checkpointed):
+                    connection.set_progress_handler(None, 0)
+                    connection.commit()
+                    checkpoint = (count, size, chunks, oversized_lines)
+                    final_checkpointed = final_checkpointed or near_deadline
+                    connection.execute("BEGIN")
+                    connection.set_progress_handler(progress, 10000)
             connection.set_progress_handler(None, 0)
             metadata = {
                 "format_version": FORMAT_VERSION, "revision": revision,
