@@ -12,11 +12,24 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from e2e_generic_agent_ws import GenericSmoke, SENTINEL, EXTERNAL_SENTINEL, binary_fixtures, totals, GenericFixture, GENERIC_CASES
+from e2e_generic_agent_ws import GenericSmoke, SENTINEL, EXTERNAL_SENTINEL, binary_fixtures, totals, GenericFixture, GENERIC_CASES, selected_smoke_cases
 import agent_loop_report as report
 
 
 class GenericAcceptanceTests(unittest.TestCase):
+    def test_merge_preserves_both_generic_recovery_and_goal_revision_acceptance_modes(self):
+        smoke = Mock()
+        ordinary = selected_smoke_cases(smoke, goal_plan_only=False)
+        goal = selected_smoke_cases(smoke, goal_plan_only=True)
+        self.assertEqual([name for name, _ in ordinary], [
+            "entry_read_recovery", "mixed_files_conflict", "encoded_csv",
+            "failure_repair_log_pressure", "pending_independent_join",
+            "code_repair_review", "stale_read_revision",
+        ])
+        self.assertEqual([name for name, _ in goal], ["goal_plan_revision"])
+        self.assertIs(ordinary[0][1], smoke.entry_read_recovery)
+        self.assertIs(goal[0][1], smoke.goal_plan_revision)
+
     def test_stale_edit_checks_disk_bytes_before_reread_and_after_recovery(self):
         for profile in ("baseline", "upgraded"):
             for corruption in (None, "rejected", "recovered"):

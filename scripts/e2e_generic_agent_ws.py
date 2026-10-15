@@ -678,6 +678,21 @@ class GenericSmoke(InteractiveSmoke):
 
 
 
+def selected_smoke_cases(smoke, *, goal_plan_only):
+    """Keep the independent Goal acceptance and ordinary recovery lanes distinct."""
+    if goal_plan_only:
+        return [("goal_plan_revision", smoke.goal_plan_revision)]
+    return [
+        ("entry_read_recovery", smoke.entry_read_recovery),
+        ("mixed_files_conflict", smoke.files),
+        ("encoded_csv", smoke.data),
+        ("failure_repair_log_pressure", smoke.failure_logs),
+        ("pending_independent_join", smoke.pending),
+        ("code_repair_review", smoke.coding),
+        ("stale_read_revision", smoke.stale_edit),
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/dogfood")
@@ -711,11 +726,7 @@ def main():
         smoke = GenericSmoke(args, Path(directory).resolve())
         try:
             smoke.prepare()
-            cases = [("goal_plan_revision", smoke.goal_plan_revision)] if args.goal_plan_only else [
-                ("entry_read_recovery", smoke.entry_read_recovery),
-                ("mixed_files_conflict", smoke.files), ("encoded_csv", smoke.data),
-                    ("failure_repair_log_pressure", smoke.failure_logs), ("pending_independent_join", smoke.pending),
-                    ("code_repair_review", smoke.coding), ("stale_read_revision", smoke.stale_edit)]
+            cases = selected_smoke_cases(smoke, goal_plan_only=args.goal_plan_only)
             for name, operation in cases:
                 smoke.case(name, operation)
             if args.profile == "upgraded" and not args.goal_plan_only:
