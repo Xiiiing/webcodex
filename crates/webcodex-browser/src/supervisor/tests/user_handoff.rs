@@ -132,6 +132,34 @@ fn handoff_blocks_domain_effects_and_requires_new_snapshot_after_exact_finish() 
 }
 
 #[test]
+fn handoff_fences_page_close_until_fresh_snapshot_without_blocking_browser_close() {
+    let (supervisor, browser, page) = managed();
+    let hold = begin(&supervisor, &browser);
+    // Closing the page is a Browser effect, not the explicit whole-Browser shutdown.
+    assert_eq!(
+        supervisor.close_page(&browser, &page).unwrap_err().kind,
+        "browser_user_handoff_active"
+    );
+    assert_eq!(supervisor.pages(&browser, 1).unwrap().len(), 1);
+    finish(
+        &supervisor,
+        &browser,
+        hold["handoff_fence"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        supervisor.close_page(&browser, &page).unwrap_err().kind,
+        "browser_snapshot_required"
+    );
+    supervisor
+        .snapshot(&browser, &page, SnapshotMode::Full, 16, 8)
+        .unwrap();
+    supervisor.close_page(&browser, &page).unwrap();
+    assert!(supervisor.pages(&browser, 1).unwrap().is_empty());
+    supervisor.close_browser(&browser).unwrap();
+}
+
+#[test]
 fn handoff_exact_duplicates_never_renew_and_wrong_identity_never_releases() {
     let (supervisor, browser, _) = managed();
     let hold = begin(&supervisor, &browser);

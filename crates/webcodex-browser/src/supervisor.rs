@@ -931,6 +931,9 @@ impl BrowserSupervisor {
             .browsers
             .get_mut(browser_id)
             .ok_or_else(|| stale_browser(browser_id))?;
+        // Closing a page is a Browser effect, unlike explicit Browser teardown.
+        // Do not close the user's manual-work page or bypass post-handoff recovery.
+        runtime.admit_automatic_effect(Some(page_id))?;
         let target_id = runtime.page_target(page_id)?;
         runtime.invalidate_elements_for_page(page_id);
         let result = runtime.backend.close_page(&target_id);
