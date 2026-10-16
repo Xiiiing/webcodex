@@ -80,8 +80,13 @@ completion; `fail`/blocking cannot, and missing outcome fields remain `partial`.
 A baseline without output-receipt support remains readable but cannot qualify
 this CSV proof. The four temporal cases
 retain their actual command, Job, stale-revision and blocking-closeout checks
-and serial-order fences. Independent file-transfer calls may overlap; CSV
-closeout must still follow every recorded task operation.
+and serial-order fences. Independent file-transfer calls may overlap. CSV
+closeout must follow every recorded task operation except the canonical
+`check_workspace_hygiene` observer: its PureRead/project:read contract permits
+post-finish diagnostics. That call remains captured and subject to the same
+root/Session/Project checks. This exception does not allow post-finish execution,
+edits, a second finish or arbitrary observers; outcome and output-hash rules stay
+in force.
 
 The verifier checks private regular files, trace UUIDs, compressed/raw bounds
 and SHA-256 indexes; correlates canonical Audit outcomes and exact scope;

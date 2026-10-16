@@ -229,6 +229,39 @@ class GenericRuntimeProofTests(unittest.TestCase):
         with self.assertRaisesRegex(evidence.EvidenceUnavailable, "unsupported_case_command"):
             evidence._checks("generic_encoded_csv", original)
 
+    def test_csv_post_finish_canonical_read_only_hygiene_is_retained_and_allowed(self):
+        calls = positive_cases()["generic_encoded_csv"]
+        manifest = call("read_tool_manifest", {"tool": "check_workspace_hygiene"}, {}, index=2)
+        hygiene = call("check_workspace_hygiene", {"project": "project"},
+                       {"verdict": {"status": "warn", "blocking": False}}, index=3)
+        self.assertEqual(calls[-1]["output"]["task_outcome"]["status"], "warn")
+        self.assertTrue(all(evidence._checks("generic_encoded_csv", [*calls, manifest, hygiene]).values()))
+        # The exception does not skip the common Project/Session/root checks.
+        root = Path("/tmp/coordinator-fixture")
+        bootstrap = call("work_on_project", {"client_id": "runner", "path": str(root)},
+                         {"session_id": "wc_sess_test", "resolved_project": "project"}, index=-1)
+        evidence._bind_fixture([bootstrap, *calls, manifest, hygiene], root, "wc_sess_test")
+        hygiene["project"] = "other-project"
+        with self.assertRaises(evidence.EvidenceUnavailable):
+            evidence._bind_fixture([bootstrap, *calls, manifest, hygiene], root, "wc_sess_test")
+
+    def test_csv_after_finish_execution_edit_second_finish_and_other_observers_do_not_qualify(self):
+        later_calls = [
+            call("run_script", {"language": "python", "script": "assert True"}, {"exit_code": 0}, index=3),
+            call("run_process", {"executable": "python3", "args": ["-c", "assert True"]}, {"exit_code": 0}, index=3),
+            call("run_shell", {"command": "true"}, {"exit_code": 0}, index=3),
+            call("edit_project_files", {"changes": []}, {}, index=3),
+            call("finish_coding_task", {"outputs": ["merged.csv", "report.json"]}, {}, index=3),
+            call("read_files", {"items": [{"path": "merged.csv"}]}, {}, index=3),
+        ]
+        for later in later_calls:
+            with self.subTest(tool=later["tool"]):
+                try:
+                    checks = evidence._checks("generic_encoded_csv", [*positive_cases()["generic_encoded_csv"], later])
+                except evidence.EvidenceUnavailable:
+                    continue
+                self.assertFalse(all(checks.values()))
+
     def test_csv_structured_applied_create_is_supported_and_dry_run_is_not(self):
         calls = positive_cases()["generic_encoded_csv"]
         edit = call("edit_project_files", {"changes": [
