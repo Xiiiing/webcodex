@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sqlite3
 import re
@@ -34,6 +35,12 @@ class RecordedSmoke(GenericSmoke):
 
 
 def run(bin_dir, source_revision):
+    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    git_env["GIT_NO_LAZY_FETCH"] = "1"
+    subprocess.run(["git", "cat-file", "-e", source_revision + "^{commit}"],
+                   cwd=Path(__file__).resolve().parents[1], env=git_env,
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=10, check=True)
     builds = {}
     for name in ("webcodex-server", "webcodex-runner"):
         version = subprocess.run([str(bin_dir / name), "--version"], stdin=subprocess.DEVNULL,
