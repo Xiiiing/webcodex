@@ -19,11 +19,11 @@ from types import SimpleNamespace
 
 try:
     from scripts import agent_temporal_evidence as temporal, agent_loop_report as report
-    from scripts.e2e_generic_agent_ws import GenericSmoke
+    from scripts.e2e_generic_agent_ws import GenericSmoke, GenericFixture
 except ModuleNotFoundError:
     import agent_temporal_evidence as temporal
     import agent_loop_report as report
-    from e2e_generic_agent_ws import GenericSmoke
+    from e2e_generic_agent_ws import GenericSmoke, GenericFixture
 
 
 class RecordedSmoke(GenericSmoke):
@@ -52,15 +52,18 @@ def run(bin_dir, source_revision):
     if builds["webcodex-server"] != builds["webcodex-runner"]:
         raise AssertionError("fixture Server/Runner build identities differ")
     manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
-    scenarios = {"generic_failure_repair": "failure_logs", "generic_pending_independent_join": "pending",
+    scenarios = {"generic_mixed_files_conflict": "files", "generic_encoded_csv": "data",
+                 "generic_failure_repair": "failure_logs", "generic_pending_independent_join": "pending",
                  "generic_stale_read_revision": "stale_edit", "generic_missing_output": "missing_output"}
-    results = []
-    for case_id, method in scenarios.items():
+    paths = [(case_id, method, {}) for case_id, method in scenarios.items()]
+    paths.append(("generic_encoded_csv", "data", {"structured_edit": True}))
+    results, alternate_paths = [], []
+    for case_id, method, options in paths:
         case = report._case_by_id(manifest, case_id)
         with tempfile.TemporaryDirectory(prefix="webcodex-temporal-e2e-") as temporary:
             root = Path(temporary)
             capture = root / "capture"
-            temporal.prepare_capture(capture, case_id, source_revision, report._case_fingerprint(case))
+            capture.mkdir(mode=0o700)
             args = SimpleNamespace(bin_dir=bin_dir, server=bin_dir / "webcodex-server", runner=bin_dir / "webcodex-runner",
                                    profile="upgraded", goal_plan_only=False)
             smoke = RecordedSmoke(args, root)
@@ -71,12 +74,22 @@ def run(bin_dir, source_revision):
                 # fixture identity, not an observation of a real ChatGPT Window.
                 smoke.app_fixture = True
                 smoke.prepare()
+                temporal.prepare_capture(capture, case_id, source_revision, report._case_fingerprint(case),
+                                         fixture_root=smoke.project_dir)
                 # Setup calls are not part of this case. Start a fresh recorder
                 # Session with a fixed explicit business Project.
                 smoke.session_ref = None
-                started = smoke.call("work_on_project", {"project": smoke.project, "instruction": "Temporal verifier fixture"}, direct=True)
+                started = smoke.call("work_on_project", {"client_id": "generic-runner", "path": str(smoke.project_dir),
+                                     "instruction": "Runtime verifier fixture"}, direct=True)
                 smoke.project_ref, smoke.session_ref = started["project_ref"], started["session_ref"]
-                getattr(smoke, method)()
+                independent_fixture = (GenericFixture(smoke.project_dir, case_id).prepare()
+                    if case_id in {"generic_failure_repair", "generic_pending_independent_join", "generic_missing_output"} else None)
+                if case_id == "generic_missing_output":
+                    smoke.missing_output(reuse_session=True)
+                else:
+                    getattr(smoke, method)(**options)
+                if independent_fixture is not None and independent_fixture.oracle()["passed"] is not True:
+                    raise AssertionError("independent generic fixture oracle failed")
                 session = started["session_id"]
             finally:
                 smoke.close()  # Drain the existing trace/audit writers before inspection.
@@ -90,12 +103,14 @@ def run(bin_dir, source_revision):
             if audit_db is None:
                 raise AssertionError("fixture audit database unavailable")
             result = temporal.verify(capture_root=capture, audit_db=audit_db, workflow_session_id=session,
-                                     case_id=case_id, base_revision=source_revision, fingerprint=report._case_fingerprint(case))
+                                     case_id=case_id, base_revision=source_revision, fingerprint=report._case_fingerprint(case),
+                                     fixture_root=smoke.project_dir)
             if result.get("available") is not True or result.get("passed") is not True:
                 raise AssertionError("temporal verifier did not establish " + case_id + ": " + json.dumps(result))
-            results.append(result)
-            print("PASS: real MCP/WS temporal verifier " + case_id)
-    return {"source_revision": source_revision, "runtime_builds": builds, "real_model_test": False, "cases": results}
+            (alternate_paths if options else results).append(result)
+            print("PASS: real MCP/WS runtime verifier " + case_id + (" (structured edit)" if options else ""))
+    return {"source_revision": source_revision, "runtime_builds": builds, "real_model_test": False,
+            "cases": results, "alternate_paths": alternate_paths}
 
 
 def main():

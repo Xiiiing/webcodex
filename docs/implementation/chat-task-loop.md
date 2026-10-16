@@ -27,8 +27,8 @@ locale/timezone/Python environment to commands executed through WebCodex.
 In addition to the existing driver contract, generic samples expose
 `WEBCODEX_BENCH_TARGET`, `WEBCODEX_BENCH_WORKSPACE`,
 `WEBCODEX_BENCH_FIXTURE_ENVIRONMENT` (JSON child environment),
-`WEBCODEX_BENCH_FIXTURE_COMMAND` (the prescribed failure-pressure or pending-EOF
-Python script), and `WEBCODEX_BENCH_FIXTURE_COORDINATION` (outside the editable Project).
+`WEBCODEX_BENCH_FIXTURE_COMMAND` (the prescribed failure-pressure, pending-EOF,
+conflict-copy or CSV-conversion Python script), and `WEBCODEX_BENCH_FIXTURE_COORDINATION` (outside the editable Project).
 For the stale-read case the driver signals `first-read` after retaining the
 exact read receipt, waits for `external-written`, attempts the stale fenced
 edit, signals `stale-rejected` only after rejection, then waits for
@@ -44,28 +44,59 @@ runtime-backed lane evidence and every available file oracle. Missing cases,
 `partial`, `unsupported` and missing required evidence fail this gate. Driver
 annotations alone cannot prove execution.
 
-The four temporal generic cases (failure/repair, pending join, stale revision
-and missing output) can qualify through the separate, explicit
-[temporal verifier](../../scripts/agent_temporal_evidence.py). Ordinary reports
-still read metadata only. Without complete captured runtime evidence these
-cases remain `partial`; filesystem correctness and driver assertions cannot
-replace it. A contradicted sequence fails instead of qualifying as incomplete.
+All six generic cases require both the independent fixture oracle and
+case-specific runtime proof from the separate
+[verifier](../../scripts/agent_temporal_evidence.py). A bootstrap-only audit,
+correct final files or a driver's declared pass cannot establish execution.
+Ordinary reports still read metadata only. Missing/unprovable evidence remains
+`partial`; a captured contradictory outcome fails.
 
-For these cases the benchmark creates a private, case/base/fingerprint-bound
-`WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT` outside the editable Project. The driver
-must use it as the **disposable test Server's** full trace directory and provide
-its audit DB plus canonical `workflow_session_id` (not an opaque Session ref).
-Record all relevant model calls with authorized `_wc.record`. Stop/drain owned
-test services before returning the receipt. Never enable this capture on a
-shared service or put credential provisioning through model tools.
+For every generic case the benchmark creates a private, case/base/fingerprint-
+and fixture-identity-bound `WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT` outside the
+editable Project. The driver must use it as the **disposable test Server's**
+full trace directory and provide its audit DB plus canonical
+`workflow_session_id` (not an opaque Session ref). Bootstrap with
+`work_on_project(client_id=..., path=WEBCODEX_BENCH_WORKSPACE)` in ordinary
+checkout mode. The verifier binds the actual successful bootstrap to this root,
+its returned Session and resolved Project, and the recorded case operations.
+Managed-worktree mode, foreign cwd/default cwd/resource and an unproved
+registered-Project alias cannot establish this binding. A registered Project
+can still be entered through the explicit path form. Record all relevant model
+calls with authorized `_wc.record`; stop/drain owned test services before
+returning the receipt. Never enable this capture on a shared service or put
+credential provisioning through model tools.
+
+Mixed-file proof verifies three actual artifact-transfer path pairs, byte counts
+and hashes, plus the supplied conflict-preserving note script or an applied
+structured create for `sorted/note-2.txt`. CSV proof verifies the supplied
+conversion script or applied structured creates of the two exact outputs,
+followed by actual finish receipts whose hashes match independently read
+fixture bytes and whose task outcome establishes nonblocking completion.
+An arbitrary/no-op script, pending command, dry-run edit or tool count cannot
+substitute for these operations. Additional verification scripts must each prove
+terminal success and precede the final CSV finish; duplicate controlled mutations
+do not qualify. Explicit nonblocking `pass`/`warn` outcomes can establish CSV
+completion; `fail`/blocking cannot, and missing outcome fields remain `partial`.
+A baseline without output-receipt support remains readable but cannot qualify
+this CSV proof. The four temporal cases
+retain their actual command, Job, stale-revision and blocking-closeout checks
+and serial-order fences. Independent file-transfer calls may overlap; CSV
+closeout must still follow every recorded task operation.
 
 The verifier checks private regular files, trace UUIDs, compressed/raw bounds
 and SHA-256 indexes; correlates canonical Audit outcomes and exact scope;
-rejects unrecorded runtime calls and ambiguous ordering; and reads only selected
-effective arguments and final MCP responses. Only closed check names/booleans
-and availability reasons enter the benchmark result. The benchmark removes its
-owned capture directory after each sample, including unsuccessful samples.
-Capture hashes establish local integrity, not independent Host attestation.
+rejects unrecorded runtime calls and ambiguous temporal ordering; and opens only
+selected effective arguments and final MCP responses. Schema-2 proof includes only
+closed checks/availability reasons and a coordinator-owned fixture identity
+hash (canonical path plus directory device/inode, not a content-freshness
+claim). It must match that sample's oracle identity. Paired samples have
+independent roots and do not need identical fixture identities. Old schema-1
+results remain readable, but do not receive new strict acceptance automatically.
+The benchmark removes its owned capture directory after each sample, including
+unsuccessful samples. Capture hashes establish local integrity, not independent
+Host attestation. Aggregate nested Code Mode counts alone do not establish
+individual case arguments/results and remain insufficient for generic strict
+acceptance; this verifier does not add a nested-child payload decoder.
 
 An additional `read_session_discussion_summary` call remains covered by the
 Audit, scope and ordering checks. Its captured arguments must select the exact

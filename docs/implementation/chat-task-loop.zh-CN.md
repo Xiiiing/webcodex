@@ -20,7 +20,7 @@
 
 通用样本新增 `WEBCODEX_BENCH_TARGET`、`WEBCODEX_BENCH_WORKSPACE`、
 `WEBCODEX_BENCH_FIXTURE_ENVIRONMENT`（JSON 子进程环境）、
-`WEBCODEX_BENCH_FIXTURE_COMMAND`（指定的失败压力或等待 EOF 脚本）以及
+`WEBCODEX_BENCH_FIXTURE_COMMAND`（指定的失败压力、等待 EOF、冲突复制或 CSV 转换脚本）以及
 `WEBCODEX_BENCH_FIXTURE_COORDINATION`（项目外协调目录）。过期读取案例中，
 driver 保留确切读取回执后发出 `first-read`，等待 `external-written`，执行旧
 revision 的编辑，确认拒绝后发出 `stale-rejected`，等待 `rejection-checked`
@@ -33,23 +33,43 @@ revision 的编辑，确认拒绝后发出 `stale-rejected`，等待 `rejection-
 缺失案例、`partial`、`unsupported`、缺失必需证据均不能通过；driver 自报不能
 证明执行。
 
-四个时序案例（失败修复、后台汇合、过期 revision、缺失输出）现在可通过独立的
-[时序校验器](../../scripts/agent_temporal_evidence.py)取得资格。普通报告仍只读取
-元数据；没有完整运行证据时仍为 `partial`，最终文件正确或 driver 自报不能替代。
-实际顺序与要求矛盾时判失败，不把已知错误归为证据不足。
+六个通用案例均须同时通过独立 fixture oracle 和
+[独立校验器](../../scripts/agent_temporal_evidence.py)的案例专属运行时证明。
+只有 bootstrap 的审计、正确的最终文件或 driver 自报 pass 都不能证明执行。
+普通报告仍只读取元数据；缺失或无法证明的证据保持 `partial`，捕获结果与要求
+矛盾时判失败。
 
-评测器在可编辑项目外创建私有、绑定案例/base/fingerprint 的
-`WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT`。driver 必须把它配置为**一次性测试
-Server**的 full trace 目录，并提供审计数据库和规范 `workflow_session_id`
-（不能使用不透明 Session ref）。相关模型调用均使用授权的 `_wc.record`；
-返回回执前停止并排空自有测试服务。不得为此启用共享服务捕获，也不得把凭据
-创建操作放进模型工具调用。
+每个通用样本都在可编辑 Project 外创建私有、绑定案例/base/fingerprint 与
+fixture 身份的 `WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT`。driver 必须把它配置为
+**一次性测试 Server** 的 full trace 目录，并提供审计数据库及规范
+`workflow_session_id`（不能使用不透明 Session ref）。使用普通 checkout 模式的
+`work_on_project(client_id=..., path=WEBCODEX_BENCH_WORKSPACE)` 进入项目；
+校验器核对实际成功 bootstrap 的根、返回 Session、resolved Project 与记录的案例
+操作。managed-worktree 模式、其他 cwd/default cwd/resource，以及无法证明路径的
+注册 Project 别名均不能建立该绑定；已有注册 Project 仍可用显式 path 形式进入。
+相关模型调用使用授权 `_wc.record`；返回回执前停止并排空自有测试服务。不得启用
+共享服务捕获，也不得把凭据创建放进模型工具调用。
 
-校验器检查私有普通文件、trace UUID、压缩前后大小、SHA-256 索引，关联规范
-Audit 结果及确切作用域，拒绝未记录的调用和不确定顺序，仅读取所选有效参数与
-最终 MCP 响应。报告只保留封闭检查名称、布尔结果和证据可用性原因。每个样本
-结束后删除自有捕获目录，包括失败样本；捕获哈希只证明本地完整性，不是独立
-Host 认证。
+混合文件案例核验三次实际 artifact transfer 的来源/目标路径、字节数及哈希，另需
+提供的冲突保留 note 脚本或对 `sorted/note-2.txt` 的已应用结构化 create。CSV 案例
+核验提供的转换脚本或两个确切输出的已应用结构化 create，随后实际 finish receipts
+的哈希必须等于独立读取的 fixture 字节，task outcome 也须明确为不阻塞的完成状态。
+任意/no-op 脚本、pending 命令、dry-run 编辑或工具数量均不能替代这些操作。
+额外验证脚本允许存在，但每次都必须证明真实终态成功，且 CSV 的验证须在最后 finish 前完成；
+重复执行受控 mutation 不予放行。非 blocking 的 `pass`/`warn` 可建立 CSV 完成，
+`fail`/blocking 不能；缺少明确 task outcome 仍为 `partial`。
+不支持输出 receipts 的基线结果仍可读取，但不能通过此 CSV 证明。四类时序案例
+保留原有命令、Job、过期 revision 与阻塞 closeout 的实际语义检查及串行顺序边界。
+独立文件 transfer 调用可以重叠；CSV closeout 仍须在所有记录的任务操作之后。
+
+校验器检查私有普通文件、trace UUID、压缩前后大小及 SHA-256 索引，关联规范
+Audit 结果和确切作用域，拒绝未记录调用和不确定顺序，仅读取所选有效参数与最终
+MCP 响应。schema-2 proof 只包含封闭检查/可用性原因和协调器生成的 fixture 身份
+哈希（规范路径与目录 device/inode，不代表内容新鲜度），且必须匹配本样本 oracle
+身份。配对样本使用独立根，不要求两个 fixture 身份相同。旧 schema-1 结果仍可读，
+但不会自动获得新的 strict 验收。每个样本结束后删除自有捕获目录，包括失败样本。
+捕获哈希只证明本地完整性，不是独立 Host 认证。嵌套 Code Mode 的聚合数量不能证明
+案例的逐次参数/结果，仍不足以通过通用 strict；本校验器未新增 nested-child payload 解码。
 
 额外的 `read_session_discussion_summary` 调用仍须通过 Audit、作用域和顺序检查。
 捕获参数必须选择当前确切 Session，或由此前成功 bootstrap 明确映射到该 Session

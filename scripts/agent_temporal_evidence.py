@@ -3,7 +3,7 @@
 
 Unlike agent_loop_report, this opt-in verifier opens payloads. Its caller owns
 the private capture directory, selects an exact recorded Session, and destroys
-the directory afterwards. Only closed check names/booleans leave this module.
+the directory afterwards. Only bounded checks, reasons and fixture identity leave this module.
 Trace integrity is local producer evidence, not cryptographic Host attestation.
 """
 from __future__ import annotations
@@ -25,19 +25,26 @@ import uuid
 
 try:
     from scripts import agent_loop_report as report
-    from scripts.e2e_generic_agent_ws import SENTINEL, EXTERNAL_SENTINEL, PENDING_SCRIPT, pressure_script
+    from scripts.e2e_generic_agent_ws import SENTINEL, EXTERNAL_SENTINEL, PENDING_SCRIPT, pressure_script, mixed_note_script, encoded_csv_script, binary_fixtures, GenericFixture
 except ModuleNotFoundError:
     import agent_loop_report as report
-    from e2e_generic_agent_ws import SENTINEL, EXTERNAL_SENTINEL, PENDING_SCRIPT, pressure_script
+    from e2e_generic_agent_ws import SENTINEL, EXTERNAL_SENTINEL, PENDING_SCRIPT, pressure_script, mixed_note_script, encoded_csv_script, binary_fixtures, GenericFixture
 
 TEMPORAL_CASES = frozenset(("generic_failure_repair", "generic_pending_independent_join",
                            "generic_stale_read_revision", "generic_missing_output"))
+PROOF_SCHEMA_VERSION = 2
+RUNTIME_CASES = TEMPORAL_CASES | {"generic_mixed_files_conflict", "generic_encoded_csv"}
 CHECK_NAMES = {
+    "generic_mixed_files_conflict": {"binary_artifact_transfers", "conflict_preserving_text_mutation"},
+    "generic_encoded_csv": {"controlled_csv_conversion", "verified_csv_output_receipts"},
     "generic_failure_repair": {"exact_failure_repair_commands", "ordered_exit_7_then_0", "failure_diagnostic_and_sentinel"},
     "generic_pending_independent_join": {"one_original_job_and_join", "independent_before_release", "same_job_release_join_terminal"},
     "generic_stale_read_revision": {"stale_rejection_fresh_recovery"},
     "generic_missing_output": {"missing_output_blocks_finish"},
 }
+for _case_checks in CHECK_NAMES.values():
+    _case_checks.add("fixture_root_session_project")
+
 # These canonical observers cannot execute or mutate Project work. Their target
 # must still resolve to this exact recorded Session; their discussion bodies are
 # unnecessary for the task oracle and must not be opened.
@@ -51,7 +58,8 @@ UNAVAILABLE_REASONS = frozenset(("unsafe_capture", "capture_limit", "capture_cha
     "invalid_trace_identity", "trace_identity_mismatch", "incomplete_capture", "ambiguous_capture",
     "missing_canonical_call", "missing_order", "missing_scope", "scope_mismatch", "canonical_call_mismatch",
     "missing_mcp_result", "canonical_result_mismatch", "ambiguous_order", "project_mismatch",
-    "unsupported_case", "capture_identity_mismatch", "unlinked_runtime_call", "context_session_mismatch"))
+    "unsupported_case", "capture_identity_mismatch", "unlinked_runtime_call", "context_session_mismatch",
+    "fixture_binding_unavailable", "fixture_binding_mismatch", "fixture_identity_mismatch", "unsupported_case_command"))
 
 
 class EvidenceUnavailable(ValueError):
@@ -95,12 +103,28 @@ def _read(path, ceiling):
         return data
 
 
-def prepare_capture(root, case_id, base_revision, fingerprint):
-    root.mkdir(mode=0o700)
+def fixture_identity(root):
+    """Coordinator-owned identity, not freshness or a digest of Project contents."""
+    root = Path(root).absolute()
+    resolved = root.resolve(strict=True)
+    info = root.lstat()
+    if resolved != root or not stat.S_ISDIR(info.st_mode):
+        raise EvidenceUnavailable("fixture_identity_mismatch")
+    return hashlib.sha256(json.dumps([str(root), info.st_dev, info.st_ino]).encode()).hexdigest()
+
+
+def prepare_capture(root, case_id, base_revision, fingerprint, *, fixture_root):
+    identity = fixture_identity(fixture_root)
+    # A disposable Server may create the private trace directory during setup,
+    # before its fixture root exists. A marker can only be created once.
+    root.mkdir(mode=0o700, exist_ok=True)
+    _private(root, True)
     marker = root / CAPTURE_MARKER
-    marker.write_text(json.dumps({"case_id": case_id, "base_revision": base_revision,
-                                  "case_fingerprint": fingerprint}), encoding="utf-8")
+    with marker.open("x", encoding="utf-8") as handle:
+        handle.write(json.dumps({"case_id": case_id, "base_revision": base_revision,
+                                 "case_fingerprint": fingerprint, "fixture_identity": identity}))
     marker.chmod(0o600)
+    return identity
 
 
 def _decompress(data):
@@ -168,7 +192,7 @@ def _payloads(root, trace_id, phases=frozenset(("effective_arguments", "final_re
     return selected
 
 
-def _calls(events, root, workflow_session_id):
+def _calls(events, root, workflow_session_id, *, require_serial=True):
     calls, seen, scope = [], set(), None
     intervals, contexts = [], []
     for event in events:
@@ -218,12 +242,13 @@ def _calls(events, root, workflow_session_id):
         calls.append({"tool": tool, "arguments": arguments, "result": result,
                       "output": output, "started": started, "ended": ended,
                       "envelope": body, "project": event.get("project"),
-                      "execution_state": telemetry.get("execution_state")})
+                      "execution_state": telemetry.get("execution_state"),
+                      "edit_outcome": telemetry.get("edit_outcome")})
     if not 0 < len(calls) <= MAX_CALLS:
         raise EvidenceUnavailable("capture_limit")
     calls.sort(key=lambda call: call["started"])
     intervals.sort()
-    if any(left[1] > right[0] for left, right in zip(intervals, intervals[1:])):
+    if require_serial and any(left[1] > right[0] for left, right in zip(intervals, intervals[1:])):
         raise EvidenceUnavailable("ambiguous_order")
     for selector, started in contexts:
         # A short ref is valid only after a successful bootstrap independently
@@ -282,7 +307,9 @@ def _command(call):
         return args.get("script")
     if call["tool"] == "run_process" and isinstance(args.get("args"), list):
         argv = args["args"]
-        if "-c" in argv and argv.index("-c") + 2 == len(argv):
+        executable = args.get("executable")
+        if (isinstance(executable, str) and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(executable).name)
+                and len(argv) >= 2 and argv[:-1] in (["-c"], ["-u", "-c"])):
             return argv[-1]
     return None
 
@@ -336,10 +363,164 @@ def _exit_code(call):
     return None
 
 
+def _bind_fixture(calls, fixture_root, workflow_session_id):
+    relevant = [call for call in calls if call["tool"] not in
+                {"work_on_project", "read_tool_manifest", "get_runtime_status", "list_projects"}]
+    bootstraps = [call for call in calls if call["tool"] == "work_on_project"
+                  and call["result"]["success"] is True]
+    rooted = [call for call in bootstraps if call["arguments"].get("path") == str(Path(fixture_root).absolute())
+              and isinstance(call["arguments"].get("client_id"), str) and call["arguments"]["client_id"]]
+    if not rooted or not relevant:
+        raise EvidenceUnavailable("fixture_binding_unavailable")
+    bootstrap = rooted[0]
+    if bootstrap["arguments"].get("mode", "checkout") != "checkout":
+        raise EvidenceUnavailable("fixture_binding_mismatch")
+    output = bootstrap["output"]
+    project = output.get("resolved_project")
+    if (output.get("session_id") != workflow_session_id or not isinstance(project, str) or not project
+            or bootstrap["ended"] > min(call["started"] for call in relevant)):
+        raise EvidenceUnavailable("fixture_binding_mismatch")
+    projects = {project}
+    sessions = {workflow_session_id}
+    for call in bootstraps:
+        value = call["output"]
+        context = value.get("execution_context") or {}
+        if call["arguments"].get("mode", "checkout") != "checkout":
+            raise EvidenceUnavailable("fixture_binding_mismatch")
+        if (not isinstance(context, dict) or context.get("default_cwd") not in (None, "", ".")
+                or context.get("resource") is not None):
+            raise EvidenceUnavailable("fixture_binding_mismatch")
+        if value.get("session_id") != workflow_session_id or value.get("resolved_project") != project:
+            raise EvidenceUnavailable("fixture_binding_mismatch")
+        if isinstance(value.get("project_ref"), str):
+            projects.add(value["project_ref"])
+        if isinstance(value.get("session_ref"), str):
+            sessions.add(value["session_ref"])
+    for call in relevant:
+        args = call["arguments"]
+        if (call["tool"] == "set_session_execution_context"
+                or args.get("cwd") not in (None, "", ".")
+                or call["output"].get("cwd") not in (None, "", ".", str(Path(fixture_root).absolute()))):
+            raise EvidenceUnavailable("fixture_binding_mismatch")
+        if call["tool"] == "transfer_project_artifact":
+            # Transfers carry two explicit Project selectors, rather than the
+            # ordinary single Project field. Both must bind to this fixture.
+            if (args.get("source_project") not in projects or args.get("destination_project") not in projects
+                    or call["project"] is not None and call["project"] not in projects):
+                raise EvidenceUnavailable("project_mismatch")
+            if call["result"]["success"] is True and (
+                    call["output"].get("source_project") not in projects
+                    or call["output"].get("destination_project") not in projects):
+                raise EvidenceUnavailable("project_mismatch")
+        elif call["project"] not in projects:
+            raise EvidenceUnavailable("project_mismatch")
+        if args.get("project") is not None and args["project"] not in projects:
+            raise EvidenceUnavailable("project_mismatch")
+        if args.get("session_id") is not None and args["session_id"] not in sessions:
+            raise EvidenceUnavailable("fixture_binding_mismatch")
+    return projects
+
+
+def _applied_creates(call, expected):
+    if (call["tool"] != "edit_project_files" or call["result"]["success"] is not True
+            or call.get("edit_outcome") != "applied" or call["arguments"].get("dry_run", False) is not False):
+        return False
+    changes = call["arguments"].get("changes")
+    if not isinstance(changes, list) or len(changes) != len(expected):
+        return False
+    found = {}
+    for change in changes:
+        if (not isinstance(change, dict) or set(change) != {"kind", "path", "content"}
+                or change["kind"] != "create" or change["path"] in found):
+            return False
+        found[change["path"]] = change["content"]
+    if set(found) != set(expected):
+        return False
+    for path, value in expected.items():
+        if isinstance(value, dict):
+            try:
+                if json.loads(found[path]) != value:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        elif found[path] != value:
+            return False
+    return True
+
+
+def _controlled_mutation(calls, script, creates):
+    candidates = [call for call in calls if call["tool"] in {"run_script", "run_process", "run_shell", "edit_project_files"}]
+    matches = [call for call in candidates if _applied_creates(call, creates) or _matches_python_command(call, script)]
+    if len(matches) != 1:
+        raise EvidenceUnavailable("unsupported_case_command")
+    value = matches[0]
+    # Additional actual validation/read scripts are legitimate. Their purpose
+    # annotation grants nothing: each must establish terminal success itself.
+    for other in candidates:
+        if other is value:
+            continue
+        if (other["tool"] == "edit_project_files" or other["result"]["success"] is not True
+                or _exit_code(other) != 0):
+            raise EvidenceUnavailable("unsupported_case_command")
+    if _applied_creates(value, creates):
+        return value
+    if value["result"]["success"] is not True or _exit_code(value) != 0:
+        return None
+    return value
+
+
 def _checks(case_id, calls):
     relevant = [call for call in calls if call["tool"] not in ("work_on_project", "read_tool_manifest", "get_runtime_status", "list_projects")]
-    if not relevant or len({call["project"] for call in relevant}) != 1 or not relevant[0]["project"]:
+    if not relevant:
         raise EvidenceUnavailable("project_mismatch")
+    if case_id in TEMPORAL_CASES and (len({call["project"] for call in relevant}) != 1 or not relevant[0]["project"]):
+        raise EvidenceUnavailable("project_mismatch")
+    if case_id == "generic_mixed_files_conflict":
+        transfers = [call for call in relevant if call["tool"] == "transfer_project_artifact"]
+        expected = binary_fixtures()
+        names = {call["arguments"].get("source_path") for call in transfers}
+        valid = len(transfers) == len(expected) and names == {"input/" + name for name in expected}
+        for call in transfers:
+            args, output = call["arguments"], call["output"]
+            name = args.get("source_path", "").removeprefix("input/")
+            data = expected.get(name)
+            valid = valid and (data is not None and call["result"]["success"] is True
+                and args.get("destination_path") == "sorted/" + name
+                and output.get("source_path") == args["source_path"]
+                and output.get("destination_path") == args["destination_path"]
+                and isinstance(output.get("source_project"), str)
+                and isinstance(output.get("destination_project"), str)
+                and type(output.get("bytes")) is int and output["bytes"] == len(data)
+                and output.get("sha256") == hashlib.sha256(data).hexdigest())
+        mutation = _controlled_mutation(relevant, mixed_note_script(), {"sorted/note-2.txt": "original note\n"})
+        return {"binary_artifact_transfers": valid, "conflict_preserving_text_mutation": mutation is not None}
+    if case_id == "generic_encoded_csv":
+        expected_csv = "name,value\nAlice,2\nBob,3\n陈,5\n丁,7\n"
+        mutation = _controlled_mutation(relevant, encoded_csv_script(),
+            {"merged.csv": expected_csv, "report.json": {"count": 4, "total": 17}})
+        finishes = [call for call in relevant if call["tool"] == "finish_coding_task"]
+        if len(finishes) != 1 or "outputs" not in finishes[0]["arguments"]:
+            raise EvidenceUnavailable("unsupported_case_command")
+        finish = finishes[0]
+        receipt = finish["output"].get("task_outputs", {})
+        outcome = finish["output"].get("task_outcome")
+        if (not isinstance(outcome, dict) or not {"status", "blocking", "blocking_reasons"} <= set(outcome)
+                or outcome["status"] not in {"pass", "warn", "fail"}
+                or type(outcome["blocking"]) is not bool or not isinstance(outcome["blocking_reasons"], list)):
+            raise EvidenceUnavailable("unsupported_case_command")
+        items = receipt.get("items", [])
+        valid = (mutation is not None and mutation["ended"] <= finish["started"]
+            and all(call is finish or call["ended"] <= finish["started"] for call in relevant)
+            and finish["result"]["success"] is True
+            and outcome["status"] in {"pass", "warn"} and outcome["blocking"] is False
+            and outcome["blocking_reasons"] == []
+            and set(finish["arguments"].get("outputs", [])) == {"merged.csv", "report.json"}
+            and len(finish["arguments"]["outputs"]) == 2
+            and receipt.get("verified_count") == 2 and receipt.get("missing_count") == 0
+            and receipt.get("unavailable_count") == 0 and len(items) == 2
+            and {item.get("path") for item in items} == {"merged.csv", "report.json"}
+            and all(item.get("status") == "verified" for item in items))
+        return {"controlled_csv_conversion": mutation is not None, "verified_csv_output_receipts": valid}
     if case_id == "generic_failure_repair":
         commands = [call for call in relevant if call["tool"] in ("run_script", "run_process", "run_shell")]
         exact = len(commands) == 2 and all(_matches_python_command(call, expected)
@@ -366,9 +547,8 @@ def _checks(case_id, calls):
         independent_script = "from pathlib import Path\nPath('independent.txt').write_text('independent work completed')\n"
         def writes_independent(call):
             if _matches_python_command(call, independent_script):
-                return True
-            return (call["tool"] == "edit_project_files" and call["arguments"].get("changes") ==
-                    [{"kind": "create", "path": "independent.txt", "content": "independent work completed"}])
+                return _exit_code(call) == 0
+            return _applied_creates(call, {"independent.txt": "independent work completed"})
         observed = observe["output"].get("items", [])
         item = observed[0] if len(observed) == 1 else {}
         target = observe["arguments"].get("items", [])
@@ -399,7 +579,9 @@ def _checks(case_id, calls):
                     and rejected["result"]["success"] is False and edit_revision(rejected) == revision
                     and rejected["output"].get("error_kind") == "stale_file_revision"
                     and rejected["output"].get("state_changed") is False
-                    and applied["result"]["success"] is True and edit_revision(applied) == fresh[-1][1][0]
+                    and applied["result"]["success"] is True and applied.get("edit_outcome") == "applied"
+                    and applied["arguments"].get("dry_run", False) is False
+                    and edit_revision(applied) == fresh[-1][1][0]
                     and fresh[-1][1][0] != revision and EXTERNAL_SENTINEL in (fresh[-1][1][1] or "")}
     if case_id == "generic_missing_output":
         finishes = [call for call in relevant if call["tool"] == "finish_coding_task"]
@@ -407,34 +589,54 @@ def _checks(case_id, calls):
             return {"missing_output_blocks_finish": False}
         finish = finishes[0]
         outputs, outcome = finish["output"].get("task_outputs", {}), finish["output"].get("task_outcome", {})
-        return {"missing_output_blocks_finish": finish["arguments"].get("outputs") == ["missing-result.csv"]
+        return {"missing_output_blocks_finish": finish["result"]["success"] is True
+                and finish["arguments"].get("outputs") == ["missing-result.csv"]
                 and outputs.get("missing_count") == 1 and outputs.get("verified_count") == 0
                 and outcome.get("status") == "fail" and outcome.get("blocking") is True
                 and "task_outputs_unverified" in outcome.get("blocking_reasons", [])}
     raise EvidenceUnavailable("unsupported_case")
 
 
-def verify(*, capture_root, audit_db, workflow_session_id, case_id, base_revision, fingerprint):
+def verify(*, capture_root, audit_db, workflow_session_id, case_id, base_revision, fingerprint, fixture_root):
     """Return only bounded facts; input errors never expose filenames or payloads."""
+    identity = None
     try:
         root = Path(capture_root)
         for parent in [root, *root.parents]:
             if parent.is_symlink():
                 raise EvidenceUnavailable("unsafe_capture")
         _private(root, True)
+        identity = fixture_identity(fixture_root)
         marker = json.loads(_read(root / CAPTURE_MARKER, 4096))
-        if marker != {"case_id": case_id, "base_revision": base_revision, "case_fingerprint": fingerprint}:
+        if marker != {"case_id": case_id, "base_revision": base_revision, "case_fingerprint": fingerprint,
+                      "fixture_identity": identity}:
             raise EvidenceUnavailable("capture_identity_mismatch")
         events = _audit_events(audit_db, workflow_session_id)
         if len(events) > MAX_CALLS:
             raise EvidenceUnavailable("capture_limit")
         _coverage(root, events)
-        checks = _checks(case_id, _calls(events, root, workflow_session_id))
-        return {"schema_version": 1, "case_id": case_id, "base_revision": base_revision,
+        # The four temporal sequences require exact serial order. Independent
+        # file transfers may overlap; CSV still requires all work before finish.
+        calls = _calls(events, root, workflow_session_id, require_serial=case_id in TEMPORAL_CASES)
+        _bind_fixture(calls, fixture_root, workflow_session_id)
+        checks = {"fixture_root_session_project": True, **_checks(case_id, calls)}
+        if case_id == "generic_encoded_csv":
+            # The only filesystem reads in this verifier are bounded fixture
+            # outputs, never arbitrary trace paths or operator-selected sources.
+            from_fixture = GenericFixture(Path(fixture_root), case_id)
+            hashes = {name: hashlib.sha256(from_fixture.read(name)).hexdigest()
+                      for name in ("merged.csv", "report.json")}
+            finish = next(call for call in calls if call["tool"] == "finish_coding_task")
+            checks["verified_csv_output_receipts"] = checks["verified_csv_output_receipts"] and all(
+                item.get("sha256") == hashes.get(item.get("path"))
+                for item in finish["output"].get("task_outputs", {}).get("items", []))
+        if fixture_identity(fixture_root) != identity:
+            raise EvidenceUnavailable("fixture_identity_mismatch")
+        return {"schema_version": PROOF_SCHEMA_VERSION, "fixture_identity": identity, "case_id": case_id, "base_revision": base_revision,
                 "case_fingerprint": fingerprint, "available": True, "passed": all(checks.values()),
                 "checks": checks, "reason": None}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, sqlite3.Error, subprocess.SubprocessError) as error:
         reason = str(error) if isinstance(error, EvidenceUnavailable) and str(error) in UNAVAILABLE_REASONS else "runtime_capture_unavailable"
-        return {"schema_version": 1, "case_id": case_id, "base_revision": base_revision,
+        return {"schema_version": PROOF_SCHEMA_VERSION, "fixture_identity": identity, "case_id": case_id, "base_revision": base_revision,
                 "case_fingerprint": fingerprint, "available": False, "passed": None,
                 "checks": {}, "reason": reason}

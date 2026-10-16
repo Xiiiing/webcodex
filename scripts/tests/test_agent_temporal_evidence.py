@@ -29,8 +29,8 @@ def positive_cases():
                     {"exit_code": 7, "stdout": evidence.SENTINEL, "stderr": "expected failure"}, success=False),
                call("run_script", {"language": "python", "script": evidence.pressure_script(False)},
                     {"exit_code": 0, "stdout": evidence.SENTINEL}, index=1)]
-    pending = [call("run_process", {"interactive": True, "args": ["-u", "-c", evidence.PENDING_SCRIPT]}, {"execution_state": "pending", "job_id": "original"}),
-               call("run_script", {"language": "python", "script": "from pathlib import Path\nPath('independent.txt').write_text('independent work completed')\n"}, {}, index=1),
+    pending = [call("run_process", {"interactive": True, "executable": "python3", "args": ["-u", "-c", evidence.PENDING_SCRIPT]}, {"execution_state": "pending", "job_id": "original"}),
+               call("run_script", {"language": "python", "script": "from pathlib import Path\nPath('independent.txt').write_text('independent work completed')\n"}, {"exit_code": 0}, index=1),
                call("write_job_input", {"job_id": "original", "close": True}, {}, index=2),
                call("wait_for_job_readiness", {"job_ids": ["original"], "mode": "all"}, {"pending_job_ids": []}, index=3),
                call("observe_jobs", {"items": [{"job_id": "original"}]}, {"items": [{"job_id": "original", "terminal": True,
@@ -40,14 +40,34 @@ def positive_cases():
                   {"error_kind": "stale_file_revision", "state_changed": False}, success=False, index=1),
              call("read_files", {"items": [{"path": "stale.txt"}]}, {"items": [{"path": "stale.txt", "output": {"read_revision": "new", "text": evidence.EXTERNAL_SENTINEL}}]}, index=2),
              call("edit_project_files", {"changes": [{"path": "stale.txt", "expected_read_revision": "new"}]}, {}, index=3)]
+    stale[-1]["edit_outcome"] = "applied"
     missing = [call("finish_coding_task", {"outputs": ["missing-result.csv"]},
                     {"task_outputs": {"missing_count": 1, "verified_count": 0},
                      "task_outcome": {"status": "fail", "blocking": True, "blocking_reasons": ["task_outputs_unverified"]}})]
-    return dict(zip(sorted(evidence.TEMPORAL_CASES), [failure, missing, pending, stale]))
+    values = dict(zip(sorted(evidence.TEMPORAL_CASES), [failure, missing, pending, stale]))
+    transfers = []
+    for index, (name, data) in enumerate(evidence.binary_fixtures().items()):
+        args = {"source_project": "project", "source_path": "input/" + name,
+                "destination_project": "project", "destination_path": "sorted/" + name}
+        transfers.append(call("transfer_project_artifact", args,
+            dict(args, bytes=len(data), sha256=hashlib.sha256(data).hexdigest()), index=index))
+    transfers.append(call("run_script", {"language": "python", "script": evidence.mixed_note_script()},
+                          {"exit_code": 0}, index=3))
+    values["generic_mixed_files_conflict"] = transfers
+    csv = "name,value\nAlice,2\nBob,3\n陈,5\n丁,7\n"
+    report_bytes = json.dumps({"count": 4, "total": 17}).encode()
+    values["generic_encoded_csv"] = [
+        call("run_script", {"language": "python", "script": evidence.encoded_csv_script()}, {"exit_code": 0}),
+        call("finish_coding_task", {"outputs": ["merged.csv", "report.json"]},
+            {"task_outcome": {"status": "warn", "blocking": False, "blocking_reasons": []},
+             "task_outputs": {"verified_count": 2, "missing_count": 0, "unavailable_count": 0,
+                "items": [{"path": name, "status": "verified", "sha256": hashlib.sha256(data).hexdigest()}
+                          for name, data in (("merged.csv", csv.encode()), ("report.json", report_bytes))]}}, index=1)]
+    return values
 
 
 class TemporalSemanticsTests(unittest.TestCase):
-    def test_all_four_actual_sequences_can_qualify(self):
+    def test_all_six_case_sequences_can_qualify(self):
         for case, calls in positive_cases().items():
             with self.subTest(case=case):
                 self.assertTrue(all(evidence._checks(case, calls).values()))
@@ -137,15 +157,149 @@ class TemporalSemanticsTests(unittest.TestCase):
 
     def test_temporal_gate_rejects_renamed_checks_and_wrong_case_or_base(self):
         case = report._case_by_id(report.load_case_manifest(report.DEFAULT_CASE_MANIFEST), "generic_missing_output")
-        proof = {"schema_version": 1, "case_id": case["id"], "base_revision": "a" * 40,
+        proof = {"schema_version": evidence.PROOF_SCHEMA_VERSION, "fixture_identity": "d" * 64, "case_id": case["id"], "base_revision": "a" * 40,
                  "case_fingerprint": report._case_fingerprint(case), "available": True,
-                 "passed": True, "checks": {"missing_output_blocks_finish": True}}
+                 "passed": True, "checks": {name: True for name in evidence.CHECK_NAMES[case["id"]]}}
         summary = {"benchmark": {"base_revision": "a" * 40}}
-        self.assertTrue(benchmark._generic_temporal_evidence_proven(case, summary, "direct", proof))
+        self.assertTrue(benchmark._generic_temporal_evidence_proven(case, summary, "direct", proof, "d" * 64))
         for key, value in (("checks", {"driver_says_pass": True}), ("case_id", "other"),
                            ("base_revision", "b" * 40), ("case_fingerprint", "c" * 64)):
             wrong = dict(proof); wrong[key] = value
-            self.assertFalse(benchmark._generic_temporal_evidence_proven(case, summary, "direct", wrong))
+            self.assertFalse(benchmark._generic_temporal_evidence_proven(case, summary, "direct", wrong, "d" * 64))
+
+
+class GenericRuntimeProofTests(unittest.TestCase):
+    def test_all_six_require_exact_fixture_bootstrap_session_and_project(self):
+        root = Path("/tmp/coordinator-fixture")
+        for case_id, calls in positive_cases().items():
+            bootstrap = call("work_on_project", {"client_id": "runner", "path": str(root)},
+                {"session_id": "wc_sess_test", "resolved_project": "project", "project_ref": "~p1"}, index=-1)
+            with self.subTest(case=case_id):
+                evidence._bind_fixture([bootstrap, *calls], root, "wc_sess_test")
+                variants = [calls, [], [bootstrap]]
+                for field, value in (("path", "/tmp/wrong-root"), ("client_id", None), ("mode", "worktree")):
+                    wrong = copy.deepcopy(bootstrap); wrong["arguments"][field] = value
+                    variants.append([wrong, *calls])
+                for field, value in (("session_id", "wc_sess_other"), ("resolved_project", "other-project")):
+                    wrong = copy.deepcopy(bootstrap); wrong["output"][field] = value
+                    variants.append([wrong, *calls])
+                late = copy.deepcopy(bootstrap); late["ended"] = 999
+                variants.append([late, *calls])
+                wrong = copy.deepcopy(calls); wrong[-1]["project"] = "other-project"
+                variants.append([bootstrap, *wrong])
+                wrong = copy.deepcopy(calls); wrong[-1]["arguments"]["cwd"] = "other-subdirectory"
+                variants.append([bootstrap, *wrong])
+                wrong = copy.deepcopy(bootstrap); wrong["output"]["execution_context"] = {"default_cwd": "other-subdirectory"}
+                variants.append([wrong, *calls])
+                for variant in variants:
+                    with self.assertRaises(evidence.EvidenceUnavailable):
+                        evidence._bind_fixture(variant, root, "wc_sess_test")
+
+    def test_mixed_transfer_results_require_exact_paths_hashes_and_success(self):
+        original = positive_cases()["generic_mixed_files_conflict"]
+        for where, field, value in (("output", "sha256", "f" * 64), ("output", "bytes", 0),
+                                    ("arguments", "destination_path", "sorted/note.txt"),
+                                    ("output", "source_path", "input/unrelated.bin"),
+                                    ("result", "success", False)):
+            wrong = copy.deepcopy(original); wrong[0][where][field] = value
+            self.assertFalse(all(evidence._checks("generic_mixed_files_conflict", wrong).values()))
+        wrong = copy.deepcopy(original); wrong.pop(0)
+        self.assertFalse(all(evidence._checks("generic_mixed_files_conflict", wrong).values()))
+
+    def test_noop_and_arbitrary_commands_are_unavailable_for_both_file_cases(self):
+        for case_id in ("generic_mixed_files_conflict", "generic_encoded_csv"):
+            for script in ("pass", "print('success')", "from pathlib import Path\nPath('unrelated.txt').touch()"):
+                wrong = positive_cases()[case_id]
+                command = next(value for value in wrong if value["tool"] == "run_script")
+                command["arguments"]["script"] = script
+                with self.assertRaisesRegex(evidence.EvidenceUnavailable, "unsupported_case_command"):
+                    evidence._checks(case_id, wrong)
+
+    def test_csv_requires_terminal_conversion_and_verified_output_receipts(self):
+        original = positive_cases()["generic_encoded_csv"]
+        variants = []
+        wrong = copy.deepcopy(original); wrong[0]["output"]["exit_code"] = 7; variants.append(wrong)
+        wrong = copy.deepcopy(original); wrong[0]["output"] = {}; variants.append(wrong)
+        wrong = copy.deepcopy(original); wrong[1]["output"]["task_outputs"]["verified_count"] = 1; variants.append(wrong)
+        wrong = copy.deepcopy(original); wrong[1]["output"]["task_outputs"]["items"][0]["status"] = "missing"; variants.append(wrong)
+        wrong = copy.deepcopy(original); wrong[1]["started"] = -1; variants.append(wrong)
+        for value in variants:
+            self.assertFalse(all(evidence._checks("generic_encoded_csv", value).values()))
+        original[1]["arguments"].pop("outputs")
+        with self.assertRaisesRegex(evidence.EvidenceUnavailable, "unsupported_case_command"):
+            evidence._checks("generic_encoded_csv", original)
+
+    def test_csv_structured_applied_create_is_supported_and_dry_run_is_not(self):
+        calls = positive_cases()["generic_encoded_csv"]
+        edit = call("edit_project_files", {"changes": [
+            {"kind": "create", "path": "merged.csv", "content": "name,value\nAlice,2\nBob,3\n陈,5\n丁,7\n"},
+            {"kind": "create", "path": "report.json", "content": '{"total":17,"count":4}'}]}, {})
+        edit["edit_outcome"] = "applied"
+        calls[0] = edit
+        self.assertTrue(all(evidence._checks("generic_encoded_csv", calls).values()))
+        edit["arguments"]["dry_run"] = True
+        with self.assertRaises(evidence.EvidenceUnavailable):
+            evidence._checks("generic_encoded_csv", calls)
+
+    def test_extra_successful_validation_is_allowed_but_noop_only_and_duplicate_mutations_are_not(self):
+        for case_id in ("generic_mixed_files_conflict", "generic_encoded_csv"):
+            calls = positive_cases()[case_id]
+            validation = call("run_script", {"language": "python", "script": "assert True"}, {"exit_code": 0}, index=8)
+            if case_id == "generic_encoded_csv":
+                calls[-1]["started"], calls[-1]["ended"] = 100, 101
+            self.assertTrue(all(evidence._checks(case_id, [*calls, validation]).values()))
+            for output in ({}, {"exit_code": 7}, {"execution_state": "pending", "job_id": "job"}):
+                wrong = copy.deepcopy(validation); wrong["output"] = output
+                with self.assertRaises(evidence.EvidenceUnavailable):
+                    evidence._checks(case_id, [*calls, wrong])
+            mutation = next(value for value in calls if value["tool"] == "run_script")
+            with self.assertRaises(evidence.EvidenceUnavailable):
+                evidence._checks(case_id, [*calls, copy.deepcopy(mutation)])
+
+    def test_csv_finish_requires_actual_nonblocking_outcome(self):
+        for field, value in (("status", "fail"), ("blocking", True), ("blocking_reasons", ["task_outputs_unverified"])):
+            calls = positive_cases()["generic_encoded_csv"]
+            calls[1]["output"]["task_outcome"][field] = value
+            self.assertFalse(all(evidence._checks("generic_encoded_csv", calls).values()))
+        calls[1]["output"].pop("task_outcome")
+        with self.assertRaises(evidence.EvidenceUnavailable):
+            evidence._checks("generic_encoded_csv", calls)
+
+    def test_foreign_runtime_cwd_and_echo_as_python_do_not_prove_fixture_execution(self):
+        root = Path("/tmp/coordinator-fixture")
+        bootstrap = call("work_on_project", {"client_id": "runner", "path": str(root)},
+            {"session_id": "wc_sess_test", "resolved_project": "project"}, index=-1)
+        for field in ("cwd",):
+            calls = positive_cases()["generic_failure_repair"]
+            calls[0]["output"][field] = "/tmp/foreign-root"
+            with self.assertRaises(evidence.EvidenceUnavailable):
+                evidence._bind_fixture([bootstrap, *calls], root, "wc_sess_test")
+        calls = positive_cases()["generic_pending_independent_join"]
+        calls[0]["arguments"]["executable"] = "echo"
+        self.assertFalse(all(evidence._checks("generic_pending_independent_join", calls).values()))
+
+    def test_stale_dry_run_or_no_change_does_not_prove_applied_recovery(self):
+        for outcome in (None, "validated", "no_change"):
+            calls = positive_cases()["generic_stale_read_revision"]
+            calls[-1]["edit_outcome"] = outcome
+            self.assertFalse(all(evidence._checks("generic_stale_read_revision", calls).values()))
+        calls[-1]["edit_outcome"] = "applied"
+        calls[-1]["arguments"]["dry_run"] = True
+        self.assertFalse(all(evidence._checks("generic_stale_read_revision", calls).values()))
+
+    def test_schema_one_proof_and_cross_fixture_proof_never_grant_strict(self):
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        for case_id in evidence.RUNTIME_CASES:
+            case = report._case_by_id(manifest, case_id)
+            proof = {"schema_version": 2, "fixture_identity": "d" * 64, "case_id": case_id,
+                     "base_revision": "a" * 40, "case_fingerprint": report._case_fingerprint(case),
+                     "available": True, "passed": True,
+                     "checks": {name: True for name in evidence.CHECK_NAMES[case_id]}}
+            summary = {"benchmark": {"base_revision": "a" * 40}}
+            self.assertTrue(benchmark._generic_temporal_evidence_proven(case, summary, "direct", proof, "d" * 64))
+            self.assertFalse(benchmark._generic_temporal_evidence_proven(case, summary, "direct", dict(proof, schema_version=1), "d" * 64))
+            self.assertFalse(benchmark._generic_temporal_evidence_proven(case, summary, "direct", proof, "e" * 64))
+            self.assertFalse(benchmark._generic_temporal_evidence_proven(case, summary, "direct", proof))
 
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("zstd"), "private local trace verifier requires POSIX and zstd")
@@ -157,7 +311,9 @@ class TemporalCaptureTests(unittest.TestCase):
         self.root = self.audit.root / "capture"
         self.case = "generic_missing_output"
         self.base, self.fingerprint = "a" * 40, "b" * 64
-        evidence.prepare_capture(self.root, self.case, self.base, self.fingerprint)
+        self.fixture_root = self.audit.root / "fixture"
+        self.fixture_root.mkdir()
+        evidence.prepare_capture(self.root, self.case, self.base, self.fingerprint, fixture_root=self.fixture_root)
         self.trace = str(uuid.uuid4())
         self.directory = self.root / self.trace
         self.directory.mkdir(mode=0o700)
@@ -168,6 +324,9 @@ class TemporalCaptureTests(unittest.TestCase):
         self.calls = positive_cases()[self.case]
         for phase, value in (("effective_arguments", self.calls[0]["arguments"]), ("final_response", self.calls[0]["envelope"])):
             self.payload(phase, value)
+        self.extra_capture("work_on_project", {"client_id": "runner", "path": str(self.fixture_root)},
+                           output={"session_id": "wc_sess_test", "resolved_project": "agent:test:project"},
+                           started=10, handed=20)
 
     def private_write(self, path, data):
         path.write_bytes(data); path.chmod(0o600)
@@ -189,9 +348,12 @@ class TemporalCaptureTests(unittest.TestCase):
     def verify(self):
         return evidence.verify(capture_root=self.root, audit_db=self.audit.audit_db,
                                workflow_session_id="wc_sess_test", case_id=self.case,
-                               base_revision=self.base, fingerprint=self.fingerprint)
+                               base_revision=self.base, fingerprint=self.fingerprint, fixture_root=self.fixture_root)
 
     def extra_capture(self, tool, arguments, *, output=None, started=130, handed=140, window="hashed-window-a"):
+        if tool == "work_on_project" and output is not None:
+            output = dict(output)
+            output.setdefault("resolved_project", "agent:test:project")
         saved = self.trace, self.directory, self.events
         self.trace = str(uuid.uuid4())
         self.directory = self.root / self.trace
@@ -244,9 +406,27 @@ class TemporalCaptureTests(unittest.TestCase):
         self.extra_capture("read_session_discussion_summary", {"session_id": "wc_sess_test"}, started=110, handed=130)
         self.assertEqual(self.verify()["reason"], "ambiguous_order")
 
+    def test_independent_file_evidence_can_retain_overlapping_context_without_relaxing_temporal_order(self):
+        self.extra_capture("read_session_discussion_summary", {"session_id": "wc_sess_test"}, started=110, handed=130)
+        events = evidence._audit_events(self.audit.audit_db, "wc_sess_test")
+        self.assertTrue(evidence._calls(events, self.root, "wc_sess_test", require_serial=False))
+        with self.assertRaisesRegex(evidence.EvidenceUnavailable, "ambiguous_order"):
+            evidence._calls(events, self.root, "wc_sess_test")
+
     def test_projectless_mutation_is_not_session_read_context(self):
         self.extra_capture("checkpoint_goal", {}, output={})
         self.assertEqual(self.verify()["reason"], "project_mismatch")
+
+    def test_fixture_root_replacement_and_other_trusted_root_cannot_borrow_capture(self):
+        other = self.audit.root / "other-fixture"
+        other.mkdir()
+        result = evidence.verify(capture_root=self.root, audit_db=self.audit.audit_db,
+            workflow_session_id="wc_sess_test", case_id=self.case, base_revision=self.base,
+            fingerprint=self.fingerprint, fixture_root=other)
+        self.assertFalse(result["available"])
+        self.fixture_root.rename(self.audit.root / "old-fixture")
+        self.fixture_root.mkdir()
+        self.assertFalse(self.verify()["available"])
 
     def test_actual_capture_with_exact_audit_and_digest_passes_without_payload_output(self):
         result = self.verify()
