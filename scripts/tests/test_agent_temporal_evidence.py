@@ -71,6 +71,24 @@ class TemporalSemanticsTests(unittest.TestCase):
         wrong = copy.deepcopy(original); wrong[1]["arguments"]["script"] = "pass"
         self.assertFalse(all(evidence._checks("generic_failure_repair", wrong).values()))
 
+    def test_real_host_expanded_loop_and_optional_final_newline_preserve_command(self):
+        calls = positive_cases()["generic_failure_repair"]
+        for value in calls:
+            value["arguments"]["script"] = value["arguments"]["script"].replace(
+                "for i in range(2500): print('pressure-' + str(i))",
+                "for i in range(2500):\n    print('pressure-' + str(i))").removesuffix("\n")
+        self.assertTrue(all(evidence._checks("generic_failure_repair", calls).values()))
+
+    def test_command_formatting_does_not_allow_changed_or_additional_execution(self):
+        expected = evidence.pressure_script()
+        for actual in (expected.replace("range(2500)", "range(2499)"),
+                       expected + "print('extra')\n", expected.replace("sys.exit(7)", "sys.exit(0)"),
+                       "# coding: latin-1\n" + expected, "# comment\n" + expected,
+                       "not python !!!", None):
+            with self.subTest(actual_type=type(actual).__name__):
+                self.assertFalse(evidence._matches_python_command(call("run_script", {
+                    "language": "python", "script": actual}, {}), expected))
+
     def test_stale_recovery_rejects_missing_reread_unchanged_revision_or_effect(self):
         original = positive_cases()["generic_stale_read_revision"]
         variants = [original[:2] + original[3:]]

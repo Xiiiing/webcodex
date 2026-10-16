@@ -8,7 +8,9 @@ Trace integrity is local producer evidence, not cryptographic Host attestation.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +20,7 @@ import subprocess
 import itertools
 import sqlite3
 import time
+import tokenize
 import uuid
 
 try:
@@ -284,6 +287,21 @@ def _command(call):
     return None
 
 
+def _matches_python_command(call, expected):
+    actual = _command(call)
+    if not isinstance(actual, str):
+        return False
+    try:
+        # The Host may expand a one-line loop or change quoting. Match the exact
+        # syntax tree, without executing it. Reject comments as well, including
+        # encoding cookies that could change how the Runner reads UTF-8 bytes.
+        if any(token.type == tokenize.COMMENT for token in tokenize.generate_tokens(io.StringIO(actual).readline)):
+            return False
+        return ast.dump(ast.parse(actual), include_attributes=False) == ast.dump(ast.parse(expected), include_attributes=False)
+    except (SyntaxError, ValueError, RecursionError, tokenize.TokenError):
+        return False
+
+
 def _job(call):
     output = call["output"]
     if isinstance(output.get("job_id"), str):
@@ -324,7 +342,8 @@ def _checks(case_id, calls):
         raise EvidenceUnavailable("project_mismatch")
     if case_id == "generic_failure_repair":
         commands = [call for call in relevant if call["tool"] in ("run_script", "run_process", "run_shell")]
-        exact = len(commands) == 2 and [_command(call) for call in commands] == [pressure_script(), pressure_script(False)]
+        exact = len(commands) == 2 and all(_matches_python_command(call, expected)
+            for call, expected in zip(commands, (pressure_script(), pressure_script(False))))
         return {"exact_failure_repair_commands": exact,
                 "ordered_exit_7_then_0": exact and commands[0]["result"]["success"] is False
                     and _exit_code(commands[0]) == 7 and commands[1]["result"]["success"] is True
@@ -346,7 +365,7 @@ def _checks(case_id, calls):
                        and call["result"]["success"] and call["tool"] in ("run_script", "edit_project_files")]
         independent_script = "from pathlib import Path\nPath('independent.txt').write_text('independent work completed')\n"
         def writes_independent(call):
-            if _command(call) == independent_script:
+            if _matches_python_command(call, independent_script):
                 return True
             return (call["tool"] == "edit_project_files" and call["arguments"].get("changes") ==
                     [{"kind": "create", "path": "independent.txt", "content": "independent work completed"}])
@@ -354,7 +373,7 @@ def _checks(case_id, calls):
         item = observed[0] if len(observed) == 1 else {}
         target = observe["arguments"].get("items", [])
         return {"one_original_job_and_join": exact and start["arguments"].get("interactive") is True
-                    and _command(start) == PENDING_SCRIPT
+                    and _matches_python_command(start, PENDING_SCRIPT)
                     and start["output"].get("execution_state") == "pending",
                 "independent_before_release": any(writes_independent(call) for call in independent),
                 "same_job_release_join_terminal": release["arguments"].get("job_id") == job

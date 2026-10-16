@@ -74,6 +74,12 @@ bootstrap. It is a Session observer, so no Project field or discussion response
 is required; the verifier does not open its discussion body. Other calls retain
 the normal Project and result checks.
 
+Prepared Python commands must have the exact expected syntax tree, so an
+expanded loop, quoting or final newline change does not invalidate execution
+evidence. Extra or changed statements and comments (including encoding cookies)
+are rejected. This check never executes captured source and does not replace
+the required real exit statuses, diagnostics, ordering or dispatch counts.
+
 Use `--candidate host_code_mode` for Direct/Host pairs, keeping the existing
 nested `code_mode` default unchanged. All six cases may qualify when both lanes
 meet every gate. Nested child evidence without individually captured canonical
