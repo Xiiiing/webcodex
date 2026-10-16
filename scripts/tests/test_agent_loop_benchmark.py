@@ -23,6 +23,55 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def test_default_selection_contracts_and_source_oracles(self) -> None:
+        from scripts import agent_efficiency_benchmark as efficiency
+
+        self.assertEqual(benchmark.DEFAULT_SELECTION_CASES, (
+            "selection_single_read", "selection_batch_read",
+            "selection_cross_tool_review", "selection_compound_source_context",
+        ))
+        self.assertEqual(efficiency.CASES, (
+            "readonly_review", "guarded_multi_file_edit", "long_validation_handoff",
+        ))
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        repo = report.DEFAULT_CASE_MANIFEST.parent.parent
+        for case_id in benchmark.DEFAULT_SELECTION_CASES:
+            with self.subTest(case_id=case_id):
+                case = report._case_by_id(manifest, case_id)
+                self.assertEqual(case["experiment"], "tool_selection")
+                self.assertEqual(case["target"], "webcodex_repository")
+                self.assertTrue(case["correctness"]["workspace_must_remain_clean"])
+                self.assertFalse(case["validation"]["required"])
+                oracle = benchmark._fixture_oracle(case, repo)
+                if case_id == "selection_cross_tool_review":
+                    self.assertFalse(oracle["available"])
+                else:
+                    self.assertTrue(oracle["passed"], oracle)
+                annotation = benchmark._annotation(
+                    case, variant=report.TOOL_SELECTION_VARIANT,
+                    surface=report.TOOL_SELECTION_VARIANT,
+                    base_revision="a" * 40, receipt={"status": "pass"}, oracle=oracle,
+                )
+                # Fixture eligibility and driver status never supply an answer verdict.
+                self.assertNotEqual(annotation.get("correctness", {}).get("task_verdict"), "pass")
+
+    def test_compound_selection_oracle_rejects_missing_or_wrong_source(self) -> None:
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        case = report._case_by_id(manifest, "selection_compound_source_context")
+        repo = report.DEFAULT_CASE_MANIFEST.parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel in case["correctness"]["fixture_oracle"]["files"]:
+                target = root / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((repo / rel).read_bytes())
+            self.assertTrue(benchmark._fixture_oracle(case, root)["passed"])
+            source = root / "src/tool_runtime/search_and_read.rs"
+            source.write_text("unrelated implementation\n", encoding="utf-8")
+            self.assertFalse(benchmark._fixture_oracle(case, root)["passed"])
+            source.unlink()
+            self.assertFalse(benchmark._fixture_oracle(case, root)["passed"])
+
     def test_pair_order_alternates(self) -> None:
         self.assertEqual(benchmark._pair_order(0), ("direct", "code_mode"))
         self.assertEqual(benchmark._pair_order(1), ("code_mode", "direct"))

@@ -36,7 +36,12 @@ except ModuleNotFoundError:
 
 STATUS_VALUES = frozenset(("pass", "fail", "partial", "unsupported"))
 DEFAULT_CASES = ("readonly_review", "guarded_multi_file_edit", "long_validation_handoff")
-DEFAULT_SELECTION_CASES = ("selection_single_read", "selection_batch_read", "selection_cross_tool_review")
+DEFAULT_SELECTION_CASES = (
+    "selection_single_read",
+    "selection_batch_read",
+    "selection_cross_tool_review",
+    "selection_compound_source_context",
+)
 VARIANTS = ("direct", "code_mode")
 # Selected, already-persisted metadata only. Model turns and raw payloads cannot
 # be reconstructed from Agent Loop summaries.

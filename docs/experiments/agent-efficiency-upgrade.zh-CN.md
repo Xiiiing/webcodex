@@ -62,6 +62,36 @@ Direct 使用 `variant=direct,surface=direct`。字段缺失、多余或不匹�
 新的 Direct 对照（三对时共 36 个样本）。嵌套 surface 来自固定用例定义，不替换或混合
 默认 Host 结果。整个实验须保持相同的模型和配置摘要；配置发生变化时另开实验。
 
+## 自由工具选型回归
+
+第二阶段依赖 [PR #1162](https://github.com/yyjeqhc/webcodex/pull/1162) 的通用运行时
+证据验收工作。固定三任务、每任务三对的效率套件之外，默认 `tool_selection` 实验运行
+四个有界只读场景：`selection_single_read`、`selection_batch_read`、
+`selection_cross_tool_review` 和 `selection_compound_source_context`。新增场景要求模型
+定位从文本匹配生成源码上下文读取的实现，依据当前源码及测试解释重叠合并、读取数量
+限制、字节预算回退与零匹配行为，并注明出处。提示不指定工具或调用顺序。现有规范
+复合工具为 `search_file_context`；分别搜索和读取同样允许，返回上下文充分时无需再次读取。
+
+```sh
+python3 scripts/agent_loop_benchmark.py \
+  --experiment tool_selection --repo . --base-revision "$(git rev-parse HEAD)" \
+  --driver '/absolute/path/to/live-chatgpt-selection-driver' \
+  --samples 3 --output /private/evidence/selection.json --strict
+```
+
+运行前须将清单记录在精确待测提交中。上述选型实验为四用例 × 三次重复，不强制配对
+通道；效率收集器仍为三任务 × 三对 × 两通道。修复测试与 Session 恢复选型场景仍需
+显式选择。完整协议见[选型实验说明](agent-loop-baseline.md#free-tool-selection-experiment)。
+
+四个场景均须保留实际最终答案，并对照待测源码或夹具值独立核验；仓库调查还需独立
+核验 Git 状态。文件判定器只检查夹具适用性。调用者提供外部正确性结论：驱动声明
+pass、规范调用数或最终夹具本身均不能证明答案正确。收集器没有自动语义答案验证器。
+外部正确性缺失时保持 partial，不能严格通过；规范 Audit 元数据缺失同样不能严格通过，
+不可用调用数保持 null。单次复合调用与分别搜索、读取均可满足选型运行时契约，但
+调用准入检查不证明答案正确或工具选择最优。已有重叠、字节预算与零匹配运行时测试
+以及模拟 Audit 回归夹具仅验证契约，不是真实模型行为。本文不声称新增场景已取得
+在线测量结果或指引改进。
+
 ## 解读证据
 
 严格模式拒绝缺失的用例、组、配对或通道样本，非 pass 状态，缺失或不匹配的身份声明，

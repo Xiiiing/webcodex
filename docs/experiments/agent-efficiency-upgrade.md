@@ -79,6 +79,47 @@ Nested surfaces come from the fixed case definitions. It does not replace or
 mix with the default Host result. Same model/configuration pinning is required
 throughout; if a configuration changes, start a separate experiment.
 
+## Free tool-selection regression
+
+Stage 2 depends on the generic runtime-evidence acceptance work in
+[PR #1162](https://github.com/yyjeqhc/webcodex/pull/1162). Separately from the fixed
+three-task, three-pair efficiency suite, the default `tool_selection` experiment
+runs four bounded read-only scenarios: `selection_single_read`,
+`selection_batch_read`, `selection_cross_tool_review`, and
+`selection_compound_source_context`. The last asks the model to locate and explain
+match-derived source-context reads, including overlap coalescing, read limits,
+byte-budget fallback and zero matches, citing current source and tests. It names
+no required tool or sequence. The existing canonical compound tool is
+`search_file_context`; separate searches/reads are equally admissible, and
+sufficient returned context does not require another read.
+
+```sh
+python3 scripts/agent_loop_benchmark.py \
+  --experiment tool_selection --repo . --base-revision "$(git rev-parse HEAD)" \
+  --driver '/absolute/path/to/live-chatgpt-selection-driver' \
+  --samples 3 --output /private/evidence/selection.json --strict
+```
+
+Record the manifest at the exact tested commit before running. The default
+selection count is four cases × three repetitions here, without forced-lane
+pairs; the efficiency collector remains three tasks × three pairs × two lanes.
+The repair and Session-recovery selection cases remain explicit opt-ins. See the
+[selection protocol](agent-loop-baseline.md#free-tool-selection-experiment).
+
+For all four scenarios, retain the actual final answer and an independent check
+against the tested sources or fixture values; repository review also needs
+independent Git state. The file oracle establishes fixture eligibility only.
+The caller supplies the external correctness verdict: a driver pass declaration,
+canonical call count or final fixture alone cannot establish answer correctness.
+The harness has no automatic semantic answer verifier. Missing external
+correctness stays partial and cannot pass strict; missing canonical Audit
+metadata also fails strict and unavailable counts remain null. Both a single
+compound call and separate search/read calls can satisfy the selection runtime
+contract; that admission check does not prove the answer or identify optimal
+tool choice. Existing overlap/byte-budget/zero-match runtime tests and synthetic
+Audit regression fixtures validate contracts, not actual model behavior. No live
+measurement of the new case or guidance improvement is claimed here.
+
 ## Interpret evidence
 
 Strict mode rejects missing cases, groups, pairs or lane samples, nonpass
