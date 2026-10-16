@@ -60,7 +60,10 @@ fixture 身份的 `WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT`。driver 必须把它配�
 `fail`/blocking 不能；缺少明确 task outcome 仍为 `partial`。
 不支持输出 receipts 的基线结果仍可读取，但不能通过此 CSV 证明。四类时序案例
 保留原有命令、Job、过期 revision 与阻塞 closeout 的实际语义检查及串行顺序边界。
-独立文件 transfer 调用可以重叠；CSV closeout 仍须在所有记录的任务操作之后。
+独立文件 transfer 调用可以重叠。CSV closeout 仍须在所有记录的任务操作之后，
+唯一新增例外是规范工具 `check_workspace_hygiene`：其 PureRead/project:read 契约
+允许 finish 后诊断。该调用仍完整捕获并核验根/Session/Project；不会放行后置执行、
+编辑、第二次 finish 或任意观察工具，outcome 与输出哈希规则保持不变。
 
 校验器检查私有普通文件、trace UUID、压缩前后大小及 SHA-256 索引，关联规范
 Audit 结果和确切作用域，拒绝未记录调用和不确定顺序，仅读取所选有效参数与最终

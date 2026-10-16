@@ -510,7 +510,11 @@ def _checks(case_id, calls):
             raise EvidenceUnavailable("unsupported_case_command")
         items = receipt.get("items", [])
         valid = (mutation is not None and mutation["ended"] <= finish["started"]
-            and all(call is finish or call["ended"] <= finish["started"] for call in relevant)
+            # This canonical PureRead/project:read observer cannot mutate task
+            # files. Keep it recorded and bound, including post-finish diagnosis.
+            and all(call is finish or call["ended"] <= finish["started"]
+                    or (call["tool"] == "check_workspace_hygiene" and finish["ended"] <= call["started"])
+                    for call in relevant)
             and finish["result"]["success"] is True
             and outcome["status"] in {"pass", "warn"} and outcome["blocking"] is False
             and outcome["blocking_reasons"] == []
