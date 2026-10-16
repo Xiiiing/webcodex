@@ -641,13 +641,16 @@ Use [Coding Workflow](CODING_WORKFLOW.md) for the canonical `work_on_project` bo
 
 ## Goal and Agent continuation timing diagnostics
 
-Current resources are `ui://webcodex/goal-plan/v9` (App 8.0.0) and
-`ui://webcodex/agent-continuation/v21` (App 21.0.0). Retired resource aliases are rejected.
+Current resources are `ui://webcodex/goal-plan/v10` (App 9.0.0) and
+`ui://webcodex/agent-continuation/v22` (App 22.0.0). Retired resource aliases are rejected.
 Goal Plan and Agent Continuation cards offer **Enable timing diagnostics**, off by
 default. The local View retains at most 64 timing records: scheduled versus actual
 poll delay, monotonic tool RPC start/completion/error duration, visibility and teardown.
-`ui/message` duration is not separately measured; its outcome remains the existing
-prepare/finish acceptance or unknown observation.
+The Agent ring also records `host_dispatch_start`, `host_dispatch_complete` or
+`host_dispatch_error` around its existing `ui/message` call, elapsed `duration_ms`,
+and closed outcomes (`dispatching`, `dispatch_accepted`, `delivery_unknown`). Errors
+carry only a closed failure class; message bodies, consume tokens and raw errors
+never enter the ring. Host acceptance remains separate from exact Wake consume.
 Disabling clears the ring; remounting starts empty. No additional RPC, browser
 storage, model message, timing authority or scheduler is introduced. Goal diagnostics
 optionally attach the existing bounded `app_call_id`; the MCP adapter validates and
@@ -663,6 +666,13 @@ they add no prompts, message bodies, consume tokens or raw ClientWindow values a
 are never copied into model-facing Goal results. Existing full tracing has its
 separate payload/privacy contract. Negative lease margin identifies stale observation;
 missing observation/partial coverage are evidence limits, not permission to wake.
+
+Goal Plan targets 30s while hidden, retaining the 75s observation lease and 10s
+RPC timeout. The elapsed-aware scheduler shortens that target near lease expiry
+and backs off after an expired attempt. This adds scheduling margin; browser
+throttling may still exceed it. Agent hidden heartbeat remains 15s. See the
+[real-Host comparison procedure](implementation/mcp-app-auto-resume-restoration.md#goal-hidden-cadence-baseline-and-candidate-comparison)
+for the user-assisted baseline/candidate evidence gate.
 
 For separately authorized ChatGPT acceptance, bind the actual Agent carrier and
 present its exact correlated Goal. Enable the local diagnostics and metadata tracing,

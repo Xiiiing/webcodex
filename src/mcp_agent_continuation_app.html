@@ -745,13 +745,20 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
     // cause a blind resend: replacement binding reconciles prepared -> unknown.
     dispatchStarted = wake.attempt_id;
     let outcome = "delivery_unknown";
+    const hostDispatchStartedAt = performance.now();
+    timing("host_dispatch_start", { outcome: "dispatching" });
     try {
       await request("ui/message", {
         role: "user",
         content: [{ type: "text", text: automaticMessage }],
       });
       outcome = "dispatch_accepted";
-    } catch (_) {
+      timing("host_dispatch_complete", { outcome, duration_ms: performance.now() - hostDispatchStartedAt });
+    } catch (error) {
+      // Closed labels only: never retain the automatic message, tokens or raw error.
+      const failureKind = tornDown ? "bridge-cancelled"
+        : SAFE_HOST_FAILURE_KINDS.has(error && error.hostFailureKind) ? error.hostFailureKind : "bridge-error";
+      timing("host_dispatch_error", { outcome, failure_kind: failureKind, duration_ms: performance.now() - hostDispatchStartedAt });
       // After prepare, Host rejection/timeout/response loss is conservatively unknown.
     }
     await finishAttempt(wake, outcome);
@@ -1015,7 +1022,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 
   request("ui/initialize", {
     protocolVersion: APP_PROTOCOL,
-    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "21.0.0" },
+    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "22.0.0" },
     appCapabilities: {},
   }).then(() => {
     if (tornDown) return;

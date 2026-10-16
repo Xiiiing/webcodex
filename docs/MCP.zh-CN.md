@@ -470,12 +470,15 @@ operator/gateway primitive 保留。旧的 `export_project_artifact` compatibili
 
 ## Goal 与 Agent 续接时序诊断
 
-当前资源为 `ui://webcodex/goal-plan/v9`（App 8.0.0）与
-`ui://webcodex/agent-continuation/v21`（App 21.0.0），旧资源别名被拒绝。
+当前资源为 `ui://webcodex/goal-plan/v10`（App 9.0.0）与
+`ui://webcodex/agent-continuation/v22`（App 22.0.0），旧资源别名被拒绝。
 Goal Plan 和 Agent Continuation 卡片提供 **Enable timing diagnostics**，默认关闭。
 每个 View 本地最多保留 64 条时序记录：计划与实际轮询延迟、单调时钟测量的 RPC
-开始/完成/错误耗时（仅工具 RPC）、可见性与卸载。`ui/message` 不单独测量耗时，
-结果仍由现有 prepare/finish 的接受或未知观测表达。关闭即清空，重新挂载从空记录开始。不增加 RPC、
+开始/完成/错误耗时、可见性与卸载。Agent 环形缓冲区还围绕现有 `ui/message`
+记录 `host_dispatch_start`、`host_dispatch_complete` 或 `host_dispatch_error`、
+`duration_ms` 耗时，以及封闭结果（`dispatching`、`dispatch_accepted`、`delivery_unknown`）。
+错误仅含封闭失败类别；不记录消息正文、消费 token 或原始错误。Host 接受与精确 Wake
+消费仍分别表达。关闭即清空，重新挂载从空记录开始。不增加 RPC、
 浏览器持久化、模型消息、时间权威或调度器。Goal 诊断可附带已有的有界 `app_call_id`；
 MCP 适配器验证并移除该字段后才进入 ToolRuntime。Agent 调用保留现有的关联方式。
 
@@ -486,6 +489,11 @@ MCP 适配器验证并移除该字段后才进入 ToolRuntime。Agent 调用保�
 这些记录复用有界且失败开放的 trace 写入器，不添加提示词、消息正文、消费 token
 或原始 ClientWindow，也不复制到模型可见的 Goal 结果。现有 full trace 的正文与
 隐私规则独立适用。租约剩余量为负表示观测已过期；缺失观测或部分覆盖不能授予唤醒权限。
+
+Goal Plan 隐藏时目标轮询间隔为 30 秒，仍保留 75 秒观测租约与 10 秒 RPC 超时。
+接近租约到期时按已过时间缩短间隔，过期尝试之后退避；增加的余量无法保证浏览器
+不会继续节流。Agent 隐藏心跳仍为 15 秒。用户辅助的基线/候选版本证据流程见
+[真实 Host 对照步骤](implementation/mcp-app-auto-resume-restoration.md#goal-hidden-cadence-baseline-and-candidate-comparison)。
 
 单独获授权后，可在真实 ChatGPT 中绑定 Agent 载体并展示精确关联的 Goal，启用本地
 诊断和 metadata trace，对比前台轮询与隐藏聊天/浏览器超过 75 秒的行为。将实际

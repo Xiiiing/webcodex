@@ -57,7 +57,7 @@ Goal Plan presentation and Wake creation are never part of `prepare_goal_workflo
 success. The Agent may remain another Coordinator's Worker/Task assignee at the same
 time. Do not infer identity from Window co-location or create a second Goal-only Agent.
 
-The Goal Plan resource is solely `ui://webcodex/goal-plan/v9`, wire version 3. It
+The Goal Plan resource is solely `ui://webcodex/goal-plan/v10`, wire version 3. It
 renders step counts, current step, bounded milestones, last checkpoint, activity,
 and a bounded read-only continuity projection. Continuity keeps production Host
 carrier readiness and the exact current Goal-stall Wake lifecycle separate from
@@ -127,9 +127,13 @@ active Session, then keep the exact Goal Plan card observed while meaningful wor
 is quiet. After 300,000 ms, a successful exact-Goal sync within the Server-owned
 75,000 ms observation lease and at least 1,000 ms later than the last meaningful
 completion is only a candidate. The App targets 12s while visibly stable, 5s near
-the boundary or during a Wake transition, and 60s while hidden/backgrounded; the
-lease covers that hidden cadence plus bounded Host scheduling slack. The Server
-still checks current Goal/controller/Session/Project authority, latest
+the boundary or during a Wake transition, and 30s while hidden/backgrounded,
+shortened by elapsed observation age when necessary to reserve the unchanged 10s RPC timeout within the 75s lease.
+An expired attempt backs off to 30s; it does not create a retry burst. Browser
+throttling can still exceed the lease. Agent hidden heartbeat remains 15s.
+The [baseline/candidate procedure](../implementation/mcp-app-auto-resume-restoration.md#goal-hidden-cadence-baseline-and-candidate-comparison)
+requires actual Host observations before claiming improved background continuation.
+The Server still checks current Goal/controller/Session/Project authority, latest
 Window-to-Session relation, complete evidence and no active meaningful request.
 Closing or losing the card must not generate a new automatic turn. A different
 Goal's polling cannot keep this Goal's card alive.
