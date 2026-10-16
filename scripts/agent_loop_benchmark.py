@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import stat
 import shutil
@@ -27,11 +28,11 @@ from typing import Any
 try:
     from scripts import agent_loop_report as report
     from scripts import agent_temporal_evidence as temporal
-    from scripts.e2e_generic_agent_ws import GenericFixture, GENERIC_CASES, pressure_script
+    from scripts.e2e_generic_agent_ws import GenericFixture, GENERIC_CASES, pressure_script, mixed_note_script, encoded_csv_script
 except ModuleNotFoundError:
     import agent_loop_report as report
     import agent_temporal_evidence as temporal
-    from e2e_generic_agent_ws import GenericFixture, GENERIC_CASES, pressure_script
+    from e2e_generic_agent_ws import GenericFixture, GENERIC_CASES, pressure_script, mixed_note_script, encoded_csv_script
 
 STATUS_VALUES = frozenset(("pass", "fail", "partial", "unsupported"))
 DEFAULT_CASES = ("readonly_review", "guarded_multi_file_edit", "long_validation_handoff")
@@ -800,11 +801,13 @@ class _GenericCoordinator:
                 raise BenchmarkError("fixture coordinator did not stop")
 
 
-def _generic_temporal_evidence_proven(case, summary, variant, evidence=None):
-    if case["id"] not in temporal.TEMPORAL_CASES:
-        return case["id"] in {"generic_mixed_files_conflict", "generic_encoded_csv"}
+def _generic_temporal_evidence_proven(case, summary, variant, evidence=None, fixture_identity=None):
+    if case["id"] not in temporal.RUNTIME_CASES:
+        return False
     identity = (summary or {}).get("benchmark") or {}
-    return (isinstance(evidence, dict) and type(evidence.get("schema_version")) is int and evidence.get("schema_version") == 1
+    return (isinstance(evidence, dict) and type(evidence.get("schema_version")) is int and evidence.get("schema_version") == temporal.PROOF_SCHEMA_VERSION
+            and isinstance(fixture_identity, str) and re.fullmatch(r"[0-9a-f]{64}", fixture_identity) is not None
+            and evidence.get("fixture_identity") == fixture_identity
             and evidence.get("available") is True and evidence.get("passed") is True
             and evidence.get("case_id") == case["id"]
             and evidence.get("case_fingerprint") == report._case_fingerprint(case)
@@ -837,6 +840,7 @@ def _run_sample(
     generic = case.get("target") == "generic_agent_disposable_fixture"
     coordinator = None
     fixture = None
+    fixture_token = None
     capture_root = None
     completed: subprocess.CompletedProcess[bytes] | None = None
     try:
@@ -844,6 +848,7 @@ def _run_sample(
         if generic:
             workspace.mkdir(parents=True)
             fixture = GenericFixture(workspace, case["id"]).prepare()
+            fixture_token = temporal.fixture_identity(workspace)
             coordinator = _GenericCoordinator(fixture, root / "receipts" / (label + "-coordination"))
             coordinator.start()
         else:
@@ -872,9 +877,13 @@ def _run_sample(
                 "WEBCODEX_BENCH_FIXTURE_COMMAND": pressure_script() if case["id"] == "generic_failure_repair" else ""})
             if case["id"] == "generic_pending_independent_join":
                 env["WEBCODEX_BENCH_FIXTURE_COMMAND"] = temporal.PENDING_SCRIPT
-            if case["id"] in temporal.TEMPORAL_CASES:
+            if case["id"] == "generic_mixed_files_conflict":
+                env["WEBCODEX_BENCH_FIXTURE_COMMAND"] = mixed_note_script()
+            if case["id"] == "generic_encoded_csv":
+                env["WEBCODEX_BENCH_FIXTURE_COMMAND"] = encoded_csv_script()
+            if case["id"] in temporal.RUNTIME_CASES:
                 capture_root = root / "receipts" / (label + "-capture")
-                temporal.prepare_capture(capture_root, case["id"], base_revision, report._case_fingerprint(case))
+                temporal.prepare_capture(capture_root, case["id"], base_revision, report._case_fingerprint(case), fixture_root=workspace)
                 env["WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT"] = str(capture_root)
             env.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC", "PYTHONHASHSEED": "0", "PYTHONNOUSERSITE": "1"})
             env.pop("PYTHONPATH", None)
@@ -903,6 +912,8 @@ def _run_sample(
         oracle = fixture.oracle() if fixture is not None else _fixture_oracle(case, workspace, base_revision)
         if coordinator is not None and coordinator.error:
             oracle = {"available": True, "passed": False, "checks": [], "reason": "fixture coordination failed"}
+        if generic:
+            oracle["fixture_identity"] = fixture_token
         annotation = _annotation(
             case,
             variant=variant,
@@ -928,7 +939,7 @@ def _run_sample(
             temporal_evidence = temporal.verify(
                 capture_root=capture_root, audit_db=audit_path if audit_path.is_absolute() else workspace / audit_path,
                 workflow_session_id=receipt["workflow_session_id"], case_id=case["id"],
-                base_revision=base_revision, fingerprint=report._case_fingerprint(case))
+                base_revision=base_revision, fingerprint=report._case_fingerprint(case), fixture_root=workspace)
         effective_status = receipt["status"]
         reason_code: str | None = None
         if head_changed:
@@ -979,7 +990,7 @@ def _run_sample(
             and not _guarded_multi_file_contract_proven(summary, variant)
         ):
             effective_status = "partial"
-        if generic and effective_status == "pass" and not _generic_temporal_evidence_proven(case, summary, variant, temporal_evidence):
+        if generic and effective_status == "pass" and not _generic_temporal_evidence_proven(case, summary, variant, temporal_evidence, fixture_token):
             contradicted = temporal_evidence is not None and temporal_evidence.get("available") is True and temporal_evidence.get("passed") is False
             effective_status = "fail" if contradicted else "partial"
             reason_code = "generic_temporal_semantics_failed" if contradicted else "generic_temporal_evidence_unavailable"
@@ -1361,7 +1372,7 @@ def _strict_passed(result, requested_cases, repetitions, manifest=None):
                 return False
             if definition.get("target") == "generic_agent_disposable_fixture":
                 if (oracle.get("available") is not True or oracle.get("passed") is not True
-                    or not _generic_temporal_evidence_proven(definition, summary, sample.get("variant"), sample.get("temporal_evidence"))):
+                    or not _generic_temporal_evidence_proven(definition, summary, sample.get("variant"), sample.get("temporal_evidence"), oracle.get("fixture_identity"))):
                     return False
             elif oracle.get("available") and oracle.get("passed") is not True:
                 return False
