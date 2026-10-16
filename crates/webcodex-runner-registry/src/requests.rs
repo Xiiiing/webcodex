@@ -284,14 +284,40 @@ pub(super) fn remove_pending_request_locked(
     request_id: &str,
 ) -> Option<PendingShellRequest> {
     let pending = take_pending_request_locked(inner, request_id);
-    remove_request_from_queues_locked(inner, request_id);
+    if let Some(pending) = &pending {
+        remove_request_from_runner_queue_locked(inner, &pending.request.client_id, request_id);
+    } else {
+        // No retained owner: preserve conservative orphan cleanup, without
+        // treating the missing request as proof that execution never started.
+        for queue in inner.queues_by_runner.values_mut() {
+            queue.retain(|id| id != request_id);
+        }
+    }
     pending
 }
 
-fn remove_request_from_queues_locked(inner: &mut RunnerRegistryInner, request_id: &str) {
-    for queue in inner.queues_by_runner.values_mut() {
+fn remove_request_from_runner_queue_locked(
+    inner: &mut RunnerRegistryInner,
+    client_id: &str,
+    request_id: &str,
+) {
+    if let Some(queue) = inner.queues_by_runner.get_mut(client_id) {
         queue.retain(|id| id != request_id);
     }
+}
+
+/// Retire only a Job request's dispatch bookkeeping under the Registry lock.
+/// Callers establish the exact Runner from the owned Job or pending request.
+/// Job lifecycle, reconnect suppression and typed waiter resolution remain with
+/// their existing owners; this neither stops execution nor makes replay safe.
+pub(super) fn retire_job_request_locked(
+    inner: &mut RunnerRegistryInner,
+    client_id: &str,
+    request_id: &str,
+) {
+    take_pending_request_locked(inner, request_id);
+    inner.request_to_job.remove(request_id);
+    remove_request_from_runner_queue_locked(inner, client_id, request_id);
 }
 
 /// Resolve every in-flight *synchronous* tool request (no `job_id`) owned by
@@ -318,12 +344,9 @@ pub(super) fn resolve_disconnected_sync_requests_locked(
         .map(|(request_id, _)| request_id.clone())
         .collect();
     for request_id in request_ids {
-        let Some(mut pending) = inner.pending_by_id.remove(&request_id) else {
+        let Some(mut pending) = remove_pending_request_locked(inner, &request_id) else {
             continue;
         };
-        if let Some(queue) = inner.queues_by_runner.get_mut(client_id) {
-            queue.retain(|id| id != &request_id);
-        }
         if let Some(waiter) = pending.waiter.take() {
             let response = ShellRunResponse {
                 success: false,
@@ -2510,6 +2533,12 @@ impl RunnerRegistry {
                 RunnerFeature::BrowserLaunch,
                 RunnerFeature::BrowserManagedProfile,
             ],
+            BrowserKind::BeginUserHandoff | BrowserKind::FinishUserHandoff => &[
+                RunnerFeature::BrowserControl,
+                RunnerFeature::BrowserUserHandoff,
+                RunnerFeature::BrowserSurfaceHandoff,
+                RunnerFeature::ComputerObserve,
+            ],
             BrowserKind::ResolveSurface => &[
                 RunnerFeature::BrowserObserve,
                 RunnerFeature::BrowserSurfaceHandoff,
@@ -2615,11 +2644,15 @@ impl RunnerRegistry {
         access: Option<&crate::RunnerAccess>,
     ) -> Result<(String, oneshot::Receiver<ShellRunResponse>), String> {
         payload.validate()?;
+        let requires_node =
+            payload.adapter == webcodex_core::project_build::ProjectBuildAdapter::Node;
         let requires_all_packages = payload
             .scope
             .as_ref()
             .is_some_and(webcodex_core::project_build::ProjectBuildScope::selects_all_packages);
         let requires_dependency_policy = payload.dependency_policy.is_some();
+        let requires_python =
+            payload.adapter == webcodex_core::project_build::ProjectBuildAdapter::Python;
         let request_id = next_request_id();
         let (tx, rx) = oneshot::channel();
         let request = encode_runner_operation(
@@ -2636,6 +2669,26 @@ impl RunnerRegistry {
             return Err(capability_upgrade_error(
                 &client_id,
                 RunnerFeature::ProjectBuild,
+            ));
+        }
+        if requires_node
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectBuildNode)
+        {
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectBuildNode,
+            ));
+        }
+        if requires_python
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectBuildPython)
+        {
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectBuildPython,
             ));
         }
         if requires_all_packages

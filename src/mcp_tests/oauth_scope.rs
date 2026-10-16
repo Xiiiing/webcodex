@@ -65,11 +65,24 @@ fn assert_mcp_oauth_scope_rejected(
 ) {
     assert_eq!(status, StatusCode::FORBIDDEN, "body: {:?}", body);
     assert_eq!(body["error"], "insufficient_scope");
+    // MCP clients read the reauthorization hint from _meta, not the HTTP header.
+    let meta = body["_meta"]["mcp/www_authenticate"]
+        .as_array()
+        .expect("insufficient_scope body carries _meta[mcp/www_authenticate]");
+    assert_eq!(meta.len(), 1, "body: {:?}", body);
     let challenge = challenge.unwrap_or("");
     assert!(
         challenge.contains("error=\"insufficient_scope\""),
         "challenge: {}",
         challenge
+    );
+    assert!(
+        meta[0]
+            .as_str()
+            .unwrap_or("")
+            .contains("error=\"insufficient_scope\""),
+        "body: {:?}",
+        body
     );
     if let Some(scope) = scope {
         assert!(
@@ -128,6 +141,49 @@ async fn oauth2_mcp_tools_list_requires_runtime_read() {
         challenge.as_deref(),
         Some(crate::auth::SCOPE_RUNTIME_READ),
     );
+}
+
+#[tokio::test]
+async fn oauth2_mcp_tools_list_projects_per_tool_security_schemes() {
+    let (_tmp, service, token) =
+        oauth_mcp_service("runtime:read project:read project:write session:collaborate job:run");
+    let (status, body, _) = oauth_mcp_request(&service, &token, "tools/list", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "body: {:?}", body);
+
+    let tools = body["result"]["tools"].as_array().unwrap();
+    assert!(!tools.is_empty());
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        let expected = crate::auth::oauth_mcp_security_scheme_scopes(name);
+        match expected {
+            Some(scope_options) => {
+                let schemes = tool["securitySchemes"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{name} missing securitySchemes: {tool:?}"));
+                assert_eq!(schemes.len(), scope_options.len(), "{name}: {schemes:?}");
+                for (scheme, scopes) in schemes.iter().zip(scope_options) {
+                    assert_eq!(scheme["type"], "oauth2", "{name}: {schemes:?}");
+                    assert_eq!(scheme["scopes"], json!(scopes), "{name} policy mismatch");
+                }
+            }
+            None => assert!(
+                tool.get("securitySchemes").is_none(),
+                "{name} must not advertise an unknown-authority scheme"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn oauth2_mcp_tools_list_omits_security_schemes_without_oauth() {
+    // A non-OAuth projection (no auth context) must never advertise OAuth
+    // security schemes; metadata cannot imply a reauthorization path that the
+    // caller does not have.
+    let payload =
+        crate::mcp::tools::mcp_tools_list_payload_with_features_for_auth(true, false, true, None);
+    for tool in payload["tools"].as_array().unwrap() {
+        assert!(tool.get("securitySchemes").is_none(), "{tool:?}");
+    }
 }
 
 #[tokio::test]
@@ -1230,4 +1286,59 @@ async fn oauth_admin_grant_discovers_and_calls_operator_trace_on_all_surfaces() 
         assert!(challenge.is_none());
         assert_eq!(body["result"]["isError"], false, "{body:?}");
     }
+}
+
+#[tokio::test]
+async fn oauth_natural_language_discovery_cannot_expand_execution_authority() {
+    let (_tmp, service, token) = oauth_mcp_service("runtime:read project:read");
+    for (query, expected, forbidden) in [
+        ("读取源码文件内容", Some("read_files"), "edit_project_files"),
+        ("替换文字并运行程序", None, "run_process"),
+        ("后台服务状态", None, "run_detached_process"),
+        ("read_memory", None, "read_memory"),
+    ] {
+        let (status, body, challenge) = oauth_mcp_request(
+            &service,
+            &token,
+            "tools/call",
+            mcp_2026_params(
+                json!({"name":"read_tool_manifest","arguments":{"query":query,"limit":5}}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["result"]["isError"], false, "{body:?}");
+        assert!(challenge.is_none());
+        let output = &body["result"]["structuredContent"]["output"];
+        let tools = output["tools"].as_array().unwrap();
+        assert!(tools.len() <= 5);
+        assert!(
+            !tools.iter().any(|tool| tool["name"] == forbidden),
+            "{body:?}"
+        );
+        if let Some(expected) = expected {
+            assert!(
+                tools.iter().any(|tool| tool["name"] == expected),
+                "{body:?}"
+            );
+        }
+        assert!(!body.to_string().contains("discoveryKeywords"));
+        assert!(output["contract"].is_null());
+    }
+    let (status, body, challenge) = oauth_mcp_request(
+        &service,
+        &token,
+        "tools/call",
+        mcp_2026_params(adaptive_gateway_params(
+            "run_process",
+            json!({"project":"missing","executable":"missing"}),
+        )),
+    )
+    .await;
+    assert_mcp_oauth_scope_rejected(
+        status,
+        &body,
+        challenge.as_deref(),
+        Some(crate::auth::SCOPE_JOB_RUN),
+    );
 }

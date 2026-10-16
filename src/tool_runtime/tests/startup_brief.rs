@@ -122,6 +122,9 @@ fn assert_builtin_workflow(output: &Value) {
     assert!(recovery.contains("read_session_handoff"));
     assert!(recovery.contains("exact session_id"));
     assert!(recovery.contains("basis completeness"));
+    assert!(recovery.contains("Snapshot changed: re-read exact handoff"));
+    assert!(recovery
+        .contains("latest instructions/decisions/progress/validation before dependent work"));
     assert!(recovery.contains("only after task-context loss/compaction/restart"));
     assert!(recovery.contains("Never use it for routine progress/baselines"));
     assert!(workflow["model_protocol"]
@@ -206,11 +209,11 @@ fn assert_builtin_workflow(output: &Value) {
         "Validation failure is evidence, not queue cleanliness",
         "Reuse assertion_name",
         "outcome_unknown fails closed",
-        "Development validation may overlap independent work",
-        "covered-source edits make it stale for final evidence",
-        "freeze source covered by final validation",
-        "invalidate that evidence",
-        "rerun the appropriate final validation",
+        "overlap validation with independent work",
+        "edits invalidate it and require revalidation",
+        "Freeze covered source for final evidence",
+        "edits invalidate it",
+        "require revalidation",
         "exact continuation",
         "passive Job attention",
         "observe_jobs is for logs/details/recovery",
@@ -1140,6 +1143,7 @@ async fn startup_uses_project_scoped_lifecycle_aware_job_summary() {
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -1279,6 +1283,7 @@ async fn startup_uses_project_scoped_lifecycle_aware_job_summary() {
             validation_progress: None,
             test_count_evidence: None,
             format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: true,
         })

@@ -246,6 +246,9 @@ pub(crate) fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabili
     capabilities.set(RunnerCapabilityId::StructuredGoTestJson, true);
     capabilities.set(RunnerCapabilityId::ProjectValidation, true);
     capabilities.set(RunnerCapabilityId::ProjectBuild, true);
+    capabilities.set(RunnerCapabilityId::ProjectBuildNode, true);
+    capabilities.set(RunnerCapabilityId::ProjectValidationNodeJson, true);
+    capabilities.set(RunnerCapabilityId::ProjectBuildPython, true);
     // Complete format lifecycle with bounded planning, worker, guarded commit
     // and durable mutation report is supported across native platforms.
     capabilities.set(
@@ -318,6 +321,8 @@ pub(crate) fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabili
     // MCP gateway support is fenced by the validated provider inventory in
     // registration rather than a separate capability bit. Older binaries omit
     // that inventory, so a newer Server will never target them.
+    // ResourceLink is an independently negotiated additive Runner result variant.
+    capabilities.set(RunnerCapabilityId::McpGatewayResourceLinks, true);
     // `job_state_reconciliation` is on by default. A hidden, test/ops-only env
     // knob lets an E2E exercise the valid generation-2 no-reconciliation mode
     // (it then has no job inventory and a disconnect falls straight to `lost`).
@@ -357,6 +362,12 @@ pub(crate) fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabili
     capabilities.set(
         RunnerCapabilityId::BrowserSurfaceHandoff,
         browser_available
+            && cfg!(any(target_os = "macos", windows))
+            && !super::super::computer_session::configured(),
+    );
+    capabilities.set(
+        RunnerCapabilityId::BrowserUserHandoff,
+        owned_browser_available
             && cfg!(any(target_os = "macos", windows))
             && !super::super::computer_session::configured(),
     );

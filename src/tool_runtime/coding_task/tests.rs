@@ -3,6 +3,17 @@ use super::projection::*;
 use super::*;
 use crate::projects::ProjectConfig;
 use crate::tool_runtime::closeout_facts::CloseoutFacts;
+
+#[test]
+fn finish_actions_preserve_blocking_jobs_instead_of_suggesting_redispatch() {
+    let mut facts = CloseoutFacts::default();
+    facts.jobs.blocking_active_count = 1;
+    let actions = finish_suggested_next_actions(&facts, false);
+    assert_eq!(actions.len(), 1);
+    assert!(actions[0].contains("same Jobs"));
+    assert!(actions[0].contains("wait_for_job_readiness and observe_jobs"));
+    assert!(actions[0].contains("cancel only when intended"));
+}
 use crate::tool_runtime::closeout_projection::{
     closeout_facts, hygiene_observation, workspace_observation,
 };
@@ -44,7 +55,7 @@ fn finish_actions_prefer_review_changes_when_nested_show_changes_hands_off() {
     let output = json!({
         "workspace": {"clean": false},
         "changes": {
-            "show_changes": {
+            "read_workspace_changes": {
                 "diff_review_handoff": {
                     "next_call": {"follow_up_kind": "mechanically_followable", "tool": "read_git_diff_hunks", "arguments": {}}
                 }
@@ -58,7 +69,7 @@ fn finish_actions_prefer_review_changes_when_nested_show_changes_hands_off() {
     let actions = finish_suggested_next_actions(
         &facts,
         output
-            .pointer("/changes/show_changes/diff_review_handoff/next_call/tool")
+            .pointer("/changes/read_workspace_changes/diff_review_handoff/next_call/tool")
             .and_then(Value::as_str)
             == Some("read_git_diff_hunks"),
     );
@@ -66,7 +77,7 @@ fn finish_actions_prefer_review_changes_when_nested_show_changes_hands_off() {
         action == "continue the review with review_changes when its continuation is available"
     }));
     assert_eq!(
-        output["changes"]["show_changes"]["diff_review_handoff"]["next_call"]["tool"],
+        output["changes"]["read_workspace_changes"]["diff_review_handoff"]["next_call"]["tool"],
         "read_git_diff_hunks"
     );
     assert!(!actions
@@ -127,6 +138,11 @@ fn output_guidance_preserves_unproven_validation_and_rejects_invalid_receipts() 
     });
     let original = finish_from_fixture(&canonical);
     assert_eq!(original["task_outcome"]["status"], "warn");
+    assert_eq!(original["acceptance"]["state"], "needs_evidence");
+    assert_eq!(
+        compact_finish_output(&original)["acceptance"],
+        original["acceptance"]
+    );
     assert!(original["suggested_next_actions"]
         .as_array()
         .unwrap()

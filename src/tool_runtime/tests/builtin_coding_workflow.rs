@@ -113,11 +113,11 @@ fn builtin_coding_workflow_defaults_cover_unnamed_tasks_without_granting_authori
         "Validation failure is evidence, not queue cleanliness",
         "Reuse assertion_name",
         "outcome_unknown fails closed",
-        "Development validation may overlap independent work",
-        "covered-source edits make it stale for final evidence",
-        "For closeout evidence, freeze source covered by final validation",
-        "invalidate that evidence",
-        "rerun the appropriate final validation",
+        "overlap validation with independent work",
+        "edits invalidate it and require revalidation",
+        "Freeze covered source for final evidence",
+        "edits invalidate it",
+        "require revalidation",
         "one execution/Job",
         "exact continuation",
         "passive Job attention",
@@ -126,8 +126,48 @@ fn builtin_coding_workflow_defaults_cover_unnamed_tasks_without_granting_authori
         "no automatic next turn",
         "finish ready work",
         "After Rust stabilizes, format once",
+        "observable completion conditions",
+        "show a short plan and execute",
+        "Visible plans need no Goal",
+        "Diagnose/replan as evidence/requirements change",
+        "save Session decisions/progress",
+        "Tools/Jobs/checklists do not prove completion",
     ] {
         assert!(defaults.contains(boundary), "missing guidance: {boundary}");
+    }
+}
+
+#[test]
+fn builtin_workflow_teaches_per_request_recording_independently_of_business_target() {
+    use crate::tool_runtime::tool_inputs::CodingGuidanceProfile;
+
+    let direct = builtin_coding_workflow_projection(CodingGuidanceProfile::Direct);
+    let recording = direct["model_protocol"]["session_recording"]
+        .as_str()
+        .expect("recorder guidance");
+    for boundary in [
+        "session_ref as _wc.record on each ordinary call",
+        "for that Session's recorder provenance",
+        "canonical wc_sess_* remains valid",
+        "business session_id may target another Session but does not select a recorder",
+        "may target another Session",
+        "_wc.record grants no authority",
+        "Recorder is request-scoped, never sticky",
+        "omitted calls are not backfilled",
+    ] {
+        assert!(
+            recording.contains(boundary),
+            "missing recorder boundary: {boundary}"
+        );
+    }
+    assert!(!recording.contains("on the next ordinary"));
+
+    let host = builtin_coding_workflow_projection(CodingGuidanceProfile::HostCodeMode);
+    assert_eq!(host["model_protocol"]["session_recording"], recording);
+    #[cfg(feature = "experimental-code-mode")]
+    {
+        let composed = builtin_coding_workflow_projection(CodingGuidanceProfile::CodeMode);
+        assert_eq!(composed["model_protocol"]["session_recording"], recording);
     }
 }
 

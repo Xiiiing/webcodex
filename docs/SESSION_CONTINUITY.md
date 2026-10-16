@@ -22,7 +22,16 @@ exact retry restart-safe while its message/replay metadata is retained. An
 uncertain keyed delivery must be reconciled with the same key and payload.
 
 For a task already using a durable Goal, use `checkpoint_goal` at meaningful
-boundaries. Keep the Goal explicitly associated with the exact Session. Execution
+boundaries. When evidence changes unfinished milestones, use `revise_goal_plan`
+with the exact current revision, a fresh idempotency key, a bounded reason and the
+full ordered replacement. Completed ids/titles stay intact, retained statuses stay
+intact and new ids start pending. Removing the current step leaves none; select
+one through a later checkpoint. Completion conditions stay unchanged. Exact replay
+is inert, changed reuse conflicts and terminal Goals are immutable. Read `get_goal`
+after a stale revision and reconsider the replacement. Its `plan_history` returns
+up to eight prior snapshots within 64 KiB, with lifetime `total_count`,
+`returned_count` and `truncated`; Session handoff recovers the current plan.
+Keep the Goal explicitly associated with the exact Session. Execution
 and validation tools keep their own evidence when an authorized recorder is
 explicitly supplied; a message claiming “tests passed” remains a report.
 
@@ -54,7 +63,14 @@ The recovery sequence is:
    recorded notes, their status, supersession, and coverage/truncation. The
    default brief stays below 8 KiB. Use the diagnostic handoff or authorized
    `list_session_messages` for additional retained todos, risks or note detail.
-   Recheck current Git/files and any stale test claims before acting.
+   Check `basis.complete` and truncation before relying on the snapshot. If
+   `session_changed_during_snapshot` or
+   `external_observations_changed_during_snapshot` is reported, explicitly
+   re-read the exact handoff for the latest instruction, decisions, progress and
+   validation before dependent work. Honor the user's current corrections and
+   preserve external edits. Recheck current Git/files and stale test claims:
+   an earlier passing validation does not prove changed source. Recover and
+   observe an existing running Job by its exact identity; do not restart it.
 4. For an Active Session, explicitly resume with
    `work_on_project(session_id, instruction, ...)` in default `checkout` mode. The
    authorized Session supplies its bound Project; an explicit Project must still match.

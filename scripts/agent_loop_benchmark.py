@@ -20,16 +20,20 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 from pathlib import Path
 from typing import Any
 
 try:
     from scripts import agent_loop_report as report
+    from scripts.e2e_generic_agent_ws import GenericFixture, GENERIC_CASES, pressure_script
 except ModuleNotFoundError:
     import agent_loop_report as report
+    from e2e_generic_agent_ws import GenericFixture, GENERIC_CASES, pressure_script
 
 STATUS_VALUES = frozenset(("pass", "fail", "partial", "unsupported"))
 DEFAULT_CASES = ("readonly_review", "guarded_multi_file_edit", "long_validation_handoff")
+DEFAULT_SELECTION_CASES = ("selection_single_read", "selection_batch_read", "selection_cross_tool_review")
 VARIANTS = ("direct", "code_mode")
 # Selected, already-persisted metadata only. Model turns and raw payloads cannot
 # be reconstructed from Agent Loop summaries.
@@ -187,6 +191,10 @@ def _case(manifest: dict[str, Any], case_id: str) -> dict[str, Any]:
 
 
 def _surface(case: dict[str, Any], variant: str) -> str:
+    if variant == report.TOOL_SELECTION_VARIANT:
+        if case.get("experiment") != "tool_selection":
+            raise BenchmarkError("free selection requires an explicit tool_selection case")
+        return report.TOOL_SELECTION_VARIANT
     if variant == "direct":
         return "direct"
     surface = case.get("code_mode_surface")
@@ -446,7 +454,7 @@ def _annotation(
     if oracle["available"]:
         if oracle["passed"] is not True:
             correctness["task_verdict"] = "fail"
-        elif correctness.get("task_verdict") is None:
+        elif correctness.get("task_verdict") is None and case.get("experiment") != "tool_selection":
             correctness["task_verdict"] = "pass"
         if case["validation"]["required"] is False and correctness.get("validation_verdict") is None:
             correctness["validation_verdict"] = "not_required"
@@ -541,6 +549,16 @@ def _runtime_evidence_proven(
     composition_available = (
         report._get_path(summary, "availability.code_mode_composition.available") is True
     )
+    if variant == report.TOOL_SELECTION_VARIANT:
+        # Any admitted mix is valid here. The original forced-lane gate below
+        # still rejects mixtures; this experiment measures choice separately.
+        canonical_total = report._get_path(summary, "canonical_calls.total")
+        return (
+            surface == report.TOOL_SELECTION_VARIANT
+            and composition_available
+            and type(canonical_total) is int
+            and canonical_total == outer_total
+        )
     if variant == "direct":
         canonical_total = report._get_path(summary, "canonical_calls.total")
         return (
@@ -733,6 +751,48 @@ def _guarded_multi_file_contract_proven(summary: dict[str, Any], variant: str) -
     )
 
 
+class _GenericCoordinator:
+    """Own the fixture-side external write, never a runtime operation or receipt."""
+    def __init__(self, fixture: GenericFixture, directory: Path):
+        self.fixture, self.directory = fixture, directory
+        self.stop = threading.Event()
+        self.error = False
+        self.thread = None
+
+    def start(self):
+        self.directory.mkdir()
+        if self.fixture.case_id != "generic_stale_read_revision":
+            return
+        def coordinate():
+            try:
+                while not self.stop.wait(0.01):
+                    if not self.fixture.external_written and (self.directory / "first-read").is_file():
+                        self.fixture.append_external()
+                        (self.directory / "external-written").write_text("ready\n")
+                    if self.fixture.external_written and not self.fixture.rejection_checked and (self.directory / "stale-rejected").is_file():
+                        self.fixture.check_rejected_bytes()
+                        (self.directory / "rejection-checked").write_text("ready\n")
+            except (OSError, ValueError):
+                self.error = True
+                (self.directory / "coordination-failed").write_text("failed\n")
+        self.thread = threading.Thread(target=coordinate, name="fixture-stale-coordinator", daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+            if self.thread.is_alive():
+                raise BenchmarkError("fixture coordinator did not stop")
+
+
+def _generic_temporal_evidence_proven(case, summary, variant):
+    # The existing metadata report does not carry exact command stdout/exit order,
+    # read-revision identity or output receipts for these scenarios. A filesystem
+    # result or driver assertion cannot replace that missing evidence.
+    return case["id"] in {"generic_mixed_files_conflict", "generic_encoded_csv"}
+
+
 def _run_sample(
     repo: Path,
     root: Path,
@@ -753,19 +813,29 @@ def _run_sample(
     annotation_path.unlink(missing_ok=True)
     surface: str | None = None
     worktree_added = False
+    generic = case.get("target") == "generic_agent_disposable_fixture"
+    coordinator = None
+    fixture = None
     completed: subprocess.CompletedProcess[bytes] | None = None
     try:
         surface = _surface(case, variant)
-        _worktree_add(repo, workspace, base_revision)
-        worktree_added = True
-        if _workspace_status(workspace):
-            raise BenchmarkError("fresh benchmark worktree is not clean")
+        if generic:
+            workspace.mkdir(parents=True)
+            fixture = GenericFixture(workspace, case["id"]).prepare()
+            coordinator = _GenericCoordinator(fixture, root / "receipts" / (label + "-coordination"))
+            coordinator.start()
+        else:
+            _worktree_add(repo, workspace, base_revision)
+            worktree_added = True
+            if _workspace_status(workspace):
+                raise BenchmarkError("fresh benchmark worktree is not clean")
         env = dict(os.environ)
         env.update(
             {
                 "WEBCODEX_BENCH_WORKSPACE": str(workspace),
                 "WEBCODEX_BENCH_CASE_ID": case["id"],
                 "WEBCODEX_BENCH_VARIANT": variant,
+                "WEBCODEX_BENCH_EXPERIMENT": case.get("experiment", "forced_lanes"),
                 "WEBCODEX_BENCH_SURFACE": surface,
                 "WEBCODEX_BENCH_BASE_REVISION": base_revision,
                 "WEBCODEX_BENCH_CASE_FINGERPRINT": report._case_fingerprint(case),
@@ -773,6 +843,14 @@ def _run_sample(
                 "WEBCODEX_BENCH_DRIVER_RESULT": str(receipt_path),
             }
         )
+        if generic:
+            env.update({"WEBCODEX_BENCH_TARGET": "generic_agent_disposable_fixture",
+                "WEBCODEX_BENCH_FIXTURE_COORDINATION": str(coordinator.directory),
+                "WEBCODEX_BENCH_FIXTURE_ENVIRONMENT": json.dumps({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC", "PYTHONHASHSEED": "0", "PYTHONNOUSERSITE": "1"}),
+                "WEBCODEX_BENCH_FIXTURE_COMMAND": pressure_script() if case["id"] == "generic_failure_repair" else ""})
+            env.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC", "PYTHONHASHSEED": "0", "PYTHONNOUSERSITE": "1"})
+            env.pop("PYTHONPATH", None)
+            env.pop("PYTHONHOME", None)
         started = time.time_ns() // 1_000_000
         completed = _run_driver(driver_argv, cwd=workspace, env=env)
         ended = time.time_ns() // 1_000_000
@@ -791,8 +869,12 @@ def _run_sample(
         receipt = _load_driver_receipt(receipt_path)
         if receipt.get("task_timing") is None:
             receipt["task_timing"] = {"started_at_ms": started, "ended_at_ms": ended}
-        head_changed = _head_revision(workspace) != base_revision
-        oracle = _fixture_oracle(case, workspace, base_revision)
+        if coordinator is not None:
+            coordinator.close()
+        head_changed = not generic and _head_revision(workspace) != base_revision
+        oracle = fixture.oracle() if fixture is not None else _fixture_oracle(case, workspace, base_revision)
+        if coordinator is not None and coordinator.error:
+            oracle = {"available": True, "passed": False, "checks": [], "reason": "fixture coordination failed"}
         annotation = _annotation(
             case,
             variant=variant,
@@ -862,6 +944,9 @@ def _run_sample(
             and not _guarded_multi_file_contract_proven(summary, variant)
         ):
             effective_status = "partial"
+        if generic and effective_status == "pass" and not _generic_temporal_evidence_proven(case, summary, variant):
+            effective_status = "partial"
+            reason_code = "generic_temporal_evidence_unavailable"
         return {
             "case_id": case["id"],
             "variant": variant,
@@ -906,8 +991,13 @@ def _run_sample(
             "summary": None,
         }
     finally:
+        if coordinator is not None:
+            coordinator.close()
+            shutil.rmtree(coordinator.directory, ignore_errors=True)
         if worktree_added:
             _worktree_remove(repo, workspace)
+        elif generic and workspace.exists():
+            shutil.rmtree(workspace)
 
 
 def _comparison(direct: dict[str, Any], code_mode: dict[str, Any]) -> dict[str, Any] | None:
@@ -1002,12 +1092,16 @@ def run_benchmark(
         case_manifest.write_text(_read_manifest_at_revision(repo, resolved), encoding="utf-8")
         manifest = report.load_case_manifest(case_manifest)
         selected = [_case(manifest, case_id) for case_id in case_ids]
+        if any(case.get("experiment", "forced_lanes") != "forced_lanes" for case in selected):
+            raise BenchmarkError("tool_selection cases require --experiment tool_selection")
         unsupported_targets = sorted(
-            {str(case.get("target")) for case in selected if case.get("target") != "webcodex_repository"}
+            {str(case.get("target")) for case in selected if case.get("target") not in ("webcodex_repository", "generic_agent_disposable_fixture")}
         )
+        if any(case.get("target") == "generic_agent_disposable_fixture" and case["id"] not in GENERIC_CASES for case in selected):
+            raise BenchmarkError("unknown generic fixture case")
         if unsupported_targets:
             raise BenchmarkError(
-                "paired worktree runner supports only target=webcodex_repository; "
+                "paired runner supports only repository/disposable generic targets; "
                 f"unsupported target(s): {', '.join(unsupported_targets)}"
             )
     except BaseException:
@@ -1066,7 +1160,7 @@ def run_benchmark(
             "status_counts": {status: statuses.count(status) for status in sorted(STATUS_VALUES)},
             "cases": cases_out,
             "notes": [
-                "each sample ran in a fresh detached Git worktree",
+                "each sample ran in a fresh detached Git worktree or ordinary-directory generic fixture",
                 "pair order alternates direct/code_mode then code_mode/direct",
                 "driver-reported unsupported, partial, and failed samples remain in the result",
                 "comparisons reuse agent_loop_report exact base/case fingerprint/correctness gates",
@@ -1080,8 +1174,78 @@ def run_benchmark(
             temp_owner.cleanup()
 
 
+def run_selection_benchmark(
+    *,
+    repo: Path,
+    base_revision: str,
+    driver_argv: list[str],
+    case_ids: list[str],
+    samples: int,
+) -> dict[str, Any]:
+    """Capture unrestricted tool choices without weakening forced-lane gates.
+
+    The caller-owned driver still supplies actual Host observations and an
+    independent correctness verdict. No driver or model is simulated here.
+    """
+    if samples < 1 or samples > 100:
+        raise BenchmarkError("selection samples must be 1..100")
+    if not case_ids or len(set(case_ids)) != len(case_ids):
+        raise BenchmarkError("selection requires unique non-empty case ids")
+    repo = _git_root(repo)
+    resolved = _require_exact_revision(repo, base_revision)
+    if _head_revision(repo) != resolved:
+        raise BenchmarkError("base revision must equal the current checkout HEAD")
+    with tempfile.TemporaryDirectory(prefix="webcodex-agent-selection-bench-") as tmp:
+        root = Path(tmp)
+        for name in ("worktrees", "receipts", "annotations"):
+            (root / name).mkdir()
+        case_manifest = root / "agent_loop_cases.json"
+        case_manifest.write_text(_read_manifest_at_revision(repo, resolved), encoding="utf-8")
+        selected = [_case(report.load_case_manifest(case_manifest), case_id) for case_id in case_ids]
+        if any(case.get("experiment") != "tool_selection" for case in selected):
+            raise BenchmarkError("selection runner requires explicit tool_selection cases")
+        if any(case.get("target") != "webcodex_repository" for case in selected):
+            raise BenchmarkError("selection worktree runner supports only target=webcodex_repository")
+        cases_out = []
+        for case in selected:
+            observations = [
+                _run_sample(
+                    repo, root, driver_argv, case,
+                    variant=report.TOOL_SELECTION_VARIANT,
+                    pair_index=index, ordinal=0,
+                    base_revision=resolved, case_manifest=case_manifest,
+                )
+                for index in range(samples)
+            ]
+            cases_out.append({"case_id": case["id"], "samples": observations})
+        statuses = [sample["status"] for case in cases_out for sample in case["samples"]]
+        return {
+            "schema_version": 1,
+            "kind": "agent_loop_selection_benchmark",
+            "experiment": "tool_selection",
+            "base_revision": resolved,
+            "samples_per_case": samples,
+            "case_ids": case_ids,
+            "sample_count": len(statuses),
+            "status_counts": {status: statuses.count(status) for status in sorted(STATUS_VALUES)},
+            "cases": cases_out,
+            "notes": [
+                "each sample uses a fresh detached Git worktree and an unrestricted tool-selection prompt",
+                "native batching is an invocation shape, not another execution surface",
+                "scripted MCP calls are runtime tests, not real ChatGPT Web or model-choice evidence",
+                "no optimal sequence, winner, exact model-turn count, or speedup is inferred",
+            ],
+        }
+
+
 def _human_summary(result: dict[str, Any]) -> str:
     counts = result["status_counts"]
+    if result.get("experiment") == "tool_selection":
+        return "\n".join([
+            f"Agent Loop tool selection {result['base_revision'][:8]}",
+            f"cases={len(result['case_ids'])} samples={result['sample_count']}",
+            "status " + " ".join(f"{key}={counts[key]}" for key in sorted(counts)),
+        ])
     lines = [
         f"Agent Loop benchmark {result['base_revision'][:8]}",
         f"cases={len(result['case_ids'])} pairs={result['pair_count']} samples={result['sample_count']}",
@@ -1106,6 +1270,55 @@ def _human_summary(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _strict_passed(result, requested_cases, repetitions, manifest=None):
+    """Acceptance requires the exact requested matrix and real required evidence."""
+    if not requested_cases or repetitions < 1:
+        return False
+    manifest = manifest or report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+    try:
+        definitions = {case_id: _case(manifest, case_id) for case_id in requested_cases}
+    except report.ReportError:
+        return False
+    cases = result.get("cases", [])
+    if len(cases) != len(requested_cases) or {case.get("case_id") for case in cases} != set(requested_cases):
+        return False
+    selection = result.get("experiment") == "tool_selection"
+    for case in cases:
+        definition = definitions[case["case_id"]]
+        if selection:
+            samples = case.get("samples", [])
+            if len(samples) != repetitions or any(sample.get("variant") != report.TOOL_SELECTION_VARIANT for sample in samples):
+                return False
+        else:
+            pairs = case.get("pairs", [])
+            if len(pairs) != repetitions or {p.get("pair_index") for p in pairs} != set(range(repetitions)):
+                return False
+            if any(len(p.get("samples", [])) != 2 or {s.get("variant") for s in p["samples"]} != set(VARIANTS) for p in pairs):
+                return False
+            samples = [sample for pair in pairs for sample in pair["samples"]]
+        for sample in samples:
+            summary = sample.get("summary")
+            if sample.get("case_id") != case["case_id"] or sample.get("status") != "pass" or not isinstance(summary, dict):
+                return False
+            correctness = summary.get("correctness") or {}
+            if correctness.get("task_verdict") != "pass" or correctness.get("validation_verdict") not in ("pass", "not_required"):
+                return False
+            if definition["validation"]["required"] and correctness.get("validation_verdict") != "pass":
+                return False
+            if not _runtime_evidence_proven(summary, sample.get("variant"), sample.get("surface")):
+                return False
+            oracle = sample.get("fixture_oracle") or {}
+            if not isinstance(oracle, dict):
+                return False
+            if definition.get("target") == "generic_agent_disposable_fixture":
+                if (oracle.get("available") is not True or oracle.get("passed") is not True
+                    or not _generic_temporal_evidence_proven(definition, summary, sample.get("variant"))):
+                    return False
+            elif oracle.get("available") and oracle.get("passed") is not True:
+                return False
+    return True
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path("."))
@@ -1113,6 +1326,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--driver", required=True, help="Host driver command, parsed with shlex; no shell is invoked")
     parser.add_argument("--case-id", action="append", dest="case_ids")
     parser.add_argument("--pairs", type=int, default=2)
+    parser.add_argument("--experiment", choices=("forced_lanes", "tool_selection"), default="forced_lanes")
+    parser.add_argument("--samples", type=int, default=2, help="repetitions per case in the tool_selection experiment")
+    parser.add_argument("--strict", action="store_true", help="fail unless every requested case/repetition passes with required runtime evidence")
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -1123,19 +1339,29 @@ def main(argv: list[str] | None = None) -> int:
         driver_argv = shlex.split(args.driver)
         if not driver_argv:
             raise BenchmarkError("--driver must name an executable")
-        result = run_benchmark(
-            repo=args.repo.resolve(),
-            base_revision=args.base_revision,
-            driver_argv=driver_argv,
-            case_ids=args.case_ids or list(DEFAULT_CASES),
-            pairs=args.pairs,
-        )
+        if args.experiment == "tool_selection":
+            result = run_selection_benchmark(
+                repo=args.repo.resolve(), base_revision=args.base_revision,
+                driver_argv=driver_argv,
+                case_ids=args.case_ids or list(DEFAULT_SELECTION_CASES), samples=args.samples,
+            )
+        else:
+            result = run_benchmark(
+                repo=args.repo.resolve(), base_revision=args.base_revision,
+                driver_argv=driver_argv,
+                case_ids=args.case_ids or list(DEFAULT_CASES), pairs=args.pairs,
+            )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(_stable_json(result), encoding="utf-8")
         print(_human_summary(result))
         if not args.output:
             print(_stable_json(result), end="")
+        if args.strict:
+            requested = args.case_ids or list(DEFAULT_SELECTION_CASES if args.experiment == "tool_selection" else DEFAULT_CASES)
+            repetitions = args.samples if args.experiment == "tool_selection" else args.pairs
+            manifest = report.validate_case_manifest(json.loads(_read_manifest_at_revision(_git_root(args.repo), result["base_revision"])))
+            return 0 if _strict_passed(result, requested, repetitions, manifest) else 1
         return 0 if result["status_counts"]["fail"] == 0 else 1
     except (BenchmarkError, report.ReportError) as exc:
         print(f"agent_loop_benchmark: {exc}", file=sys.stderr)

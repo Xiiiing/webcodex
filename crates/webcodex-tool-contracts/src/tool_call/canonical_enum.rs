@@ -1535,7 +1535,7 @@ pub enum ToolCall {
     },
 
     /// Run one portable project build. The Runner resolves the nearest supported
-    /// Rust/Go recipe, plans canonical argv, and admits one typed build Job.
+    /// Rust/Go/Python recipe, plans canonical argv, and admits one typed build Job.
     ProjectBuild {
         /// Exact registered Runner Project.
         project: String,
@@ -1544,7 +1544,7 @@ pub enum ToolCall {
         /// Project-relative directory; Runner resolves the nearest recipe root.
         #[serde(default)]
         cwd: Option<String>,
-        /// Omission means auto. Rust and Go are supported; Node/Python return unavailable.
+        /// Omission means auto. Supports Rust, Go, Python packaging and manifest-declared Node build scripts.
         #[serde(default)]
         adapter: Option<webcodex_core::project_build::ProjectBuildAdapter>,
         /// Optional portable scope: bounded explicit packages or all_packages=true, never both.
@@ -1870,12 +1870,12 @@ pub enum ToolCall {
             pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
         ))]
         session_id: String,
-        /// Fixed durable completion intent; the Server does not evaluate natural-language conditions.
+        /// Durable completion intent, editable with update_goal; the Server does not evaluate natural-language conditions.
         /// At most 8 conditions, each additionally bounded to 512 UTF-8 bytes.
         #[serde(default)]
         #[schemars(schema_with = "goal_conditions_schema")]
         completion_conditions: Vec<String>,
-        /// Fixed bounded plan. Stable ids are unique; all steps start pending.
+        /// Initial bounded plan. Stable ids are unique; all steps start pending.
         #[serde(default)]
         #[schemars(length(max = 32))]
         steps: Vec<GoalStepInputCall>,
@@ -1897,12 +1897,12 @@ pub enum ToolCall {
 
     /// Create explicit high-level durable intent/control state without execution authority.
     CreateGoal {
-        /// Fixed durable completion intent; the Server does not evaluate natural-language conditions.
+        /// Durable completion intent, editable with update_goal; the Server does not evaluate natural-language conditions.
         /// At most 8 conditions, each additionally bounded to 512 UTF-8 bytes.
         #[serde(default)]
         #[schemars(schema_with = "goal_conditions_schema")]
         completion_conditions: Vec<String>,
-        /// Fixed bounded plan. Stable ids are unique; all steps start pending. Use checkpoint_goal
+        /// Initial bounded plan. Stable ids are unique; all steps start pending. Use checkpoint_goal
         /// for atomic progress at recovery-worthy milestones, not after every tool call.
         #[serde(default)]
         #[schemars(length(max = 32))]
@@ -1949,6 +1949,23 @@ pub enum ToolCall {
     GoalPlanSync {
         #[schemars(regex(pattern = "^wc_goal_[A-Za-z0-9_-]{16}$"))]
         goal_id: String,
+    },
+
+    /// Replace the full ordered plan of one exact owned active Goal without changing progress or completion intent.
+    ReviseGoalPlan {
+        #[schemars(regex(pattern = "^wc_goal_[A-Za-z0-9_-]{16}$"))]
+        goal_id: String,
+        #[schemars(range(min = 1))]
+        expected_revision: i64,
+        /// Full replacement. Completed ids/titles must remain, retained statuses are preserved, and new ids start pending.
+        #[schemars(length(max = 32))]
+        steps: Vec<GoalStepInputCall>,
+        /// Why the unfinished plan changed; additionally bounded to 2048 UTF-8 bytes.
+        #[schemars(length(min = 1, max = 2048))]
+        reason: String,
+        /// Exact replay is inert; changed reuse conflicts. Re-read get_goal after a stale revision.
+        #[schemars(length(min = 1, max = 128))]
+        idempotency_key: String,
     },
 
     /// Atomically checkpoint one Goal's mechanical plan and recovery summary.
@@ -2053,6 +2070,12 @@ pub enum ToolCall {
         #[schemars(length(min = 1, max = 8192))]
         #[serde(default)]
         objective: Option<String>,
+        /// Optional replacement completion intent. Omission preserves it; an empty list clears it.
+        /// At most 8 nonempty trimmed conditions, each bounded to 512 UTF-8 bytes by the Server.
+        /// Existing steps and progress are preserved; conditions are never evaluated automatically.
+        #[serde(default)]
+        #[schemars(schema_with = "goal_conditions_schema")]
+        completion_conditions: Option<Vec<String>>,
         /// Optional replacement durable Goal controller Agent. Omission preserves the current routing identity;
         /// setting it re-authorizes the exact Agent and never inherits authority from prior routing.
         #[schemars(regex(pattern = "^wc_dagent_[A-Za-z0-9_-]{16}$"))]
@@ -4218,7 +4241,7 @@ pub enum ToolCall {
         /// Optional exact model-visible runtime tool name for one-tool contract discovery.
         #[serde(default)]
         tool_name: Option<String>,
-        /// Literal tool-name/category/description keywords.
+        /// Natural-language task or exact tool name; ranks admitted tools only.
         #[serde(default)]
         #[schemars(length(max = 200))]
         query: Option<String>,

@@ -213,6 +213,9 @@ jobs:
           bash scripts/workspace_boundary_check.sh
       - name: Check build identity and incremental boundary
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_build_identity
+      - name: Check Debian package lifecycle harness
+        # Fake package steps and local child processes; no native matrix acceptance.
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_deb_lifecycle_acceptance
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Ensure test inventory dependency
@@ -351,6 +354,8 @@ jobs:
           fi
       - name: Test optional Codex observation adapter
         run: python3 -m unittest discover -s integrations/codex -p 'test_*.py' -v
+      - name: Test optional project knowledge provider
+        run: python3 -B -m unittest discover -s plugins/project-knowledge -p 'test_*.py' -v
       - name: Test configured model API ACP adapter
         run: python3 -m unittest discover -s integrations/model_gateway/tests -p 'test_*.py' -v
       # Keep the cheap deterministic release gate ahead of the optional full

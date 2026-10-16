@@ -1,5 +1,104 @@
 use super::*;
 
+#[test]
+fn typed_job_activity_schema_preserves_closed_nullable_wire_shape() {
+    use webcodex_core::runner_protocol::ShellJobActivity;
+    let output = output_schema_for_tool("list_jobs");
+    let schema =
+        &output["properties"]["output"]["properties"]["jobs"]["items"]["properties"]["activity"];
+    let object = &schema["anyOf"][0];
+    assert_eq!(object["additionalProperties"], false);
+    assert_eq!(object["properties"].as_object().unwrap().len(), 3);
+    assert_eq!(object["required"].as_array().unwrap().len(), 3);
+    for (field, expected) in [
+        ("state", json!(["working", "waiting"])),
+        (
+            "phase",
+            json!([
+                "process_running",
+                "validation_format",
+                "validation_check",
+                "validation_test",
+                "cargo_waiting_for_build_lock",
+                "cargo_compiling",
+                "cargo_checking"
+            ]),
+        ),
+        (
+            "source",
+            json!(["runner_execution", "validation_plan", "cargo_output"]),
+        ),
+    ] {
+        assert_eq!(object["properties"][field]["enum"], expected, "{field}");
+    }
+    // Structural schema remains distinct from the runtime's canonical
+    // state/phase/source combination validator.
+    for state in ["working", "waiting"] {
+        for phase in [
+            "process_running",
+            "validation_format",
+            "validation_check",
+            "validation_test",
+            "cargo_waiting_for_build_lock",
+            "cargo_compiling",
+            "cargo_checking",
+        ] {
+            for source in ["runner_execution", "validation_plan", "cargo_output"] {
+                let value = json!({"state": state, "phase": phase, "source": source});
+                let typed: ShellJobActivity = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(serde_json::to_value(typed).unwrap(), value);
+                test_support::validate_schema_instance(&value, schema).unwrap();
+            }
+        }
+    }
+    test_support::validate_schema_instance(&Value::Null, schema).unwrap();
+    let valid = json!({"state":"working","phase":"process_running","source":"runner_execution"});
+    for field in ["state", "phase", "source"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(test_support::validate_schema_instance(&missing, schema).is_err());
+        let mut unknown = valid.clone();
+        unknown[field] = json!("unknown");
+        assert!(test_support::validate_schema_instance(&unknown, schema).is_err());
+    }
+    let mut extra = valid;
+    extra["private_runner_instance"] = json!("must-not-leak");
+    assert!(test_support::validate_schema_instance(&extra, schema).is_err());
+}
+
+#[test]
+fn typed_job_command_and_input_states_preserve_distinct_vocabularies() {
+    use webcodex_core::{job_input::InputWriteState, runner_protocol::ShellCommandExecutionState};
+    let jobs = output_schema_for_tool("list_jobs");
+    let command = &jobs["properties"]["output"]["properties"]["jobs"]["items"]["properties"]
+        ["command_execution_state"];
+    assert_eq!(
+        command["anyOf"][0]["enum"],
+        json!(["not_started", "outcome_unknown", "timed_out", "completed"])
+    );
+    for value in ["not_started", "outcome_unknown", "timed_out", "completed"] {
+        let typed: ShellCommandExecutionState = serde_json::from_value(json!(value)).unwrap();
+        test_support::validate_schema_instance(&serde_json::to_value(typed).unwrap(), command)
+            .unwrap();
+    }
+    test_support::validate_schema_instance(&Value::Null, command).unwrap();
+    assert!(test_support::validate_schema_instance(&json!("pending"), command).is_err());
+    let write = output_schema_for_tool("write_job_input");
+    let input = &write["properties"]["output"]["properties"]["state"];
+    assert_eq!(
+        input["enum"],
+        json!(["pending", "written", "closed", "outcome_unknown"])
+    );
+    for value in ["pending", "written", "closed", "outcome_unknown"] {
+        let typed: InputWriteState = serde_json::from_value(json!(value)).unwrap();
+        test_support::validate_schema_instance(&serde_json::to_value(typed).unwrap(), input)
+            .unwrap();
+    }
+    for invalid in [Value::Null, json!("completed"), json!("unknown"), json!(0)] {
+        assert!(test_support::validate_schema_instance(&invalid, input).is_err());
+    }
+}
+
 fn structured_execution_output(
     execution_source: &str,
     execution_state: &str,
@@ -353,6 +452,22 @@ fn observation_schemas_do_not_repeat_static_continuation_semantics() {
         .iter()
         .find(|variant| variant["properties"].get("suggested_call").is_some())
         .expect("observe_jobs full batch output");
+    // Both the full batch and model-facing sparse batch have closed wait
+    // objects, so newly emitted wait context must be described by both.
+    let wait_variants = variants
+        .iter()
+        .filter(|variant| variant["properties"].get("wait").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(wait_variants.len(), 2);
+    for variant in wait_variants {
+        let wait_properties = &variant["properties"]["wait"]["properties"];
+        for field in ["update_kind"] {
+            assert!(
+                wait_properties.get(field).is_some(),
+                "observe_jobs wait schema must advertise {field} in every projection"
+            );
+        }
+    }
     let item_output = &full["properties"]["items"]["items"]["properties"]["output"]["anyOf"][0];
     assert!(
         item_output["properties"]
@@ -715,6 +830,46 @@ fn job_terminal_continuation_output_schemas_are_sparse_and_private_app_payload_i
     assert_eq!(automatic_message["maxLength"], 1024);
     let serialized = serde_json::to_string(&prepare).unwrap();
     assert!(!serialized.contains("binding_id"));
+}
+
+#[test]
+fn agent_task_coding_state_schemas_share_run_vocabulary_but_remain_nullable() {
+    let run = output_schema_for_tool("observe_coding_agent");
+    let run_fields = &run["properties"]["output"]["properties"];
+    for tool in [
+        "start_agent_task_coding_run",
+        "reconcile_agent_task_coding_run",
+    ] {
+        let schema = output_schema_for_tool(tool);
+        let fields = &schema["properties"]["output"]["properties"];
+        for (field, run_field) in [
+            ("run_state", "state"),
+            ("execution_state", "execution_state"),
+        ] {
+            let expected = json!({"anyOf": [run_fields[run_field], {"type": "null"}]});
+            assert_eq!(fields[field], expected, "{tool}.{field}");
+            crate::test_support::validate_schema_instance(&Value::Null, &fields[field]).unwrap();
+            for wire in run_fields[run_field]["enum"].as_array().unwrap() {
+                crate::test_support::validate_schema_instance(wire, &fields[field]).unwrap();
+            }
+            for invalid in [json!("unknown"), json!(0), json!({})] {
+                assert!(
+                    crate::test_support::validate_schema_instance(&invalid, &fields[field])
+                        .is_err(),
+                    "{tool}.{field} accepted {invalid}"
+                );
+            }
+        }
+        // Task binding has a non-null terminal object with nullable evidence;
+        // the direct CodingAgent API instead makes the whole object nullable.
+        let terminal = &fields["terminal"];
+        assert_eq!(terminal["type"], "object");
+        assert_eq!(terminal["additionalProperties"], false);
+        assert_eq!(
+            terminal["properties"]["completed_at"]["anyOf"],
+            json!([{"type": "integer"}, {"type": "null"}])
+        );
+    }
 }
 
 #[test]
@@ -1162,6 +1317,10 @@ fn observe_jobs_failure_item_schema_closes_recovery_metadata() {
         "error": null
     });
     validate(&result).unwrap();
+
+    let mut invalid_update_kind = result.clone();
+    invalid_update_kind["output"]["wait"]["update_kind"] = json!("not_an_update_kind");
+    assert!(validate(&invalid_update_kind).is_err());
 
     let mut duplicate_kind = result.clone();
     duplicate_kind["output"]["items"][0]["recovery_kind"] = json!("reobserve");
@@ -3035,7 +3194,7 @@ fn finish_coding_task_output_schema_describes_ledger_validation_summary() {
     assert_permission_summary_schema_fields(&output_props["permissions"]);
     assert_job_lifecycle_summary_schema_fields(&output_props["jobs"]);
     assert_review_evidence_schema_fields(&output_props["review_evidence"]);
-    let nested_show_changes = &output_props["changes"]["properties"]["show_changes"];
+    let nested_show_changes = &output_props["changes"]["properties"]["read_workspace_changes"];
     let nested_recovery =
         &nested_show_changes["properties"]["diff_review_handoff"]["properties"]["next_call"];
     assert_eq!(
