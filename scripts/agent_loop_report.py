@@ -2425,6 +2425,7 @@ def _get_path(value: dict[str, Any], path: str) -> Any:
 
 _COMPARISON_METRICS = [
     "observed_span_ms", "task_wall_time_ms", "model_round_trips", "model_round_trip_proxy",
+    "efficiency.job_observe_calls",
     "outer_calls.total", "outer_calls.meaningful",
     "outer_calls.successful", "outer_calls.failed", "canonical_calls.total",
     "native_batch.read_files.outer_calls",
@@ -2516,6 +2517,16 @@ def _pair_compatibility(
     case = _case_compatibility(baseline, candidate)
     if not case["comparable"]:
         return case
+    # Efficiency runs pin caller/driver attestations; historical reports have
+    # neither field and retain their existing comparison contract.
+    if "efficiency_identity" in baseline or "efficiency_identity" in candidate:
+        left_identity = baseline.get("efficiency_identity")
+        right_identity = candidate.get("efficiency_identity")
+        if (not isinstance(left_identity, dict) or not isinstance(right_identity, dict)
+            or left_identity.get("attested") is not True or right_identity.get("attested") is not True
+            or not _is_exact_sha256(left_identity.get("model_config_digest"))
+            or left_identity.get("model_config_digest") != right_identity.get("model_config_digest")):
+            return {"comparable": False, "reason": "pinned model/config driver attestations are missing or differ"}
     left = baseline.get("benchmark") or {}
     right = candidate.get("benchmark") or {}
     if left.get("experiment", "forced_lanes") == "tool_selection":
