@@ -229,6 +229,138 @@ class EfficiencyTests(unittest.TestCase):
                 driver_argv=["driver"], identity_digest=IDENTITY)
 
 
+def cell_evidence(policy, count=2):
+    cells = [{"cell_id_sha256": f"{index + 100:064x}",
+              "tool_trace_ids_sha256": [f"{index + 1:064x}"]} for index in range(count)]
+    return {"policy": policy, "source": "caller_ui_attestation", "ui_evidence_sha256": "e" * 64,
+            "complete_tool_call_coverage": True, "cells": cells}
+
+
+def host_matrix():
+    result, manifest = matrix()
+    result.update(experiment="host_cell_policy", experimental_nested=False)
+    for case in result["cases"]:
+        case["groups"][0]["candidate"] = efficiency.HOST_POLICIES[1]
+        for pair in case["groups"][0]["pairs"]:
+            order = list(efficiency.HOST_POLICIES if pair["pair_index"] % 2 == 0 else reversed(efficiency.HOST_POLICIES))
+            pair["order"] = order
+            for sample, policy in zip(pair["samples"], order):
+                sample.update(variant="host_code_mode", surface="host_code_mode")
+                sample["summary"]["benchmark"].update(variant="host_code_mode", surface="host_code_mode")
+                sample["summary"]["outer_calls"] = {"total": 2}
+                efficiency._attest_host_cells(sample, {"host_cell_attestation": cell_evidence(policy)}, policy)
+    return result, manifest
+
+
+class HostPolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.result, self.manifest = host_matrix()
+        for name in ("_runtime_evidence_proven", "_long_handoff_terminal_proven", "_guarded_multi_file_contract_proven"):
+            p = patch.object(efficiency.bench, name, return_value=True)
+            p.start(); self.addCleanup(p.stop)
+
+    def sample(self):
+        return self.result["cases"][0]["groups"][0]["pairs"][0]["samples"][0]
+
+    def strict(self):
+        return efficiency.strict_passed(self.result, self.manifest)
+
+    def test_complete_host_matrix_and_explicit_host_host_comparison(self):
+        self.assertTrue(self.strict())
+        left, right = self.result["cases"][0]["groups"][0]["pairs"][0]["samples"]
+        comparison = efficiency.bench._comparison(left, right)
+        self.assertTrue(comparison["throughput_compatibility"]["comparable"])
+        self.assertEqual(comparison["baseline"]["variant"], "host_code_mode")
+        self.assertEqual(comparison["candidate"]["variant"], "host_code_mode")
+
+    def test_original_matrix_cannot_be_relabelled_as_host_policy(self):
+        result, manifest = matrix(); result["experiment"] = "host_cell_policy"
+        self.assertFalse(efficiency.strict_passed(result, manifest))
+        self.result["experiment"] = "direct_vs_host"
+        self.assertFalse(self.strict())
+
+    def test_direct_variant_or_surface_cannot_enter_host_matrix(self):
+        for key in ("variant", "surface"):
+            old = self.sample()[key]; self.sample()[key] = "direct"
+            self.assertFalse(self.strict()); self.sample()[key] = old
+
+    def test_unknown_experiment_nested_mixture_or_missing_matrix_rejected(self):
+        for key, value in (("experiment", "unknown"), ("experimental_nested", True), ("pair_count", 2)):
+            old = self.result[key]; self.result[key] = value
+            self.assertFalse(self.strict()); self.result[key] = old
+        self.result["cases"][0]["groups"][0]["pairs"][0]["samples"].pop()
+        self.assertFalse(self.strict())
+
+    def test_missing_changed_or_independently_verified_ui_evidence_fails(self):
+        evidence = self.sample()["host_cell_evidence"]
+        for key, value in (("matched", False), ("independently_verified", True), ("attestation", None)):
+            old = evidence[key]; evidence[key] = value
+            self.assertFalse(self.strict()); evidence[key] = old
+        evidence["attestation"]["policy"] = efficiency.HOST_POLICIES[1]
+        self.assertFalse(self.strict())
+
+    def test_single_call_cell_with_two_calls_rejected_even_with_correct_total(self):
+        evidence = self.sample()["host_cell_evidence"]["attestation"]
+        evidence["cells"][0]["tool_trace_ids_sha256"] += evidence["cells"].pop()["tool_trace_ids_sha256"]
+        self.assertFalse(self.strict())
+
+    def test_composition_allows_multicall_but_does_not_require_it(self):
+        value = cell_evidence(efficiency.HOST_POLICIES[1])
+        self.assertTrue(efficiency._host_cell_evidence(value, efficiency.HOST_POLICIES[1], {"outer_calls": {"total": 2}}))
+        value["cells"][0]["tool_trace_ids_sha256"] += value["cells"].pop()["tool_trace_ids_sha256"]
+        self.assertTrue(efficiency._host_cell_evidence(value, efficiency.HOST_POLICIES[1], {"outer_calls": {"total": 2}}))
+
+    def test_duplicate_missing_or_extra_call_hashes_fail_closed(self):
+        for change in ("duplicate_trace", "duplicate_cell", "missing", "incomplete", "extra"):
+            value = cell_evidence(efficiency.HOST_POLICIES[0])
+            if change == "duplicate_trace": value["cells"][1]["tool_trace_ids_sha256"] = value["cells"][0]["tool_trace_ids_sha256"]
+            elif change == "duplicate_cell": value["cells"][1]["cell_id_sha256"] = value["cells"][0]["cell_id_sha256"]
+            elif change == "missing": value["cells"].pop()
+            elif change == "incomplete": value["complete_tool_call_coverage"] = False
+            else: value["private_payload"] = "must not echo"
+            self.assertFalse(efficiency._host_cell_evidence(value, efficiency.HOST_POLICIES[0], {"outer_calls": {"total": 2}}))
+
+    def test_invalid_cell_receipt_does_not_echo_private_payload(self):
+        sample = self.sample()
+        efficiency._attest_host_cells(sample, {"host_cell_attestation": {"private": "secret argument"}}, efficiency.HOST_POLICIES[0])
+        self.assertEqual(sample["status"], "fail")
+        self.assertNotIn("secret argument", json.dumps(sample))
+
+    def test_comparison_requires_both_host_policies_and_identity(self):
+        left, right = self.result["cases"][0]["groups"][0]["pairs"][0]["samples"]
+        right["summary"].pop("efficiency_host_policy")
+        self.assertFalse(efficiency.bench._comparison(left, right)["throughput_compatibility"]["comparable"])
+
+    def test_host_orchestration_reuses_collector_and_real_host_identity(self):
+        calls, roots = [], []
+        def fake_sample(repo, root, driver, case, **options):
+            roots.append(root); calls.append(options)
+            policy = options["host_cell_policy"]
+            sample = copy.deepcopy(self.sample()); sample["case_id"] = case["id"]
+            sample["summary"]["benchmark"].update(case_id=case["id"], case_fingerprint=report._case_fingerprint(case),
+                validation_required=case["validation"]["required"])
+            receipt = {"status": "pass", "efficiency_attestation": {"model_config_digest": IDENTITY, "base_revision": REV,
+                "case_fingerprint": report._case_fingerprint(case), "variant": "host_code_mode", "surface": "host_code_mode"},
+                "host_cell_attestation": cell_evidence(policy)}
+            label = f"{case['id']}-p{options['pair_index'] + 1}-{options['ordinal'] + 1}-host_code_mode.json"
+            (root / "receipts" / label).write_text(json.dumps(receipt))
+            return sample
+        with patch.object(efficiency.bench, "_git_root", return_value=Path.cwd()), \
+             patch.object(efficiency.bench, "_require_exact_revision", return_value=REV), \
+             patch.object(efficiency.bench, "_head_revision", return_value=REV), \
+             patch.object(efficiency.bench, "_read_manifest_at_revision", return_value=json.dumps(self.manifest)), \
+             patch.object(efficiency.bench, "_run_sample", side_effect=fake_sample):
+            result = efficiency.run_efficiency(repo=Path.cwd(), base_revision=REV, driver_argv=["fixture-driver"],
+                identity_digest=IDENTITY, experiment="host_cell_policy")
+        self.assertTrue(result["strict_passed"])
+        self.assertEqual(len(calls), 18)
+        self.assertTrue(all(c["variant"] == "host_code_mode" for c in calls))
+        self.assertEqual([c["host_cell_policy"] for c in calls[:4]], list(efficiency.HOST_POLICIES) + list(reversed(efficiency.HOST_POLICIES)))
+        self.assertIn("candidate_minus_baseline", result["cases"][0]["groups"][0]["paired_delta_summary"])
+        self.assertNotIn("candidate_minus_direct", result["cases"][0]["groups"][0]["paired_delta_summary"])
+        self.assertTrue(all(not root.exists() for root in roots))
+
+
 class EfficiencyReportIntegrationTests(unittest.TestCase):
     """Exercise persisted audit -> canonical report -> efficiency consumers."""
     def setUp(self):
@@ -245,6 +377,23 @@ class EfficiencyReportIntegrationTests(unittest.TestCase):
             transition="serial" if previous else "unavailable",
             tool="observe_jobs" if kind == "explicit_observe" else "run_process",
             job_convergence=row["summary"]["model_ergonomics"]["job_convergence"])
+
+    def test_host_cell_coverage_and_comparison_use_actual_audit_summaries(self):
+        self.fixture.insert_event("read-one", tool="read_files", started=100, handed=120)
+        self.fixture.insert_event("read-two", tool="read_files", started=150, handed=170, transition="serial")
+        summaries = [self.fixture.summarize(variant="host_code_mode", surface="host_code_mode",
+            case_manifest=report.DEFAULT_CASE_MANIFEST, case_id="readonly_review", base_revision=REV) for _ in range(2)]
+        for summary, policy in zip(summaries, efficiency.HOST_POLICIES):
+            summary["efficiency_identity"] = {"model_config_digest": IDENTITY, "attested": True}
+            summary["efficiency_host_policy"] = policy
+            evidence = cell_evidence(policy)
+            self.assertTrue(efficiency._host_cell_evidence(evidence, policy, summary))
+            evidence["cells"].pop()
+            self.assertFalse(efficiency._host_cell_evidence(evidence, policy, summary))
+        comparison = report.compare_reports(*summaries)
+        self.assertTrue(comparison["pair_compatibility"]["comparable"])
+        summaries[0]["benchmark"]["variant"] = "direct"
+        self.assertFalse(report.compare_reports(*summaries)["pair_compatibility"]["comparable"])
 
     def test_immediate_observe_metric_uses_canonical_report_path(self):
         self.add_job_event(1, kind="pending_handoff")

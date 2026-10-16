@@ -112,3 +112,36 @@ p50/p95 为描述性的最近秩统计，不是置信区间或提速结论。
 改进前，先检查真实候选证据，再在修改后的当前提交重复相同的三对实验，保持正确性
 和运行时门禁。没有真实观测时，本阶段不修改生产指引或运行时。单元夹具仅验证收集与
 拒绝行为。
+
+## Host 单调用与组合政策对照
+
+网页仅经 `functions.exec` 暴露插件时，单元里只有一次 WebCodex 调用仍是 Host
+调用，不能充当 Direct。原 Direct 对照继续标记未验收。新增独立模式
+`--experiment host_cell_policy`；默认 `direct_vs_host` 保持兼容，不得与
+`--experimental-nested` 混用。
+
+新模式比较 `host_single_call` 与 `host_composition_allowed`，仍为三个任务、
+各三对交替顺序，共18样本。两臂真实 `variant` 和 `surface` 均为 `host_code_mode`，
+另设 policy 字段，经 `WEBCODEX_BENCH_HOST_CELL_POLICY` 传给 driver。
+组合臂允许组合或并行，不强迫制造组合；是否实际组合须另看证据。
+差值使用 `candidate_minus_baseline`，不冒称存在 Direct。
+
+receipt 须包含闭合 `host_cell_attestation`：`policy`、
+`source="caller_ui_attestation"`、`ui_evidence_sha256`、
+`complete_tool_call_coverage=true`、`cells`。每个 cell 只含 `cell_id_sha256`
+与 `tool_trace_ids_sha256`。单元及调用身份不得重复，所有被测 outer tool 调用
+恰好覆盖一次；单调用臂每 cell 恰一调用，组合臂允许一个或多个。
+私下保留可审查 UI 单元证据。哈希本身不独立证明执行或分组，报告明确记录 caller
+声明及 `independently_verified=false`。Audit 只能证明规范调用，不能证明 Host
+单元或模型轮数；不可由 Window、时间邻近或 Audit 顺序推断分组。重复同名同参数
+同结果的调用无法唯一关联时保持 partial，不能按位置硬配。
+
+新 strict 独立拒绝 Direct 混入、模式混用、缺样本、政策变化、缺 UI 证据、运行时
+及 fixture 失败、身份或 case/source 不兼容；report 为 Host 政策提供明确相容规则，
+不改写摘要伪装 Direct。未知 bytes、repair、模型轮数继续未知，合成测试不证明真实收益。
+
+人工 bridge 在没有独立 UI 任务起止证据时明确写 `task_timing:null`。
+字段缺省仍保留原自动 driver 的耗时回填；显式 null 则保持未知。人工复制、等待与
+操作员复核时间不能当作模型任务耗时。Audit observed span 只是另一代理指标，不能
+据此宣称整体加速。私有纯 JS 指纹助手正式采样前必须先通过单独真实 Host 只读 probe；
+本地 JS 测试不能替代该证据。

@@ -1147,6 +1147,13 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "paired Host driver requires POSIX process-group ownership")
     def test_fallback_task_timing_starts_after_worktree_setup(self) -> None:
+        self._check_task_timing_after_setup(explicit_null=False)
+
+    @unittest.skipIf(os.name == "nt", "paired Host driver requires POSIX process-group ownership")
+    def test_explicit_unknown_task_timing_excludes_manual_wait(self) -> None:
+        self._check_task_timing_after_setup(explicit_null=True)
+
+    def _check_task_timing_after_setup(self, *, explicit_null: bool) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
@@ -1166,10 +1173,14 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
             for name in ("worktrees", "receipts", "annotations"):
                 (bench_root / name).mkdir(parents=True, exist_ok=True)
             driver = root / "driver.py"
+            driver_receipt = {"status": "unsupported"}
+            if explicit_null:
+                driver_receipt["task_timing"] = None
             driver.write_text(
                 "import os\n"
+                "assert 'WEBCODEX_BENCH_HOST_CELL_POLICY' not in os.environ\n"
                 "from pathlib import Path\n"
-                "Path(os.environ['WEBCODEX_BENCH_DRIVER_RESULT']).write_text('{\"status\":\"unsupported\"}', encoding='utf-8')\n",
+                f"Path(os.environ['WEBCODEX_BENCH_DRIVER_RESULT']).write_text({json.dumps(driver_receipt)!r}, encoding='utf-8')\n",
                 encoding="utf-8",
             )
 
@@ -1182,24 +1193,29 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
 
             benchmark._worktree_add = recorded_add
             try:
-                benchmark._run_sample(
-                    repo,
-                    bench_root,
-                    [sys.executable, str(driver)],
-                    case,
-                    variant="direct",
-                    pair_index=0,
-                    ordinal=0,
-                    base_revision=base,
-                    case_manifest=manifest_path,
-                )
+                with mock.patch.dict(os.environ, {"WEBCODEX_BENCH_HOST_CELL_POLICY": "host_single_call"}):
+                    sample = benchmark._run_sample(
+                        repo,
+                        bench_root,
+                        [sys.executable, str(driver)],
+                        case,
+                        variant="direct",
+                        pair_index=0,
+                        ordinal=0,
+                        base_revision=base,
+                        case_manifest=manifest_path,
+                    )
             finally:
                 benchmark._worktree_add = original
 
+            self.assertEqual(sample["driver_exit_code"], 0)
             annotation = json.loads(
                 (bench_root / "annotations" / "readonly_review-p1-1-direct.json").read_text(encoding="utf-8")
             )
-            self.assertGreaterEqual(annotation["task_timing"]["started_at_ms"], setup_done_ms[0])
+            if explicit_null:
+                self.assertIsNone(annotation.get("task_timing"))
+            else:
+                self.assertGreaterEqual(annotation["task_timing"]["started_at_ms"], setup_done_ms[0])
 
     def test_non_repository_case_target_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

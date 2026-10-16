@@ -22,6 +22,8 @@ except ModuleNotFoundError:
 
 CASES = bench.DEFAULT_CASES
 LANES = ("direct", "host_code_mode")
+HOST_POLICIES = ("host_single_call", "host_composition_allowed")
+EXPERIMENTS = ("direct_vs_host", "host_cell_policy")
 MAX_PAIRS = 10
 METRICS = (*bench.PAIRED_DELTA_METRICS, "job_convergence.pending_followed_immediately_by_observe_count", "efficiency.job_observe_calls")
 
@@ -59,6 +61,51 @@ def _attest(sample, receipt, case, revision, identity_digest):
             "model_config_digest": identity_digest if valid else None,
             "attested": valid,
         }
+    return sample
+
+
+def _host_cell_evidence(value, policy, summary):
+    """Check caller UI evidence shape/coverage; Audit cannot prove cell grouping."""
+    if (not isinstance(value, dict) or set(value) != {"policy", "source", "ui_evidence_sha256",
+        "complete_tool_call_coverage", "cells"} or value["policy"] != policy
+        or policy not in HOST_POLICIES or value["source"] != "caller_ui_attestation"
+        or not report._is_exact_sha256(value["ui_evidence_sha256"])
+        or value["complete_tool_call_coverage"] is not True):
+        return False
+    cells = value["cells"]
+    if not isinstance(cells, list) or not 1 <= len(cells) <= 4096:
+        return False
+    ids, traces = set(), set()
+    for cell in cells:
+        if not isinstance(cell, dict) or set(cell) != {"cell_id_sha256", "tool_trace_ids_sha256"}:
+            return False
+        identity, calls = cell["cell_id_sha256"], cell["tool_trace_ids_sha256"]
+        if not report._is_exact_sha256(identity) or identity in ids:
+            return False
+        ids.add(identity)
+        if (not isinstance(calls, list) or not 1 <= len(calls) <= 4096
+            or policy == HOST_POLICIES[0] and len(calls) != 1):
+            return False
+        for call in calls:
+            if not report._is_exact_sha256(call) or call in traces:
+                return False
+            traces.add(call)
+    total = report._get_path(summary, "outer_calls.total")
+    return type(total) is int and total == len(traces)
+
+
+def _attest_host_cells(sample, receipt, policy):
+    evidence = receipt.get("host_cell_attestation")
+    valid = _host_cell_evidence(evidence, policy, sample.get("summary") or {})
+    sample["host_cell_policy"] = policy
+    if isinstance(sample.get("summary"), dict):
+        sample["summary"]["efficiency_host_policy"] = policy
+    sample["host_cell_evidence"] = {"matched": valid, "independently_verified": False,
+        "attestation": evidence if valid else None}
+    if not valid:
+        if sample.get("status") == "pass":
+            sample["status"] = "fail"
+        sample.setdefault("reason_code", "host_cell_attestation_mismatch")
     return sample
 
 
@@ -109,7 +156,11 @@ def _delta_summary(pairs):
 
 
 def run_efficiency(*, repo: Path, base_revision: str, driver_argv: list[str],
-                   identity_digest: str, pairs: int = 3, experimental_nested: bool = False):
+                   identity_digest: str, pairs: int = 3, experimental_nested: bool = False,
+                   experiment: str = "direct_vs_host"):
+    if experiment not in EXPERIMENTS or experiment == "host_cell_policy" and experimental_nested:
+        raise bench.BenchmarkError("invalid or mixed efficiency experiment")
+    host_policy = experiment == "host_cell_policy"
     if type(pairs) is not int or not 1 <= pairs <= MAX_PAIRS:
         raise bench.BenchmarkError("pairs must be between 1 and 10")
     if not driver_argv or not report._is_exact_sha256(identity_digest):
@@ -134,33 +185,41 @@ def run_efficiency(*, repo: Path, base_revision: str, driver_argv: list[str],
             groups = []
             # Nested Code Mode gets a separate fresh Direct control, so it
             # cannot contaminate the default Host comparison or its deltas.
-            for candidate in (("host_code_mode", "code_mode") if experimental_nested else ("host_code_mode",)):
+            for candidate in ((HOST_POLICIES[1],) if host_policy else
+                              (("host_code_mode", "code_mode") if experimental_nested else ("host_code_mode",))):
                 paired = []
                 for index in range(pairs):
-                    lanes = ("direct", candidate)
+                    lanes = (HOST_POLICIES[0] if host_policy else "direct", candidate)
                     order = lanes if index % 2 == 0 else tuple(reversed(lanes))
                     samples = []
                     for ordinal, lane in enumerate(order):
-                        sample = bench._run_sample(repo, root, driver_argv, case, variant=lane,
-                            pair_index=index, ordinal=ordinal, base_revision=base_revision, case_manifest=manifest_path)
-                        label = f"{case['id']}-p{index + 1}-{ordinal + 1}-{lane}"
+                        variant = "host_code_mode" if host_policy else lane
+                        options = {"host_cell_policy": lane} if host_policy else {}
+                        sample = bench._run_sample(repo, root, driver_argv, case, variant=variant,
+                            pair_index=index, ordinal=ordinal, base_revision=base_revision, case_manifest=manifest_path, **options)
+                        label = f"{case['id']}-p{index + 1}-{ordinal + 1}-{variant}"
                         try:
                             receipt = bench._load_driver_receipt(root / "receipts" / (label + ".json"))
                         except bench.BenchmarkError:
                             receipt = {}
                         _attest(sample, receipt, case, base_revision, identity_digest)
+                        if host_policy:
+                            _attest_host_cells(sample, receipt, lane)
                         sample["metrics"] = _metrics(sample.get("summary"))
                         sample["hotspot_candidates"] = _hotspots(sample.get("summary") or {})
                         samples.append(sample)
-                    by_lane = {s["variant"]: s for s in samples}
+                    by_lane = {s["host_cell_policy" if host_policy else "variant"]: s for s in samples}
                     paired.append({"pair_index": index, "order": list(order), "samples": samples,
-                                   "comparison": bench._comparison(by_lane["direct"], by_lane[candidate])})
+                                   "comparison": bench._comparison(by_lane[HOST_POLICIES[0] if host_policy else "direct"], by_lane[candidate])})
+                deltas = _delta_summary(paired)
+                if host_policy:
+                    deltas["candidate_minus_baseline"] = deltas.pop("candidate_minus_direct")
                 groups.append({"candidate": candidate, "pairs": paired,
-                               "paired_delta_summary": _delta_summary(paired)})
+                               "paired_delta_summary": deltas})
             outputs.append({"case_id": case["id"], "groups": groups})
         result = {"schema_version": 1, "kind": "agent_efficiency_benchmark", "base_revision": base_revision,
                   "model_config_digest": identity_digest, "pair_count": pairs,
-                  "experimental_nested": experimental_nested, "cases": outputs,
+                  "experimental_nested": experimental_nested, "experiment": experiment, "cases": outputs,
                   "notes": ["identity is pinned caller/driver attestation, not independent model verification",
                             "missing metrics are null; outer calls and immediate observe are proxies",
                             "hotspots are evidence candidates, not production recommendations"]}
@@ -171,6 +230,10 @@ def run_efficiency(*, repo: Path, base_revision: str, driver_argv: list[str],
 def strict_passed(result, manifest):
     """Recompute evidence and comparison; never trust stored success/counts."""
     try:
+        experiment = result.get("experiment", "direct_vs_host")
+        if experiment not in EXPERIMENTS or experiment == "host_cell_policy" and result.get("experimental_nested") is not False:
+            return False
+        host_policy = experiment == "host_cell_policy"
         pairs = result["pair_count"]
         if type(pairs) is not int or not 1 <= pairs <= MAX_PAIRS:
             return False
@@ -181,7 +244,8 @@ def strict_passed(result, manifest):
         cases = result["cases"]
         if len(cases) != len(CASES) or {c["case_id"] for c in cases} != set(CASES):
             return False
-        candidates = {"host_code_mode", "code_mode"} if result.get("experimental_nested") is True else {"host_code_mode"}
+        candidates = {HOST_POLICIES[1]} if host_policy else (
+            {"host_code_mode", "code_mode"} if result.get("experimental_nested") is True else {"host_code_mode"})
         for case in cases:
             definition = bench._case(manifest, case["case_id"])
             if len(case["groups"]) != len(candidates) or {g["candidate"] for g in case["groups"]} != candidates:
@@ -193,16 +257,28 @@ def strict_passed(result, manifest):
                 for pair in group["pairs"]:
                     samples = pair["samples"]
                     index = pair["pair_index"]
-                    lanes = ("direct", candidate)
+                    baseline = HOST_POLICIES[0] if host_policy else "direct"
+                    lane_key = "host_cell_policy" if host_policy else "variant"
+                    lanes = (baseline, candidate)
                     expected_order = list(lanes if index % 2 == 0 else tuple(reversed(lanes)))
                     if (type(index) is not int or pair.get("order") != expected_order
-                        or [s.get("variant") for s in samples] != expected_order):
+                        or [s.get(lane_key) for s in samples] != expected_order):
                         return False
-                    if len(samples) != 2 or {s["variant"] for s in samples} != {"direct", candidate}:
+                    if len(samples) != 2 or {s[lane_key] for s in samples} != set(lanes):
                         return False
-                    by_lane = {s["variant"]: s for s in samples}
+                    by_lane = {s[lane_key]: s for s in samples}
                     for sample in samples:
                         summary = sample["summary"]
+                        if host_policy:
+                            evidence = sample.get("host_cell_evidence", {})
+                            if (summary.get("efficiency_host_policy") != sample[lane_key]
+                                or sample.get("variant") != "host_code_mode" or evidence.get("matched") is not True
+                                or evidence.get("independently_verified") is not False
+                                or not _host_cell_evidence(evidence.get("attestation"), sample[lane_key], summary)):
+                                return False
+                        elif ("host_cell_policy" in sample or "host_cell_evidence" in sample
+                              or "efficiency_host_policy" in summary):
+                            return False
                         expected_surface = "direct" if sample["variant"] == "direct" else (
                             "host_code_mode" if sample["variant"] == "host_code_mode" else definition["code_mode_surface"])
                         if (sample["case_id"] != case["case_id"] or sample["status"] != "pass"
@@ -228,7 +304,7 @@ def strict_passed(result, manifest):
                             return False
                         if oracle.get("available") is True and oracle.get("passed") is not True:
                             return False
-                    comparison = bench._comparison(by_lane["direct"], by_lane[candidate])
+                    comparison = bench._comparison(by_lane[HOST_POLICIES[0] if host_policy else "direct"], by_lane[candidate])
                     if not comparison or comparison["throughput_compatibility"]["comparable"] is not True:
                         return False
         return True
@@ -243,6 +319,7 @@ def main(argv=None):
     parser.add_argument("--driver-command", required=True)
     parser.add_argument("--model-config-digest", required=True)
     parser.add_argument("--pairs", type=int, default=3)
+    parser.add_argument("--experiment", choices=EXPERIMENTS, default="direct_vs_host")
     parser.add_argument("--experimental-nested", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--strict", action="store_true")
@@ -250,7 +327,7 @@ def main(argv=None):
     try:
         result = run_efficiency(repo=args.repo, base_revision=args.base_revision,
             driver_argv=shlex.split(args.driver_command), identity_digest=args.model_config_digest,
-            pairs=args.pairs, experimental_nested=args.experimental_nested)
+            pairs=args.pairs, experimental_nested=args.experimental_nested, experiment=args.experiment)
         report._write_json(result, args.output)
         return 1 if args.strict and not result["strict_passed"] else 0
     except (ValueError, OSError):

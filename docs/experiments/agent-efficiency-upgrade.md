@@ -149,3 +149,48 @@ proposing a focused tool-contract or guidance change, rerun the same three
 pairs at the changed current revision, and keep correctness/runtime gates.
 Absent live observations, this stage makes no production guidance or runtime
 changes. Unit fixtures validate collection and rejection behavior only.
+
+## Host single-call versus composition policy
+
+If ChatGPT exposes the connector only through `functions.exec`, a cell containing
+one WebCodex call is still a Host call. It does not satisfy the original Direct
+control. Keep that acceptance item unverified. Select the independent experiment
+with `--experiment host_cell_policy`; the default remains `direct_vs_host`.
+Do not combine this mode with `--experimental-nested`.
+
+This mode uses `host_single_call` and `host_composition_allowed` policies across
+the same three tasks and three alternating pairs (18 samples). Both samples
+retain `variant=host_code_mode` and `surface=host_code_mode`. The policy is a
+separate field, passed to the driver as `WEBCODEX_BENCH_HOST_CELL_POLICY`.
+Composition is permitted, not required: report whether multiple calls actually
+occurred together rather than assuming the instruction caused composition.
+The paired deltas use `candidate_minus_baseline`, without naming a Direct lane.
+
+Each receipt must include `host_cell_attestation` with exactly `policy`,
+`source="caller_ui_attestation"`, `ui_evidence_sha256`,
+`complete_tool_call_coverage=true`, and `cells`. Each cell contains only
+`cell_id_sha256` and `tool_trace_ids_sha256`. Cell identities and call identities
+must be unique; every measured outer tool call must appear exactly once.
+The single-call policy requires exactly one WebCodex call per cell. The
+composition policy allows one or more. Keep the actual bounded UI evidence
+privately for review. A hash alone does not independently prove execution or
+JavaScript grouping: the report explicitly retains caller attestation and
+`independently_verified=false`. Audit proves canonical calls, not Host cells or
+model rounds. Missing or ambiguous UI-to-call association is partial, including
+identical concurrent calls that cannot be uniquely distinguished. Never infer
+cell groups from Window proximity, request order, or timestamps.
+
+The separate strict gate rejects Direct samples, mixed experiments, missing
+matrix entries, changed policies, missing cell evidence, failed runtime or
+fixture checks, and incompatible identity/case/source evidence. Existing report
+comparison has an explicit Host-policy compatibility rule; summaries are never
+rewritten as Direct. Unknown result bytes, repairs, and model rounds remain
+unknown. Local synthetic tests establish these contracts, not real model gains.
+
+For a manual bridge, write `task_timing: null` unless independently evidenced UI
+task boundaries exist. An omitted field preserves the automated driver's existing
+elapsed-time fallback; an explicit null retains unknown task wall time. Manual
+copying, waiting and operator review cannot be measured as model task duration.
+Audit observed span is a separate proxy and cannot establish overall speedup.
+A private JavaScript fingerprint helper needs an isolated real Host read-only
+probe before any formal samples; local JavaScript tests alone are insufficient.

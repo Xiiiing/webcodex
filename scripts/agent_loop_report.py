@@ -2529,6 +2529,15 @@ def _pair_compatibility(
             return {"comparable": False, "reason": "pinned model/config driver attestations are missing or differ"}
     left = baseline.get("benchmark") or {}
     right = candidate.get("benchmark") or {}
+    if "efficiency_host_policy" in baseline or "efficiency_host_policy" in candidate:
+        if (baseline.get("efficiency_host_policy") == "host_single_call"
+            and candidate.get("efficiency_host_policy") == "host_composition_allowed"
+            and all(item.get("variant") == "host_code_mode" and item.get("surface") == HOST_CODE_MODE_SURFACE
+                    for item in (left, right))
+            and isinstance(baseline.get("efficiency_identity"), dict)
+            and isinstance(candidate.get("efficiency_identity"), dict)):
+            return {"comparable": True, "reason": None}
+        return {"comparable": False, "reason": "Host policy comparison requires explicit single-call/composition policies and two Host surfaces"}
     if left.get("experiment", "forced_lanes") == "tool_selection":
         if all(item.get("variant") == TOOL_SELECTION_VARIANT and item.get("surface") == TOOL_SELECTION_VARIANT for item in (left, right)):
             return {"comparable": True, "reason": None}
