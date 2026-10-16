@@ -368,7 +368,8 @@ def _bind_fixture(calls, fixture_root, workflow_session_id):
                 {"work_on_project", "read_tool_manifest", "get_runtime_status", "list_projects"}]
     bootstraps = [call for call in calls if call["tool"] == "work_on_project"
                   and call["result"]["success"] is True]
-    rooted = [call for call in bootstraps if call["arguments"].get("path") == str(Path(fixture_root).absolute())
+    fixture_path = str(Path(fixture_root).absolute())
+    rooted = [call for call in bootstraps if call["arguments"].get("path") == fixture_path
               and isinstance(call["arguments"].get("client_id"), str) and call["arguments"]["client_id"]]
     if not rooted or not relevant:
         raise EvidenceUnavailable("fixture_binding_unavailable")
@@ -382,7 +383,15 @@ def _bind_fixture(calls, fixture_root, workflow_session_id):
         raise EvidenceUnavailable("fixture_binding_mismatch")
     projects = {project}
     sessions = {workflow_session_id}
+    initial_runner = bootstrap["arguments"]["client_id"]
     for call in bootstraps:
+        # A later successful bootstrap cannot extend the allowed Project/Session
+        # alias set by claiming a different fixture path or Runner identity,
+        # even when its other returned fields happen to look identical.
+        selectors = call["arguments"]
+        if (selectors.get("path") not in (None, fixture_path)
+                or selectors.get("client_id") not in (None, initial_runner)):
+            raise EvidenceUnavailable("fixture_binding_mismatch")
         value = call["output"]
         context = value.get("execution_context") or {}
         if call["arguments"].get("mode", "checkout") != "checkout":
@@ -520,8 +529,9 @@ def _checks(case_id, calls):
             and outcome["blocking_reasons"] == []
             and set(finish["arguments"].get("outputs", [])) == {"merged.csv", "report.json"}
             and len(finish["arguments"]["outputs"]) == 2
-            and receipt.get("verified_count") == 2 and receipt.get("missing_count") == 0
-            and receipt.get("unavailable_count") == 0 and len(items) == 2
+            and all(type(receipt.get(key)) is int for key in ("verified_count", "missing_count", "unavailable_count"))
+            and receipt["verified_count"] == 2 and receipt["missing_count"] == 0
+            and receipt["unavailable_count"] == 0 and len(items) == 2
             and {item.get("path") for item in items} == {"merged.csv", "report.json"}
             and all(item.get("status") == "verified" for item in items))
         return {"controlled_csv_conversion": mutation is not None, "verified_csv_output_receipts": valid}
@@ -567,7 +577,8 @@ def _checks(case_id, calls):
                     and release["ended"] <= join["started"] and join["ended"] <= observe["started"]
                     and len(target) == 1 and target[0].get("job_id") == job
                     and item.get("job_id") == job and item.get("terminal") is True
-                    and item.get("exit_code") == 0 and "controlled-job-complete" in json.dumps(item)}
+                    and type(item.get("exit_code")) is int and item["exit_code"] == 0
+                    and "controlled-job-complete" in json.dumps(item)}
     if case_id == "generic_stale_read_revision":
         reads = [(call, _read_result(call)) for call in relevant if _read_result(call) is not None]
         edits = [call for call in relevant if call["tool"] == "edit_project_files"]
@@ -595,7 +606,8 @@ def _checks(case_id, calls):
         outputs, outcome = finish["output"].get("task_outputs", {}), finish["output"].get("task_outcome", {})
         return {"missing_output_blocks_finish": finish["result"]["success"] is True
                 and finish["arguments"].get("outputs") == ["missing-result.csv"]
-                and outputs.get("missing_count") == 1 and outputs.get("verified_count") == 0
+                and type(outputs.get("missing_count")) is int and outputs["missing_count"] == 1
+                and type(outputs.get("verified_count")) is int and outputs["verified_count"] == 0
                 and outcome.get("status") == "fail" and outcome.get("blocking") is True
                 and "task_outputs_unverified" in outcome.get("blocking_reasons", [])}
     raise EvidenceUnavailable("unsupported_case")

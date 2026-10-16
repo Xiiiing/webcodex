@@ -195,6 +195,37 @@ class GenericRuntimeProofTests(unittest.TestCase):
                     with self.assertRaises(evidence.EvidenceUnavailable):
                         evidence._bind_fixture(variant, root, "wc_sess_test")
 
+    def test_every_successful_bootstrap_must_match_original_fixture_and_runner(self):
+        root = Path("/tmp/coordinator-fixture")
+        bootstrap = call("work_on_project", {"client_id": "runner", "path": str(root)},
+            {"session_id": "wc_sess_test", "resolved_project": "project", "project_ref": "~p1"}, index=-1)
+        calls = positive_cases()["generic_missing_output"]
+        evidence._bind_fixture([bootstrap, *calls], root, "wc_sess_test")
+        for field, value in (("path", "/tmp/other-fixture"), ("client_id", "other-runner")):
+            foreign = copy.deepcopy(bootstrap)
+            foreign["arguments"][field] = value
+            foreign["output"]["project_ref"] = "~p-foreign"
+            with self.subTest(field=field), self.assertRaisesRegex(
+                evidence.EvidenceUnavailable, "fixture_binding_mismatch"
+            ):
+                evidence._bind_fixture([bootstrap, foreign, *calls], root, "wc_sess_test")
+        # A later bootstrap may legitimately select the exact same Project
+        # by ID rather than repeating an explicit client/path selector.
+        by_project = copy.deepcopy(bootstrap)
+        by_project["arguments"] = {"project": "project"}
+        evidence._bind_fixture([bootstrap, by_project, *calls], root, "wc_sess_test")
+
+    def test_boolean_status_counts_and_exit_codes_cannot_pass_strict_proof(self):
+        missing = positive_cases()["generic_missing_output"]
+        missing[0]["output"]["task_outputs"].update(missing_count=True, verified_count=False)
+        self.assertFalse(all(evidence._checks("generic_missing_output", missing).values()))
+        csv = positive_cases()["generic_encoded_csv"]
+        csv[1]["output"]["task_outputs"].update(missing_count=False, unavailable_count=False)
+        self.assertFalse(all(evidence._checks("generic_encoded_csv", csv).values()))
+        pending = positive_cases()["generic_pending_independent_join"]
+        pending[-1]["output"]["items"][0]["exit_code"] = False
+        self.assertFalse(all(evidence._checks("generic_pending_independent_join", pending).values()))
+
     def test_mixed_transfer_results_require_exact_paths_hashes_and_success(self):
         original = positive_cases()["generic_mixed_files_conflict"]
         for where, field, value in (("output", "sha256", "f" * 64), ("output", "bytes", 0),
