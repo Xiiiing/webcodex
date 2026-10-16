@@ -35,6 +35,10 @@ CHECK_NAMES = {
     "generic_stale_read_revision": {"stale_rejection_fresh_recovery"},
     "generic_missing_output": {"missing_output_blocks_finish"},
 }
+# These canonical observers cannot execute or mutate Project work. Their target
+# must still resolve to this exact recorded Session; their discussion bodies are
+# unnecessary for the task oracle and must not be opened.
+SESSION_CONTEXT_TOOLS = frozenset(("read_session_discussion_summary",))
 MAX_CALLS = 128
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 MAX_PAYLOAD_BYTES = 256 * 1024
@@ -44,7 +48,7 @@ UNAVAILABLE_REASONS = frozenset(("unsafe_capture", "capture_limit", "capture_cha
     "invalid_trace_identity", "trace_identity_mismatch", "incomplete_capture", "ambiguous_capture",
     "missing_canonical_call", "missing_order", "missing_scope", "scope_mismatch", "canonical_call_mismatch",
     "missing_mcp_result", "canonical_result_mismatch", "ambiguous_order", "project_mismatch",
-    "unsupported_case", "capture_identity_mismatch", "unlinked_runtime_call"))
+    "unsupported_case", "capture_identity_mismatch", "unlinked_runtime_call", "context_session_mismatch"))
 
 
 class EvidenceUnavailable(ValueError):
@@ -119,7 +123,7 @@ def _decompress(data):
             process.stdout.close()
 
 
-def _payloads(root, trace_id):
+def _payloads(root, trace_id, phases=frozenset(("effective_arguments", "final_response"))):
     if not isinstance(trace_id, str) or str(uuid.UUID(trace_id)) != trace_id:
         raise EvidenceUnavailable("invalid_trace_identity")
     directory = root / trace_id
@@ -138,7 +142,7 @@ def _payloads(root, trace_id):
         if event.get("event") != "tool_trace_payload_captured":
             continue
         phase = event.get("phase")
-        if phase not in ("effective_arguments", "final_response"):
+        if phase not in phases:
             continue
         if phase in selected or event.get("encoding") != "json+zstd":
             raise EvidenceUnavailable("ambiguous_capture")
@@ -156,13 +160,14 @@ def _payloads(root, trace_id):
         if len(raw) != size or hashlib.sha256(raw).hexdigest() != event.get("payload_sha256"):
             raise EvidenceUnavailable("corrupt_capture")
         selected[phase] = json.loads(raw)
-    if set(selected) != {"effective_arguments", "final_response"}:
+    if set(selected) != phases:
         raise EvidenceUnavailable("incomplete_capture")
     return selected
 
 
-def _calls(events, root):
+def _calls(events, root, workflow_session_id):
     calls, seen, scope = [], set(), None
+    intervals, contexts = [], []
     for event in events:
         if event.get("action_name") != "toolsCall":
             continue
@@ -184,12 +189,20 @@ def _calls(events, root):
         if scope is not None and scope != current_scope:
             raise EvidenceUnavailable("scope_mismatch")
         scope = current_scope
-        captured = _payloads(root, trace_id)
+        intervals.append((started, ended))
+        context_only = tool in SESSION_CONTEXT_TOOLS
+        captured = _payloads(root, trace_id, frozenset(("effective_arguments",)) if context_only
+                             else frozenset(("effective_arguments", "final_response")))
         arguments = captured["effective_arguments"]
         if event.get("operation") == "call_runtime_tool":
             if arguments.get("tool") != tool or not isinstance(arguments.get("arguments"), dict):
                 raise EvidenceUnavailable("canonical_call_mismatch")
             arguments = arguments["arguments"]
+        if context_only:
+            if not isinstance(arguments, dict):
+                raise EvidenceUnavailable("missing_canonical_call")
+            contexts.append((arguments.get("session_id"), started))
+            continue
         body = captured["final_response"]
         result = body.get("result", {}).get("structuredContent")
         if not isinstance(arguments, dict) or not isinstance(result, dict):
@@ -206,8 +219,18 @@ def _calls(events, root):
     if not 0 < len(calls) <= MAX_CALLS:
         raise EvidenceUnavailable("capture_limit")
     calls.sort(key=lambda call: call["started"])
-    if any(left["ended"] > right["started"] for left, right in zip(calls, calls[1:])):
+    intervals.sort()
+    if any(left[1] > right[0] for left, right in zip(intervals, intervals[1:])):
         raise EvidenceUnavailable("ambiguous_order")
+    for selector, started in contexts:
+        # A short ref is valid only after a successful bootstrap independently
+        # returned its mapping to this canonical Session in the same scope.
+        mapped = any(call["tool"] == "work_on_project" and call["result"]["success"] is True
+                     and call["ended"] <= started and call["output"].get("session_id") == workflow_session_id
+                     and isinstance(selector, str) and re.fullmatch(r"~s[1-9][0-9]{0,18}", selector)
+                     and call["output"].get("session_ref") == selector for call in calls)
+        if selector != workflow_session_id and not mapped:
+            raise EvidenceUnavailable("context_session_mismatch")
     return calls
 
 
@@ -387,7 +410,7 @@ def verify(*, capture_root, audit_db, workflow_session_id, case_id, base_revisio
         if len(events) > MAX_CALLS:
             raise EvidenceUnavailable("capture_limit")
         _coverage(root, events)
-        checks = _checks(case_id, _calls(events, root))
+        checks = _checks(case_id, _calls(events, root, workflow_session_id))
         return {"schema_version": 1, "case_id": case_id, "base_revision": base_revision,
                 "case_fingerprint": fingerprint, "available": True, "passed": all(checks.values()),
                 "checks": checks, "reason": None}

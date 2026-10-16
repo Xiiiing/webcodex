@@ -51,6 +51,11 @@ Audit 结果及确切作用域，拒绝未记录的调用和不确定顺序，�
 结束后删除自有捕获目录，包括失败样本；捕获哈希只证明本地完整性，不是独立
 Host 认证。
 
+额外的 `read_session_discussion_summary` 调用仍须通过 Audit、作用域和顺序检查。
+捕获参数必须选择当前确切 Session，或由此前成功 bootstrap 明确映射到该 Session
+的短 ref。该工具是 Session 观察器，无需 Project 字段或讨论响应；校验器不读取
+讨论正文。其他调用仍保留原有 Project 和结果检查。
+
 使用 `--candidate host_code_mode` 比较 Direct/Host，两者满足全部门禁时六类
 案例均可合格；原有嵌套 `code_mode` 默认保持不变。缺少逐个规范子调用证据时
 嵌套案例保持不完整，不能从外层组合计数补造。Host lane 只证明规范运行调用，

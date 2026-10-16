@@ -67,6 +67,13 @@ and availability reasons enter the benchmark result. The benchmark removes its
 owned capture directory after each sample, including unsuccessful samples.
 Capture hashes establish local integrity, not independent Host attestation.
 
+An additional `read_session_discussion_summary` call remains covered by the
+Audit, scope and ordering checks. Its captured arguments must select the exact
+recorded Session, or a short ref mapped to that Session by a prior successful
+bootstrap. It is a Session observer, so no Project field or discussion response
+is required; the verifier does not open its discussion body. Other calls retain
+the normal Project and result checks.
+
 Use `--candidate host_code_mode` for Direct/Host pairs, keeping the existing
 nested `code_mode` default unchanged. All six cases may qualify when both lanes
 meet every gate. Nested child evidence without individually captured canonical

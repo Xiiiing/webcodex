@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import unittest
 import uuid
@@ -171,6 +172,63 @@ class TemporalCaptureTests(unittest.TestCase):
         return evidence.verify(capture_root=self.root, audit_db=self.audit.audit_db,
                                workflow_session_id="wc_sess_test", case_id=self.case,
                                base_revision=self.base, fingerprint=self.fingerprint)
+
+    def extra_capture(self, tool, arguments, *, output=None, started=130, handed=140, window="hashed-window-a"):
+        saved = self.trace, self.directory, self.events
+        self.trace = str(uuid.uuid4())
+        self.directory = self.root / self.trace
+        self.directory.mkdir(mode=0o700)
+        (self.directory / "payloads").mkdir(mode=0o700)
+        self.private_write(self.directory / ".webcodex-tool-trace", b"")
+        self.events = []
+        self.audit.insert_event(self.trace, tool=tool, trace_id=self.trace, started=started, handed=handed, window=window)
+        with sqlite3.connect(self.audit.audit_db) as connection:
+            connection.execute("UPDATE action_events SET project=NULL WHERE event_id=?", (self.trace,))
+        try:
+            self.payload("effective_arguments", arguments)
+            if output is not None:
+                self.payload("final_response", {"result": {"structuredContent": {"success": True, "output": output}}})
+        finally:
+            self.trace, self.directory, self.events = saved
+
+    def test_exact_session_summary_needs_no_discussion_response_capture(self):
+        self.extra_capture("read_session_discussion_summary", {"session_id": "wc_sess_test"})
+        self.assertTrue(self.verify()["passed"], self.verify())
+
+    def test_session_summary_cannot_borrow_recording_link_for_another_target(self):
+        for index, selector in enumerate(("wc_sess_other", "~s1", None)):
+            with self.subTest(selector=selector):
+                self.extra_capture("read_session_discussion_summary", {"session_id": selector},
+                                   started=130 + index * 20, handed=140 + index * 20)
+                self.assertEqual(self.verify()["reason"], "context_session_mismatch")
+
+    def test_session_summary_alias_requires_prior_exact_bootstrap_mapping(self):
+        self.extra_capture("work_on_project", {}, output={"session_id": "wc_sess_test", "session_ref": "~s1"})
+        self.extra_capture("read_session_discussion_summary", {"session_id": "~s1"}, started=150, handed=160)
+        self.assertTrue(self.verify()["passed"], self.verify())
+
+    def test_later_bootstrap_cannot_retroactively_bind_context_alias(self):
+        self.extra_capture("read_session_discussion_summary", {"session_id": "~s1"})
+        self.extra_capture("work_on_project", {}, output={"session_id": "wc_sess_test", "session_ref": "~s1"},
+                           started=150, handed=160)
+        self.assertEqual(self.verify()["reason"], "context_session_mismatch")
+
+    def test_bootstrap_for_other_session_does_not_prove_context_alias(self):
+        self.extra_capture("work_on_project", {}, output={"session_id": "wc_sess_other", "session_ref": "~s1"})
+        self.extra_capture("read_session_discussion_summary", {"session_id": "~s1"}, started=150, handed=160)
+        self.assertEqual(self.verify()["reason"], "context_session_mismatch")
+
+    def test_session_context_retains_window_and_order_fences(self):
+        self.extra_capture("read_session_discussion_summary", {"session_id": "wc_sess_test"}, window="other-window")
+        self.assertEqual(self.verify()["reason"], "scope_mismatch")
+
+    def test_session_context_overlap_is_still_incomplete(self):
+        self.extra_capture("read_session_discussion_summary", {"session_id": "wc_sess_test"}, started=110, handed=130)
+        self.assertEqual(self.verify()["reason"], "ambiguous_order")
+
+    def test_projectless_mutation_is_not_session_read_context(self):
+        self.extra_capture("checkpoint_goal", {}, output={})
+        self.assertEqual(self.verify()["reason"], "project_mismatch")
 
     def test_actual_capture_with_exact_audit_and_digest_passes_without_payload_output(self):
         result = self.verify()
