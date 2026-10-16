@@ -27,8 +27,8 @@ locale/timezone/Python environment to commands executed through WebCodex.
 In addition to the existing driver contract, generic samples expose
 `WEBCODEX_BENCH_TARGET`, `WEBCODEX_BENCH_WORKSPACE`,
 `WEBCODEX_BENCH_FIXTURE_ENVIRONMENT` (JSON child environment),
-`WEBCODEX_BENCH_FIXTURE_COMMAND` (the prescribed failing output-pressure Python
-script), and `WEBCODEX_BENCH_FIXTURE_COORDINATION` (outside the editable Project).
+`WEBCODEX_BENCH_FIXTURE_COMMAND` (the prescribed failure-pressure or pending-EOF
+Python script), and `WEBCODEX_BENCH_FIXTURE_COORDINATION` (outside the editable Project).
 For the stale-read case the driver signals `first-read` after retaining the
 exact read receipt, waits for `external-written`, attempts the stale fenced
 edit, signals `stale-rejected` only after rejection, then waits for
@@ -44,18 +44,48 @@ runtime-backed lane evidence and every available file oracle. Missing cases,
 `partial`, `unsupported` and missing required evidence fail this gate. Driver
 annotations alone cannot prove execution.
 
-Currently the four temporal generic cases (failure/repair, pending join,
-stale revision and missing output) remain `partial` in Host benchmark reports:
-the privacy-bounded audit does not prove their full ordered result semantics.
-The files/CSV cases can qualify when their runtime and oracle gates pass.
-Do not describe an all-six strict run as passing. The deterministic real
-Server/Runner smoke separately checks runtime mechanisms, including those
-temporal cases; it is not evidence that ChatGPT chose the right actions.
+The four temporal generic cases (failure/repair, pending join, stale revision
+and missing output) can qualify through the separate, explicit
+[temporal verifier](../../scripts/agent_temporal_evidence.py). Ordinary reports
+still read metadata only. Without complete captured runtime evidence these
+cases remain `partial`; filesystem correctness and driver assertions cannot
+replace it. A contradicted sequence fails instead of qualifying as incomplete.
+
+For these cases the benchmark creates a private, case/base/fingerprint-bound
+`WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT` outside the editable Project. The driver
+must use it as the **disposable test Server's** full trace directory and provide
+its audit DB plus canonical `workflow_session_id` (not an opaque Session ref).
+Record all relevant model calls with authorized `_wc.record`. Stop/drain owned
+test services before returning the receipt. Never enable this capture on a
+shared service or put credential provisioning through model tools.
+
+The verifier checks private regular files, trace UUIDs, compressed/raw bounds
+and SHA-256 indexes; correlates canonical Audit outcomes and exact scope;
+rejects unrecorded runtime calls and ambiguous ordering; and reads only selected
+effective arguments and final MCP responses. Only closed check names/booleans
+and availability reasons enter the benchmark result. The benchmark removes its
+owned capture directory after each sample, including unsuccessful samples.
+Capture hashes establish local integrity, not independent Host attestation.
+
+Use `--candidate host_code_mode` for Direct/Host pairs, keeping the existing
+nested `code_mode` default unchanged. All six cases may qualify when both lanes
+meet every gate. Nested child evidence without individually captured canonical
+results remains incomplete, never reconstructed from outer composition counts.
+Host lane qualification proves canonical runtime calls, not one JavaScript cell
+or exact model turns. Use the fixed supplied failure/repair scripts. For pending
+independent work use `from pathlib import Path` followed by
+`Path('independent.txt').write_text('independent work completed')`, or one exact
+`edit_project_files` create request for that file/content, before releasing EOF.
+
+The deterministic real Server/Runner smoke checks the verifier against actual
+execution and remains separate from proof of ChatGPT choosing those actions.
 
 ```bash
 python3 -m unittest scripts.tests.test_agent_loop_report scripts.tests.test_agent_loop_benchmark scripts.tests.test_generic_agent_acceptance
 cargo build --locked --profile dogfood -j 2 -p webcodex --bin webcodex-server -p webcodex-runner --bin webcodex-runner
 python3 scripts/e2e_generic_agent_ws.py --profile upgraded --source-version ACTUAL_SOURCE_ID --report /tmp/generic-agent-acceptance.json
+python3 -m unittest scripts.tests.test_agent_temporal_evidence
+python3 scripts/e2e_agent_temporal_evidence_ws.py --bin-dir target/dogfood --source-revision EXACT_RUNTIME_SOURCE_COMMIT --output /tmp/temporal-acceptance.json
 ```
 
 ## ChatGPT Host acceptance

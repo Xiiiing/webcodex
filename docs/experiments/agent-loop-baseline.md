@@ -67,6 +67,14 @@ For live Agent comparisons record the connection path (Apps, direct MCP or nativ
 Host mode and model configuration separately; a Server manifest cannot prove which
 schemas a Host loaded. See [MCP client contracts](../implementation/mcp-client-contract-alignment.md).
 
+The opt-in [generic temporal verifier](../implementation/chat-task-loop.md)
+is separate from this metadata-only profiler. It may read actual full MCP
+captures only from a benchmark-owned disposable Server directory, reduces them
+to closed checks and destroys the raw capture. `--candidate host_code_mode` on
+the paired benchmark enables Direct/Host lanes without changing the historical
+nested Code Mode default. Missing ordered evidence remains partial; a driver
+verdict or final file is not a substitute for execution/receipt identity.
+
 Session-filtered counts cover only calls linked to that exact Session. Discovery
 or rejected bootstrap calls made before a Session is selected can be unlinked.
 An explicit business `session_id` also does not select the outer recorder: a

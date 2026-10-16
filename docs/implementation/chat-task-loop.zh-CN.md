@@ -20,7 +20,7 @@
 
 通用样本新增 `WEBCODEX_BENCH_TARGET`、`WEBCODEX_BENCH_WORKSPACE`、
 `WEBCODEX_BENCH_FIXTURE_ENVIRONMENT`（JSON 子进程环境）、
-`WEBCODEX_BENCH_FIXTURE_COMMAND`（指定的失败日志压力脚本）以及
+`WEBCODEX_BENCH_FIXTURE_COMMAND`（指定的失败压力或等待 EOF 脚本）以及
 `WEBCODEX_BENCH_FIXTURE_COORDINATION`（项目外协调目录）。过期读取案例中，
 driver 保留确切读取回执后发出 `first-read`，等待 `external-written`，执行旧
 revision 的编辑，确认拒绝后发出 `stale-rejected`，等待 `rejection-checked`
@@ -33,10 +33,33 @@ revision 的编辑，确认拒绝后发出 `stale-rejected`，等待 `rejection-
 缺失案例、`partial`、`unsupported`、缺失必需证据均不能通过；driver 自报不能
 证明执行。
 
-目前四个时序案例（失败修复、后台汇合、过期 revision、缺失输出）在 Host
-评测中保持 `partial`：现有隐私受限审计不能证明全部有序结果语义。文件与 CSV
-案例可在运行时及 oracle 门禁通过后合格。六案例严格运行不能宣称全部通过。
-真实 Server/Runner 确定性 smoke 另行验证这些运行机制，不能证明 ChatGPT
+四个时序案例（失败修复、后台汇合、过期 revision、缺失输出）现在可通过独立的
+[时序校验器](../../scripts/agent_temporal_evidence.py)取得资格。普通报告仍只读取
+元数据；没有完整运行证据时仍为 `partial`，最终文件正确或 driver 自报不能替代。
+实际顺序与要求矛盾时判失败，不把已知错误归为证据不足。
+
+评测器在可编辑项目外创建私有、绑定案例/base/fingerprint 的
+`WEBCODEX_BENCH_TEMPORAL_TRACE_ROOT`。driver 必须把它配置为**一次性测试
+Server**的 full trace 目录，并提供审计数据库和规范 `workflow_session_id`
+（不能使用不透明 Session ref）。相关模型调用均使用授权的 `_wc.record`；
+返回回执前停止并排空自有测试服务。不得为此启用共享服务捕获，也不得把凭据
+创建操作放进模型工具调用。
+
+校验器检查私有普通文件、trace UUID、压缩前后大小、SHA-256 索引，关联规范
+Audit 结果及确切作用域，拒绝未记录的调用和不确定顺序，仅读取所选有效参数与
+最终 MCP 响应。报告只保留封闭检查名称、布尔结果和证据可用性原因。每个样本
+结束后删除自有捕获目录，包括失败样本；捕获哈希只证明本地完整性，不是独立
+Host 认证。
+
+使用 `--candidate host_code_mode` 比较 Direct/Host，两者满足全部门禁时六类
+案例均可合格；原有嵌套 `code_mode` 默认保持不变。缺少逐个规范子调用证据时
+嵌套案例保持不完整，不能从外层组合计数补造。Host lane 只证明规范运行调用，
+不证明同一个 JavaScript cell 或精确模型回合。失败修复使用指定固定脚本；
+后台独立工作使用 `from pathlib import Path` 后接
+`Path('independent.txt').write_text('independent work completed')`，或针对该文件和
+内容的一次确切 `edit_project_files` create，在释放 EOF 前完成。
+
+真实 Server/Runner 确定性 smoke 验证校验器与实际执行链路，不能证明 ChatGPT
 选择了正确动作。可执行命令见英文对应文档。
 
 ## ChatGPT Host 验收

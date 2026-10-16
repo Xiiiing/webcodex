@@ -38,6 +38,7 @@ BASELINE = "05d45f376d3265490de28090b9c5b0150dbacd8b"
 UPSTREAM = "05d45f37"
 SENTINEL = "GENERIC_ACCEPTANCE_UNIQUE_SENTINEL_9d06"
 EXTERNAL_SENTINEL = "EXTERNAL_WRITER_SENTINEL_c741"
+PENDING_SCRIPT = "import sys; sys.stdin.read(); print('controlled-job-complete',flush=True)"
 
 
 def sha(path):
@@ -184,6 +185,8 @@ class GenericFixture:
             checks.append({"path": "report.json", "passed": valid})
         elif self.case_id == "generic_pending_independent_join":
             exact("independent.txt", b"independent work completed")
+        elif self.case_id == "generic_failure_repair":
+            checks.append({"kind": "fixture_unchanged", "passed": not any(self.root.iterdir())})
         elif self.case_id == "generic_stale_read_revision":
             exact("stale.txt", b"task value: after\n" + (EXTERNAL_SENTINEL + "\n").encode())
             checks.append({"kind": "external_writer_coordination", "passed": self.external_written and self.rejection_checked})
@@ -507,7 +510,7 @@ class GenericSmoke(InteractiveSmoke):
 
     def pending(self):
         offset = len(self.calls)
-        job = self.start_pipe("import sys; sys.stdin.read(); print('controlled-job-complete',flush=True)", 30)
+        job = self.start_pipe(PENDING_SCRIPT, 30)
         self.script("from pathlib import Path\nPath('independent.txt').write_text('independent work completed')\n")
         self.write(job, "release", close=True)
         item = self.terminal(job)  # Exactly one readiness join, then observe the SAME Job.
