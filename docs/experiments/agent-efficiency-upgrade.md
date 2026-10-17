@@ -4,8 +4,8 @@
 
 This procedure collects current-source evidence for
 [Issue #1159](https://github.com/yyjeqhc/webcodex/issues/1159). It does not contain
-real-model measurements or establish a production inefficiency. The collector
-is a thin wrapper over `agent_loop_benchmark` sample ownership, fixture oracles,
+complete paired real-model measurements or establish a production inefficiency.
+The collector is a thin wrapper over `agent_loop_benchmark` sample ownership, fixture oracles,
 runtime gates and `agent_loop_report` comparison. Existing Agent Loop evidence
 remains usable without the optional efficiency identity fields.
 
@@ -158,6 +158,14 @@ proposing a focused tool-contract or guidance change, rerun the same three
 pairs at the changed current revision, and keep correctness/runtime gates.
 Absent live observations, this stage makes no production guidance or runtime
 changes. Unit fixtures validate collection and rejection behavior only.
+
+A live ChatGPT attempt on aligned Server/Runner `d54e21b19d26` supplied
+`_wc.compact_execution` to `cargo_test`. Envelope validation returned `-32602`
+before dispatch; no Job started. Preserve this attempt as incomplete. Unsupported
+field errors now list the target's supported `_wc` field names (or `none`) using
+the existing allowlist, without echoing argument values. Direct and gateway
+regressions verify rejection before Job creation. This feedback change has local
+test evidence; its real-model recovery and efficiency effect remain unverified.
 
 ## Host single-call versus composition policy
 

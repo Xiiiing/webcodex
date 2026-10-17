@@ -58,6 +58,15 @@ pub(super) fn mcp_invocation_envelope_supported_fields(tool: &str) -> Vec<&'stat
     fields
 }
 
+fn unsupported_invocation_field(field: &str, tool: &str, allowed: &[&'static str]) -> String {
+    let supported = if allowed.is_empty() {
+        "none".to_string()
+    } else {
+        allowed.join(", ")
+    };
+    format!("unsupported _wc field '{field}' for tool '{tool}'; supported _wc fields: {supported}")
+}
+
 pub(super) fn validate_mcp_invocation_envelope_for_target(
     envelope: &McpInvocationEnvelope,
     tool: &str,
@@ -75,7 +84,7 @@ pub(super) fn validate_mcp_invocation_envelope_for_target(
         ("control", metadata.control.is_some()),
     ] {
         if present && !allowed.contains(&field) {
-            return Err(format!("unsupported _wc field '{field}' for tool '{tool}'"));
+            return Err(unsupported_invocation_field(field, tool, &allowed));
         }
     }
     Ok(())
@@ -121,9 +130,7 @@ pub(in crate::mcp) fn parse_mcp_invocation_envelope(
     };
     let allowed = mcp_invocation_envelope_supported_fields(tool_name);
     if let Some(key) = envelope.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(format!(
-            "unsupported _wc field '{key}' for tool '{tool_name}'"
-        ));
+        return Err(unsupported_invocation_field(key, tool_name, &allowed));
     }
 
     // Preserve validation precedence when a caller supplies several invalid fields.
