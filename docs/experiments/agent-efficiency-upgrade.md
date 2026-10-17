@@ -20,6 +20,15 @@ bounded to 1–10; each driver has the existing 30-minute process-group limit.
 Worktrees, receipts and annotations belong to one temporary directory and are
 removed on completion or failure. Setup errors also clean the owned directory.
 
+The long-validation task uses published validation options and Server-controlled
+synchronous handoff timing. It does not require an unpublished client timing
+hint. Both arms must use the same timing policy; an actual pending Job,
+independent work before its real completion, and successful observation of that
+same Job remain required. Preserve historical prompts, fingerprints and any
+approved contract annotation: an omitted `sync_wait_secs` hint does not prove
+that an earlier explicit one-second requirement passed. A changed manifest has
+a new case fingerprint and must not be mixed with the frozen baseline.
+
 Provide a real live ChatGPT Host driver executable. It must submit each case
 prompt to a fresh ChatGPT task/session connected to the sample workspace and
 retain the actual WebCodex audit evidence for that task. Direct uses admitted

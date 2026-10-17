@@ -117,7 +117,7 @@
       "id": "long_validation_handoff",
       "title": "Long validation and same-execution Job handoff",
       "target": "webcodex_repository",
-      "prompt": "Do not modify files. Start cargo test --lib with sync_wait_secs=1 and a sufficient total timeout. If it hands off, preserve that exact Job identity; while it runs, independently inspect the timing terminology in docs/architecture/tool-composition-research.md, then observe the same Job to terminal completion. Do not redispatch cargo test. If the validation finishes synchronously before handoff, report that this run does not satisfy the handoff case instead of fabricating one.",
+      "prompt": "Do not modify files. Start cargo test --lib with a sufficient total timeout using the published validation options; let the Server control synchronous handoff timing. If it hands off, preserve that exact Job identity; while it runs, independently inspect the timing terminology in docs/architecture/tool-composition-research.md, then observe the same Job to terminal completion. Do not redispatch cargo test. If the validation finishes synchronously before handoff, report that this run does not satisfy the handoff case instead of fabricating one.",
       "correctness": {
         "workspace_must_remain_clean": true,
         "same_execution_must_be_preserved": true,
@@ -127,7 +127,6 @@
       "validation": {
         "required": true,
         "command": "cargo test --lib",
-        "sync_wait_secs": 1,
         "expected_terminal_result": "success"
       },
       "code_mode_surface": "validation"

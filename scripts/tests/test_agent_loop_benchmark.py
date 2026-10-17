@@ -15,6 +15,20 @@ from scripts import agent_loop_report as report
 
 
 class AgentLoopBenchmarkTests(unittest.TestCase):
+    def test_long_handoff_uses_published_timing_without_weakening_execution_checks(self) -> None:
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        case = report._case_by_id(manifest, "long_validation_handoff")
+        self.assertNotIn("sync_wait_secs", case["prompt"])
+        self.assertNotIn("sync_wait_secs", case["validation"])
+        self.assertIn("published validation options", case["prompt"])
+        self.assertIn("let the Server control synchronous handoff timing", case["prompt"])
+        self.assertTrue(case["correctness"]["requires_real_handoff_for_valid_case"])
+        self.assertTrue(case["correctness"]["same_execution_must_be_preserved"])
+        self.assertTrue(case["correctness"]["redispatch_forbidden"])
+        self.assertTrue(case["validation"]["required"])
+        self.assertEqual(case["validation"]["command"], "cargo test --lib")
+        self.assertEqual(case["validation"]["expected_terminal_result"], "success")
+
     def _install_manifest(self, repo: Path) -> None:
         target = repo / "scripts/agent_loop_cases.json"
         target.parent.mkdir(parents=True, exist_ok=True)
