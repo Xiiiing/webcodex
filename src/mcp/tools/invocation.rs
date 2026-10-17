@@ -59,6 +59,18 @@ pub(super) fn mcp_invocation_envelope_supported_fields(tool: &str) -> Vec<&'stat
 }
 
 fn unsupported_invocation_field(field: &str, tool: &str, allowed: &[&'static str]) -> String {
+    // Unknown envelope keys are untrusted caller text. Reflect only short,
+    // ASCII identifier-like typos; never echo long, multiline or opaque keys.
+    let field = if !field.is_empty()
+        && field.len() <= 64
+        && field
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        field
+    } else {
+        "<redacted>"
+    };
     let supported = if allowed.is_empty() {
         "none".to_string()
     } else {

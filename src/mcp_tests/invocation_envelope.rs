@@ -98,6 +98,25 @@ fn invocation_envelope_supported_field_feedback_preserves_target_permissions_and
 }
 
 #[test]
+fn invocation_envelope_unknown_field_name_is_bounded_and_private() {
+    // Unknown JSON keys are caller-supplied, not vetted names from our schema.
+    // Avoid using the error channel to reflect arbitrarily long/private keys.
+    for field in [
+        "private-token:".to_owned() + &"s".repeat(4096),
+        "Bearer secret with spaces".to_owned(),
+    ] {
+        let mut arguments = json!({"_wc": {field.clone(): true}});
+        let err = parse_mcp_invocation_envelope("cargo_test", &mut arguments, true).unwrap_err();
+        assert!(err.len() < 350, "unbounded error: {} bytes", err.len());
+        assert!(!err.contains(&field));
+        assert!(err.contains("supported _wc fields: record, ack, ack_ref"));
+    }
+    let mut normal_typo = json!({"_wc": {"compactExecution": true}});
+    let err = parse_mcp_invocation_envelope("cargo_test", &mut normal_typo, true).unwrap_err();
+    assert!(err.contains("compactExecution"));
+}
+
+#[test]
 fn invocation_envelope_rejects_malformed_fields_with_canonical_paths() {
     for (envelope, expected) in [
         (
