@@ -90,6 +90,12 @@ class EfficiencyTests(unittest.TestCase):
             self.sample()["status"] = status
             self.assertFalse(self.strict())
 
+    def test_driver_exit_requires_an_actual_integer_zero(self):
+        for value in (False, True, "0", None):
+            with self.subTest(value=value):
+                self.sample()["driver_exit_code"] = value
+                self.assertFalse(self.strict())
+
     def test_reported_pass_cannot_hide_failed_correctness(self):
         self.sample()["summary"]["correctness"]["task_verdict"] = "fail"
         self.assertFalse(self.strict())

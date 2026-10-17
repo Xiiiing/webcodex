@@ -282,7 +282,8 @@ def strict_passed(result, manifest):
                         expected_surface = "direct" if sample["variant"] == "direct" else (
                             "host_code_mode" if sample["variant"] == "host_code_mode" else definition["code_mode_surface"])
                         if (sample["case_id"] != case["case_id"] or sample["status"] != "pass"
-                            or sample.get("surface") != expected_surface or sample.get("driver_exit_code") != 0
+                            or sample.get("surface") != expected_surface
+                            or type(sample.get("driver_exit_code")) is not int or sample.get("driver_exit_code") != 0
                             or sample.get("identity_attestation", {}).get("matched") is not True
                             or summary.get("efficiency_identity") != {"model_config_digest": identity, "attested": True}):
                             return False
