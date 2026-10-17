@@ -2,8 +2,9 @@
 
 [English](agent-efficiency-upgrade.md)
 
-本流程为 [Issue #1159](https://github.com/yyjeqhc/webcodex/issues/1159) 收集当前源码证据。
-本文没有完整的真实模型配对测量结果，也没有认定生产环境存在低效。收集器复用
+本流程与已完成的 2026-10-17 Host 政策基准为
+[Issue #1159](https://github.com/yyjeqhc/webcodex/issues/1159) 提供证据。基准包含九对、
+18 个合格真实模型样本；它不证明生产环境存在低效，也不完成父 Issue 的四阶段范围。收集器复用
 `agent_loop_benchmark` 的样本生命周期、夹具判定器和运行时门禁，以及
 `agent_loop_report` 的比较逻辑。未使用可选效率身份字段的既有报告仍然可用。
 
@@ -70,8 +71,8 @@ Direct 使用 `variant=direct,surface=direct`。字段缺失、多余或不匹�
 
 ## 自由工具选型回归
 
-第二阶段依赖 [PR #1162](https://github.com/yyjeqhc/webcodex/pull/1162) 的通用运行时
-证据验收工作。固定三任务、每任务三对的效率套件之外，默认 `tool_selection` 实验运行
+第二阶段依赖已合并 [PR #1162](https://github.com/yyjeqhc/webcodex/pull/1162) 的通用运行时
+证据验收工作，该工作已包含在 main 中。固定三任务、每任务三对的效率套件之外，默认 `tool_selection` 实验运行
 四个有界只读场景：`selection_single_read`、`selection_batch_read`、
 `selection_cross_tool_review` 和 `selection_compound_source_context`。新增场景要求模型
 定位从文本匹配生成源码上下文读取的实现，依据当前源码及测试解释重叠合并、读取数量
@@ -116,14 +117,13 @@ p50/p95 为描述性的最近秩统计，不是置信区间或提速结论。
 证明相同内容被重复读取，因此不会虚构重复读取结论。失败交付后的 observe 也须进一步检查必要性，
 才能提出改进建议。调用次数低不能单独证明成功或效率。提出具体工具契约或指引
 改进前，先检查真实候选证据，再在修改后的当前提交重复相同的三对实验，保持正确性
-和运行时门禁。没有真实观测时，本阶段不修改生产指引或运行时。单元夹具仅验证收集与
-拒绝行为。
+和运行时门禁。下文完成的基准不证明生产效率收益。单元夹具仅验证收集与拒绝行为。
 
 一次真实 ChatGPT 尝试在 Server/Runner 对齐于 `d54e21b19d26` 时，向 `cargo_test`
 传入 `_wc.compact_execution`。调用包校验在派发前返回 `-32602`，没有启动 Job；
 该尝试保留为不完整样本。现在，不支持字段的错误会依据现有允许列表，列出目标工具
 支持的 `_wc` 字段名，无字段时显示 `none`，不回显参数值。直接调用与网关回归均验证
-拒绝发生在 Job 创建之前。此反馈修改已有本地测试证据，真实模型恢复及效率影响仍未验收。
+拒绝发生在 Job 创建之前。此反馈修改通过 26 项聚焦运行时测试，但未部署到本次基准；真实模型恢复及效率影响仍未验收。
 
 ## Host 单调用与组合政策对照
 
@@ -157,3 +157,61 @@ receipt 须包含闭合 `host_cell_attestation`：`policy`、
 操作员复核时间不能当作模型任务耗时。Audit observed span 只是另一代理指标，不能
 据此宣称整体加速。私有纯 JS 指纹助手正式采样前必须先通过单独真实 Host 只读 probe；
 本地 JS 测试不能替代该证据。
+
+## 已完成的 Host 政策基准：2026-10-17
+
+Direct 暴露不可用，因此采用获准的替代实验，在真实 ChatGPT 任务中比较
+`host_single_call` 与 `host_composition_allowed`：三任务 × 三对 × 两政策，
+18 个样本、九对均独立通过未修改的运行时、任务和调用者证据门禁。Direct 仍未验收，
+未运行嵌套 Code Mode。冻结夹具源码为
+`29c906b8a624d315992f7a48d6f1a9a28593721d`，干净且对齐的 Server/Runner
+源码为 `d54e21b19d26c3852cf4f9abd723e3e5f13353eb`。
+调用者声明 ChatGPT UI 选项为 GPT-6、extreme 推理；后端模型身份未知，这不构成
+独立的模型身份验证。
+
+验收要求完整的规范 Audit 与夹具检查、外部任务正确性核验，以及覆盖每个实际外层
+调用的唯一调用者 UI 映射。长验证样本还须证明真实 pending Job、在其权威记录的
+实际结束前开展独立读取，并观察同一个 Job 以退出码 0 进入终态。驱动 pass 标记或
+最终文件本身均不能满足这些门禁。Host 单元分组仍是调用者声明，
+`independently_verified=false`。
+
+旧版明确要求的一秒 `sync_wait_secs` 设置不可用，也未公开发布。首个长任务样本后，
+用户明确批准使用 Server 默认十秒政策。原始提示、指纹、拒绝记录及批准注记均保留；
+不声称一秒要求通过。十次退役无效尝试、两次未使用准备和两份已被替代且作废的证明
+均保留并排除。精确样本工作区及原始材料清理前，已保留私有验证事实。
+
+表内每格为 **单调用 / 允许组合**。调用数为规范 WebCodex 外层调用数，字节数为
+序列化工具结果字节数，observe 为外层 `observe_jobs` 调用数。这些整数依次来自
+合格配对的 `outer_calls.total`、`results.serialized_tool_result_bytes.total` 与
+`efficiency.job_observe_calls` 的 `baseline` / `candidate` 值；配对从 1 编号。
+
+| 任务 | 配对 | 调用数 | 结果字节数 | Job observe 数 | 声明的非空单元数 |
+| --- | --- | --- | --- | --- | --- |
+| `readonly_review` | 1 | 9 / 9 | 163,826 / 208,012 | 0 / 0 | 9 / 6 |
+| `readonly_review` | 2 | 13 / 10 | 171,795 / 209,455 | 0 / 0 | 13 / 7 |
+| `readonly_review` | 3 | 9 / 9 | 177,812 / 221,575 | 0 / 0 | 9 / 6 |
+| `guarded_multi_file_edit` | 1 | 6 / 6 | 25,576 / 25,627 | 0 / 0 | 6 / 5 |
+| `guarded_multi_file_edit` | 2 | 6 / 6 | 25,576 / 25,576 | 0 / 0 | 6 / 6 |
+| `guarded_multi_file_edit` | 3 | 6 / 6 | 26,613 / 25,464 | 0 / 0 | 6 / 6 |
+| `long_validation_handoff` | 1 | 10 / 8 | 91,903 / 84,197 | 2 / 2 | 10 / 8 |
+| `long_validation_handoff` | 2 | 7 / 6 | 64,934 / 79,107 | 1 / 1 | 7 / 6 |
+| `long_validation_handoff` | 3 | 6 / 6 | 81,267 / 78,373 | 1 / 1 | 6 / 6 |
+
+每个样本的任务耗时和修复轮数均为 null。所有配对两臂的立即 observe 计数均为零，
+这本身不证明调度最优。非空单元数由调用者声明，未经独立验证。调用者另报告只读配对 1 的组合臂、
+只读配对 2 的单调用臂和长验证配对 2–3 的单调用臂各有一个空 Host 单元；
+其余空单元计数未知。
+
+每对内部的采集方式相同，但配对之间有变化。只读配对 1–2 使用 `original_v4`
+回执指引；只读配对 3 及所有其余配对使用 `verbatim-recursion-reminder-v1`。
+仅长验证配对 2–3 使用 `cargo-and-receipt-preflight-v2`；其余均为
+`no_dispatch_guard`。这些采集变化不是产品收益。表格只支持逐对描述，不作汇总
+因果、提速或 p95 结论。
+
+助手源码的逐字指令遵循为 false。多文件编辑配对 3 单调用臂的 `review_changes`
+单元中，未使用的 `read_files` 分支缺少字段；只读配对 3 单调用臂的 c09 单元改变了
+实际执行的 `wcProject` 分支顺序。所有实际执行回执均已精确映射，但其余原始 Host
+代码与完整源码语义等价性仍未验证。合格结果证明运行时与任务回执，不证明完整协议
+源码合规，也不证明所有试次逐字使用了助手代码。独立的四用例自由选型实验在此没有
+在线结果。上文支持 `_wc` 字段名的反馈修复未部署到本次基准，真实模型恢复或效率
+收益仍未验证。本基准向父 Issue 提供证据，不关闭其剩余阶段。

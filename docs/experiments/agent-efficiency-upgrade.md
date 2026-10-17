@@ -2,9 +2,10 @@
 
 [简体中文](agent-efficiency-upgrade.zh-CN.md)
 
-This procedure collects current-source evidence for
-[Issue #1159](https://github.com/yyjeqhc/webcodex/issues/1159). It does not contain
-complete paired real-model measurements or establish a production inefficiency.
+This procedure and the completed 2026-10-17 Host-policy baseline provide evidence
+for [Issue #1159](https://github.com/yyjeqhc/webcodex/issues/1159). The baseline
+contains 18 qualified real-model samples in nine pairs; it does not establish a
+production inefficiency or complete the parent Issue’s four-stage scope.
 The collector is a thin wrapper over `agent_loop_benchmark` sample ownership, fixture oracles,
 runtime gates and `agent_loop_report` comparison. Existing Agent Loop evidence
 remains usable without the optional efficiency identity fields.
@@ -90,9 +91,9 @@ throughout; if a configuration changes, start a separate experiment.
 
 ## Free tool-selection regression
 
-Stage 2 depends on the generic runtime-evidence acceptance work in
-[PR #1162](https://github.com/yyjeqhc/webcodex/pull/1162). Separately from the fixed
-three-task, three-pair efficiency suite, the default `tool_selection` experiment
+Stage 2 depends on the generic runtime-evidence acceptance work in merged
+[PR #1162](https://github.com/yyjeqhc/webcodex/pull/1162), already included in main.
+Separately from the fixed three-task, three-pair efficiency suite, the default `tool_selection` experiment
 runs four bounded read-only scenarios: `selection_single_read`,
 `selection_batch_read`, `selection_cross_tool_review`, and
 `selection_compound_source_context`. The last asks the model to locate and explain
@@ -156,16 +157,16 @@ inspection of necessity before proposing a change. Low call counts alone do
 not prove success or efficiency. Inspect actual candidate evidence before
 proposing a focused tool-contract or guidance change, rerun the same three
 pairs at the changed current revision, and keep correctness/runtime gates.
-Absent live observations, this stage makes no production guidance or runtime
-changes. Unit fixtures validate collection and rejection behavior only.
+The completed baseline below does not demonstrate a production efficiency gain.
+Unit fixtures validate collection and rejection behavior only.
 
 A live ChatGPT attempt on aligned Server/Runner `d54e21b19d26` supplied
 `_wc.compact_execution` to `cargo_test`. Envelope validation returned `-32602`
 before dispatch; no Job started. Preserve this attempt as incomplete. Unsupported
 field errors now list the target's supported `_wc` field names (or `none`) using
 the existing allowlist, without echoing argument values. Direct and gateway
-regressions verify rejection before Job creation. This feedback change has local
-test evidence; its real-model recovery and efficiency effect remain unverified.
+regressions verify rejection before Job creation. This feedback change passes
+26 focused runtime tests. It was not deployed in the baseline; its real-model recovery and efficiency effect remain unverified.
 
 ## Host single-call versus composition policy
 
@@ -211,3 +212,78 @@ copying, waiting and operator review cannot be measured as model task duration.
 Audit observed span is a separate proxy and cannot establish overall speedup.
 A private JavaScript fingerprint helper needs an isolated real Host read-only
 probe before any formal samples; local JavaScript tests alone are insufficient.
+
+## Completed Host-policy baseline: 2026-10-17
+
+The approved alternative to unavailable Direct exposure ran real ChatGPT tasks
+under `host_single_call` and `host_composition_allowed`: three tasks × three
+pairs × two policies, with all 18 samples and nine pairs independently passing
+the unchanged runtime, task and caller-evidence gates. Direct remains unverified;
+nested Code Mode was not run. The frozen fixture source was
+`29c906b8a624d315992f7a48d6f1a9a28593721d`; the clean, aligned Server/Runner
+source was `d54e21b19d26c3852cf4f9abd723e3e5f13353eb`.
+The caller attested the ChatGPT UI selection as GPT-6 with extreme reasoning.
+The backend model identity was unknown; this is not independent model verification.
+
+Acceptance required full canonical Audit and fixture checks, external task
+correctness, and a unique caller UI mapping covering every actual outer call.
+The long-validation samples additionally required a real pending Job, an
+independent read before its authoritative actual end, and observation of that
+same Job reaching terminal exit code 0. Neither a driver pass flag nor final
+files alone met these gates. Host cell grouping remains caller-attested,
+`independently_verified=false`.
+
+The legacy explicit one-second `sync_wait_secs` setting was unavailable and was
+not published. After the first long sample, the user explicitly approved the
+Server-default ten-second policy. Original prompts, fingerprints, rejections
+and the approval annotation were retained; the one-second requirement is never
+claimed to have passed. Ten retired invalid attempts, two unused preparations
+and two superseded, invalidated proofs were preserved and excluded. Private
+validation facts were retained before cleanup of the exact sample workspaces
+and raw artifacts.
+
+Each table cell is **single-call / composition-allowed**. Calls are canonical
+WebCodex outer calls, bytes are serialized tool-result bytes, and observes are
+outer `observe_jobs` calls. These integers are the corresponding qualified-pair
+`baseline` / `candidate` values for `outer_calls.total`,
+`results.serialized_tool_result_bytes.total`, and
+`efficiency.job_observe_calls`, respectively; pair numbers are one-based.
+
+| Task | Pair | Calls | Result bytes | Job observes | Attested nonempty cells |
+| --- | --- | --- | --- | --- | --- |
+| `readonly_review` | 1 | 9 / 9 | 163,826 / 208,012 | 0 / 0 | 9 / 6 |
+| `readonly_review` | 2 | 13 / 10 | 171,795 / 209,455 | 0 / 0 | 13 / 7 |
+| `readonly_review` | 3 | 9 / 9 | 177,812 / 221,575 | 0 / 0 | 9 / 6 |
+| `guarded_multi_file_edit` | 1 | 6 / 6 | 25,576 / 25,627 | 0 / 0 | 6 / 5 |
+| `guarded_multi_file_edit` | 2 | 6 / 6 | 25,576 / 25,576 | 0 / 0 | 6 / 6 |
+| `guarded_multi_file_edit` | 3 | 6 / 6 | 26,613 / 25,464 | 0 / 0 | 6 / 6 |
+| `long_validation_handoff` | 1 | 10 / 8 | 91,903 / 84,197 | 2 / 2 | 10 / 8 |
+| `long_validation_handoff` | 2 | 7 / 6 | 64,934 / 79,107 | 1 / 1 | 7 / 6 |
+| `long_validation_handoff` | 3 | 6 / 6 | 81,267 / 78,373 | 1 / 1 | 6 / 6 |
+
+Task wall time and repair turns are null for every sample. Immediate-observe
+counts are zero in both arms of every pair; this alone does not prove optimal
+scheduling. Nonempty cell counts are caller-attested, not independently verified. The
+caller additionally reported one empty Host cell for read-only pair 1’s
+composition arm, read-only pair 2’s single-call arm, and long-validation pairs
+2–3’s single-call arms; other empty-cell counts are unknown.
+
+Instrumentation was equal within each pair but changed across pairs. Read-only
+pairs 1–2 used `original_v4` receipt guidance; read-only pair 3 and all remaining
+pairs used `verbatim-recursion-reminder-v1`. Only long-validation pairs 2–3 used
+`cargo-and-receipt-preflight-v2`; all other pairs used `no_dispatch_guard`.
+These collection changes are not product gains. The table supports per-pair
+descriptions only: no pooled causal claim, speedup or p95 claim is made.
+
+Literal helper-source conformance is false. In guarded-edit pair 3's single-call
+arm, an unused `read_files` branch in the `review_changes` cell omitted a field;
+in read-only pair 3's single-call arm, cell c09 changed the executed `wcProject`
+branch order. All actually executed receipts were mapped exactly, but other
+original Host code and whole-source semantic equivalence remain unverified.
+The qualified results establish runtime and task receipts, not whole-protocol
+source compliance; they do not establish that all trials followed helper code
+verbatim. The separate four-case free-selection experiment has no live result
+here. The supported-`_wc`-names feedback fix described above was not deployed
+for this baseline, and its real-model recovery or efficiency benefit remains
+unverified. This baseline contributes evidence to the parent Issue without
+closing its remaining stages.
