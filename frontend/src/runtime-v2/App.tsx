@@ -11,7 +11,6 @@ import {
   Sun,
   X,
 } from "lucide-react";
-import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LANGUAGE_STORAGE_KEY,
@@ -320,19 +319,16 @@ export function App() {
 
         <nav aria-label={translate("Workspace views", language)}>
           <button className={"nav-button " + (view === "work" ? "active" : "")} type="button" onClick={openWork} aria-current={view === "work" ? "page" : undefined} title={translate("Work", language)}>
-            {view === "work" && <motion.span className="ui-selection-rail" layoutId="runtime-nav-rail" aria-hidden="true" />}
             <span className="nav-icon"><BriefcaseBusiness size={18} /></span>
             <span className="nav-label">{translate("Work", language)}</span>
             <small>{overview?.active_windows || ""}</small>
           </button>
           <button className={"nav-button " + (view === "projects" ? "active" : "")} type="button" onClick={() => setView("projects")} aria-current={view === "projects" ? "page" : undefined} title={translate("Projects", language)}>
-            {view === "projects" && <motion.span className="ui-selection-rail" layoutId="runtime-nav-rail" aria-hidden="true" />}
             <span className="nav-icon"><FolderKanban size={18} /></span>
             <span className="nav-label">{translate("Projects", language)}</span>
             <small>{visibleProjectFamilyCount || ""}</small>
           </button>
           <button className={"nav-button " + (view === "runtime" ? "active" : "")} type="button" onClick={() => setView("runtime")} aria-current={view === "runtime" ? "page" : undefined} title={translate("Runtime", language)}>
-            {view === "runtime" && <motion.span className="ui-selection-rail" layoutId="runtime-nav-rail" aria-hidden="true" />}
             <span className="nav-icon"><Server size={18} /></span>
             <span className="nav-label">{translate("Runtime", language)}</span>
             <small>{overview?.active_jobs || ""}</small>

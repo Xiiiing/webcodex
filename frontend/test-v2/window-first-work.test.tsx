@@ -140,7 +140,10 @@ it("shows active Window work without any Workflow Session and keeps observe call
   expect(activeRow.textContent).toContain("webcodex-activity-fix");
   expect(activeRow.textContent).toContain("1 active");
   expect(activeRow.textContent).toContain("special");
-  expect(activeRow.textContent).toContain("/root/.webcodex-managed-worktrees/webcodex-activity-fix");
+  expect(activeRow.textContent).not.toContain("/root/.webcodex-managed-worktrees/webcodex-activity-fix");
+  expect(activeRow.querySelector(".window-work-row-context")?.getAttribute("title")).toContain("/root/.webcodex-managed-worktrees/webcodex-activity-fix");
+  expect(activeRow.querySelector(".window-work-row-context")?.getAttribute("title")).toContain(activeKey);
+  expect(activeRow.querySelectorAll(".window-work-row-main > small")).toHaveLength(2);
   expect(activeRow.textContent).not.toContain(activeKey.slice(0, 8));
   expect(within(activeRow).getByText("webcodex-activity-fix")).toBeTruthy();
   const projectPicker = screen.getByRole("button", { name: "Projects: All projects" });

@@ -11,6 +11,8 @@
   --ui-border: #e5e5e5;
   --ui-border-subtle: #eeeeee;
   --ui-border-strong: #a3a3a3;
+  --web-row-selected: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-content));
+  --web-row-border: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border));
   --web-selection: #191919;
   --web-on-selection: #ffffff;
   --ui-glass: var(--ui-surface);

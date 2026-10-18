@@ -17,7 +17,6 @@ import {
   Users,
 } from "lucide-react";
 import { Progress, SegmentedControl, Stepper, TextInput } from "@mantine/core";
-import { motion } from "motion/react";
 import { useMemo, useState } from "react";
 import type { RuntimeLanguage } from "../../runtime_i18n.js";
 import { translate } from "../../runtime_i18n.js";
@@ -135,10 +134,10 @@ export function GoalWorkbench({
       type="button"
       className={"goal-list-row " + (state.selectedGoalId === goal.goal_id ? "selected" : "")}
       data-testid={"goal-row-" + goal.goal_id}
+      aria-current={state.selectedGoalId === goal.goal_id ? "true" : undefined}
       onClick={() => state.selectGoal(goal.goal_id)}
       key={goal.goal_id}
     >
-      {state.selectedGoalId === goal.goal_id && <motion.span className="ui-selection-rail" layoutId="runtime-goal-rail" aria-hidden="true" />}
       <span className={"goal-list-icon " + lifecycleClass(goal.lifecycle)}><Flag size={14} /></span>
       <span className="goal-list-copy">
         <strong>{goal.title}</strong>

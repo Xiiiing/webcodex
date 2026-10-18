@@ -990,6 +990,7 @@ Object.assign(RUNTIME_ZH_TEXT, {
   "Expand sidebar": "展开侧栏",
   "Preferences": "偏好设置",
   "Theme color": "主题色",
+  "Accent color": "主题色",
   "Custom color": "自定义颜色",
 });
 

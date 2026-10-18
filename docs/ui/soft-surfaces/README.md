@@ -22,6 +22,14 @@ The existing broad UI smoke, legacy Session workflow smoke and Window workspace 
 
 ![Mobile project dialog](runtime-dialog-390-light.png)
 
+## Sidebar correction
+
+The follow-up uses aligned labeled utility rows and a subtle full outline for selected content. Geometry is checked in both English and Chinese with `node scripts/ui-smoke/sidebar-geometry.mjs`.
+
+![Aligned Chinese preferences](preferences-1440-light-zh-CN.png)
+
+![Selected Window without an inset stripe](selection-1440-light-zh-CN.png)
+
 ## Admin
 
 ![Admin at 1440 px](admin-overview-1440-light.png)

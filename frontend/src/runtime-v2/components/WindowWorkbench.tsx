@@ -264,13 +264,9 @@ export function WindowWorkbench({
         <span className={"work-state-dot " + (window.active_count ? "running" : "recent")} />
         <span className="window-work-row-main">
           <strong>{workspaceLabel}</strong>
-          <small title={window.client_window_key}>{t("Window")} · {shortId(window.client_window_key, 6, 4)}</small>
-          <small>{project?.lineage ? projectLabel + " · " : ""}{activity}</small>
-          <small title={displayProjectPath(project?.path || source?.path)}>
-            {[
-              project?.client_id || t("Runner unavailable"),
-              displayProjectPath(project?.path || source?.path),
-            ].filter(Boolean).join(" · ")}
+          <small className="window-work-row-activity" title={activity}>{project?.lineage ? projectLabel + " · " : ""}{activity}</small>
+          <small className="window-work-row-context" title={[window.client_window_key, displayProjectPath(project?.path || source?.path)].filter(Boolean).join(" · ")}>
+            {project?.client_id || t("Runner unavailable")} · {shortId(window.client_window_key, 6, 4)}
           </small>
         </span>
         <span className="window-work-row-side">
