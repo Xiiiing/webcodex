@@ -144,3 +144,25 @@ test("Admin keeps normal, warning, and error statuses distinct with visible stat
   expect(within(runners).getByText("pending").closest(".admin-status-badge")?.getAttribute("data-tone")).toBe("warning");
   expect(within(runners).getByText("offline").closest(".admin-status-badge")?.getAttribute("data-tone")).toBe("error");
 });
+
+test("Admin unlock shows pending state and first-request failure without a false empty dashboard", async () => {
+  let finish!: (response: Response) => void;
+  const fetchMock = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+  vi.stubGlobal("fetch", fetchMock);
+  render(<UiProvider><AdminApp /></UiProvider>);
+  const token = screen.getByLabelText("Admin token") as HTMLInputElement;
+  const unlock = screen.getByRole("button", { name: "Unlock console" }) as HTMLButtonElement;
+  fireEvent.change(token, { target: { value: "fixture-secret" } });
+  fireEvent.click(unlock);
+  expect(unlock.disabled).toBe(true);
+  expect(token.disabled).toBe(true);
+  expect(unlock.getAttribute("aria-busy")).toBe("true");
+  fireEvent.submit(unlock.closest("form")!);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  finish(new Response("{}", { status: 503 }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("Dashboard refresh failed");
+  expect(screen.queryByRole("heading", { name: "Operations" })).toBeNull();
+  await waitFor(() => expect(unlock.disabled).toBe(false));
+  expect(token.value).toBe("");
+});

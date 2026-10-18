@@ -127,6 +127,9 @@ export function AdminApp() {
   const [accent, setAccent] = useState(loadAccentPreference);
   const [tokenInput, setTokenInput] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
+  const [unlockPending, setUnlockPending] = useState(false);
+  const unlockAttempt = useRef(0);
+  const unlocking = useRef(false);
   const [gateError, setGateError] = useState("");
   const [dashboard, setDashboard] = useState<DashboardView>(emptyDashboard);
   const [status, setStatus] = useState("Locked");
@@ -145,6 +148,9 @@ export function AdminApp() {
 
   const closeDialog = () => { dialogOpen.current = false; setDialog(null); };
   const lock = (message = "Locked.") => {
+    unlockAttempt.current += 1;
+    unlocking.current = false;
+    setUnlockPending(false);
     flowRef.current?.closeForSessionEnd();
     mutationRef.current?.lock();
     refreshRef.current?.lock(message);
@@ -242,15 +248,50 @@ export function AdminApp() {
     }
   }, [dashboard.projects, dialog, dialogError]);
 
+  useEffect(() => {
+    if (!authenticated) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const ids = ["overview-section", "devices-section", "projects-section", "diagnostics-section"];
+      const sections = ids.map((id) => document.getElementById(id)).filter((element): element is HTMLElement => !!element);
+      const toolbar = document.querySelector(".workspace-toolbar")?.getBoundingClientRect();
+      const boundary = Math.max(110, (toolbar?.bottom || 0) + 24);
+      const atBottom = window.scrollY > 0 && window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+      const current = atBottom ? sections.at(-1) : sections.filter((section) => section.getBoundingClientRect().top <= boundary).at(-1) || sections[0];
+      if (current) setActiveSection(current.id);
+    };
+    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(update); };
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [authenticated]);
+
   const unlock = async (event: FormEvent) => {
     event.preventDefault();
+    if (unlocking.current) return;
     const token = tokenInput.trim();
     setTokenInput("");
     if (!token) return;
+    const attempt = ++unlockAttempt.current;
+    unlocking.current = true;
+    setUnlockPending(true);
+    setGateError("");
     flowRef.current!.closeForSessionEnd();
     mutationRef.current!.beginSession(token);
-    await refreshRef.current!.beginSession(token);
-    if (auto) refreshRef.current!.startAutoRefresh(REFRESH_MS);
+    try {
+      await refreshRef.current!.beginSession(token);
+      if (attempt === unlockAttempt.current && auto) refreshRef.current!.startAutoRefresh(REFRESH_MS);
+    } finally {
+      if (attempt === unlockAttempt.current) {
+        unlocking.current = false;
+        setUnlockPending(false);
+      }
+    }
   };
   const changeAuto = (checked: boolean) => {
     setAuto(checked);
@@ -333,10 +374,10 @@ export function AdminApp() {
         <span className="eyebrow">Secure control plane</span><h1 id="gate-title">Administrator access</h1>
         <p>Use a bootstrap token or admin-scoped PAT. The token stays only in this page’s memory.</p>
         <form onSubmit={(event) => void unlock(event)} autoComplete="off" className="gate-form">
-          <PasswordInput label="Admin token" aria-label="Admin token" autoComplete="off" value={tokenInput} onChange={(event) => setTokenInput(event.currentTarget.value)} placeholder="Enter admin token" />
-          <Button type="submit" className="admin-primary">Unlock console</Button>
+          <PasswordInput label="Admin token" aria-label="Admin token" autoComplete="off" value={tokenInput} disabled={unlockPending} onChange={(event) => setTokenInput(event.currentTarget.value)} placeholder="Enter admin token" />
+          <Button type="submit" className="admin-primary" loading={unlockPending} aria-busy={unlockPending}>Unlock console</Button>
         </form>
-        {gateError && <Alert color="red" role="alert" mt="md">{gateError}</Alert>}
+        {(gateError || error) && <Alert color="red" role="alert" mt="md">{gateError || error}</Alert>}
       </section> : <>
         <header className="workspace-toolbar ui-surface"><div className="page-context"><span className="eyebrow">Control plane</span><h1>Operations</h1></div>
           <div className="toolbar-actions"><Badge color="gray" variant="light" className="status" role="status">{status}</Badge>
@@ -368,6 +409,7 @@ export function AdminApp() {
         <div className="details-grid">
           <Section id="diagnostics-section" eyebrow="System evidence" title="Diagnostics">
             <dl>{Object.entries(dashboard.diagnostics).map(([key, value]) => <div key={key}><dt>{key.replace(/_/g, " ")}</dt><dd>{display(value)}</dd></div>)}</dl>
+            {!Object.keys(dashboard.diagnostics).length && <div className="empty-state">No diagnostics available.</div>}
           </Section>
           <Section id="activity-section" eyebrow="Recent events" title="Recent activity" error={sectionError("activity")}>
             {dashboard.activity.length ? <ol className="activity-list">{dashboard.activity.map((entry, index) => <li key={index}>

@@ -27,6 +27,13 @@
   --ui-shadow-raised: 0 4px 20px rgb(0 0 0 / 4%);
   --ui-shadow-floating: 0 16px 48px rgb(0 0 0 / 12%);
   --ui-font-page: 30px;
+  --web-content-max: 1440px;
+  --web-shell-gap: 16px;
+  --web-page-inset: 24px;
+  --web-panel-inset: 20px;
+  --web-section-gap: 24px;
+  --web-control-height: 40px;
+  --web-sidebar-width: 226px;
 }
 :root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"])[data-resolved-theme="dark"] {
   --ui-background: #141414;
@@ -45,4 +52,25 @@
   --ui-shadow-surface: 0 2px 8px rgb(0 0 0 / 8%);
   --ui-shadow-raised: 0 4px 20px rgb(0 0 0 / 12%);
   --ui-shadow-floating: 0 16px 48px rgb(0 0 0 / 32%);
+}
+
+/* Shared modal geometry includes portal content in either Web renderer. */
+:root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) .mantine-Modal-content {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+:root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) .mantine-Modal-header {
+  min-height: 64px;
+  padding-inline: var(--web-panel-inset);
+}
+:root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) .mantine-Modal-body {
+  padding: var(--web-panel-inset);
+}
+@media (max-width: 700px) {
+  :root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) {
+    --web-page-inset: 16px;
+    --web-panel-inset: 16px;
+    --web-section-gap: 20px;
+  }
 }

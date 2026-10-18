@@ -106,3 +106,28 @@ The next review used actual Chinese-language screenshots: the language control o
 [Linear's current refresh](https://linear.app/now/behind-the-latest-design-refresh) emphasizes reducing the visual weight of navigation, consistent control placement and fewer decorative separators. [Carbon's shell guidance](https://www.carbondesignsystem.com/building-blocks/core/components/ui-shell-left-panel/guidelines) keeps product navigation distinct from system actions, while [Geist's menu guidance](https://vercel.com/geist/menu) groups actions with consistent leading/trailing affordances and keyboard access. Applying those principles here is a design interpretation: utility controls now share one icon/text grid with navigation, expanded rows have visible labels, and compact rails keep the same centered icon axis. No external artwork or component source was copied.
 
 Runtime navigation and Goal selection no longer mount decorative rails. Window, Goal and Project selections use a complete subtle outline with a low-intensity accent surface. Window rows show the workspace title, current activity and one short Runner/Window context line. Complete paths and canonical identities remain in the selected Window details and their copy actions; removing redundant row text does not hide the authoritative detail. The Chinese accent label is translated. The [geometry regression](../../scripts/ui-smoke/sidebar-geometry.mjs) covers English/Chinese, both themes, five viewport widths, explicit collapse, mobile preferences, icon/label alignment, readable selection and keyboard reachability. Public comparison screenshots are in the [Web gallery](soft-surfaces/README.md).
+
+## Full Web consistency pass
+
+A source and isolated-browser audit of every reachable Web composition extended
+the sidebar correction into nested surfaces. Agent and Conversation selection,
+Session tabs, inspector tabs, composer modes and Session/Window filters now use
+the same selection vocabulary. The Session record's remaining motion rail also
+occupied a grid cell and displaced its timestamp; removing it restores the
+trailing time column. Page headings, filters and primary regions share a 1440px
+content measure rather than competing 1180/1480/1680px limits. Panel insets and
+section gaps now consume Web layout tokens, including compact Admin navigation.
+
+The audit reproduced a clipped Admin form footer on 390×600 screens, an invisible
+initial Admin load error and false-empty Agent loading/failure messages. Dialog
+content now scrolls normally; unlock has a visible pending state and failure
+message; Agent inventory distinguishes loading/error/empty/stale. Admin anchor
+selection follows scrolling, empty diagnostics have a readable explanation, and
+Goal detail / Session message failures explain their state. Request cancellation,
+authentication, polling, draft storage and confirmation controllers are preserved.
+
+The full-page harness covers six widths and both themes, while a complementary
+nested-detail harness covers Session workflow/collaboration, inspector keyboard
+tabs, Session Window chooser, trace search and retained payload display. The
+[gallery inventory](soft-surfaces/README.md) distinguishes these fixture checks
+from private live-read smoke and explicitly unverified environments.

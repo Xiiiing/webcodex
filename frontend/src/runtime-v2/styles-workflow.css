@@ -1,5 +1,5 @@
 /* Workflow context remains readable at every size and uses the shared theme. */
-.work-list-filters { min-width: 0; display: grid; gap: 8px; padding: 0 12px 12px; }
+.work-list-filters { min-width: 0; display: grid; gap: 8px; padding: 0 var(--web-panel-inset) 16px; }
 .work-list-filters .work-search-field { margin: 0; }
 .activity-project-filter { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 12px; }
 .activity-project-filter select { width: 100%; min-width: 0; max-width: 340px; min-height: 36px; border: 1px solid var(--line); border-radius: var(--ui-radius-sm); padding: 6px 10px; color: var(--text); background: var(--surface); font: inherit; }
@@ -151,8 +151,8 @@
   font-weight: 650;
 }
 .window-session-focus-select[data-active="true"] select {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
-  background-color: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border-color: var(--web-row-border);
+  background-color: var(--web-row-selected);
 }
 .window-session-focus-select select:focus-visible {
   outline: 2px solid var(--accent);
@@ -175,8 +175,8 @@
 }
 .window-session-tag:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
 .window-session-tag.selected {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-color: var(--web-row-border);
+  background: var(--web-row-selected);
   color: var(--text);
 }
 .window-session-tag:disabled { cursor: default; opacity: .72; }
@@ -194,7 +194,7 @@
   white-space: nowrap;
 }
 .window-job-tag.active {
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  background: var(--web-row-selected);
   color: var(--text);
 }
 .window-job-tag.observe { background: var(--surface-soft); }
@@ -235,12 +235,12 @@
     max-width: none;
   }
   .window-work-main { min-height: 58dvh; }
-  .window-work-header { padding: 14px 18px; gap: 10px; }
+  .window-work-header { padding: 14px var(--web-panel-inset); gap: 10px; }
   .window-work-scroll { max-height: 75dvh; }
 }
 
 /* Project selection stays beside the work it opens. */
-.project-browser { max-width: 1480px; margin: 0 auto; display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 32px; align-items: start; }
+.project-browser { max-width:var(--web-content-max); margin: 0 auto; display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: var(--web-section-gap); align-items: start; }
 .project-browser-list { min-width: 0; position: sticky; top: 20px; max-height: calc(100dvh - 80px); overflow: auto; }
 .project-browser .project-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
 .project-browser .project-card { grid-template-columns: minmax(0, 1fr); min-height: 96px; gap: 12px; padding: 14px 12px; }
@@ -279,7 +279,7 @@
 
 /* Keep context and controls separate from the independently scrolling evidence. */
 .window-work-main { grid-template-rows: auto auto minmax(0, 1fr); }
-.window-work-header { padding: 14px 20px; gap: 8px 16px; max-height: 40dvh; overflow: auto; }
+.window-work-header { padding: 16px var(--web-panel-inset); gap: 8px 16px; max-height: 40dvh; overflow: auto; }
 .window-header-details { grid-column: 1 / -1; min-width: 0; font-size: 12px; }
 .window-header-details > summary { width: fit-content; max-width: 100%; color: var(--muted); cursor: pointer; overflow-wrap: anywhere; }
 .window-header-details[open] > summary { margin-bottom: 10px; }
@@ -292,7 +292,7 @@
 #window-activity-panel { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 #window-activity-panel[hidden] { display: none; }
 .window-work-main .window-workflow-section { flex: 1; min-height: 0; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.window-activity-toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+.window-activity-toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 16px var(--web-panel-inset); border-bottom: 1px solid var(--line); background: var(--surface-soft); }
 .window-activity-toolbar .window-session-focus { flex: 1 1 280px; width: auto; min-width: 0; margin: 0; padding: 0; border: 0; }
 .window-activity-toolbar .window-session-focus-select { flex: 1; min-width: 0; width: auto; max-width: 100%; }
 .window-activity-toolbar > .inventory-note { flex-basis: 100%; margin: 0; }
@@ -301,9 +301,9 @@
 .window-activity-order label { position: relative; cursor: pointer; }
 .window-activity-order input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .window-activity-order span { display: block; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; }
-.window-activity-order input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+.window-activity-order input:checked + span { background: var(--web-row-selected); border-color: var(--web-row-border); color: var(--text); }
 .window-activity-order input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
-.window-activity-results { flex: 1; min-height: 0; overflow: auto; padding: 0 20px 20px; }
+.window-activity-results { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--web-panel-inset) var(--web-panel-inset); }
 .window-collaboration-pane { padding: 0; max-height: none; }
 .window-collaboration { min-width: 0; }
 .window-collaboration-composer { max-height: 45dvh; overflow: auto; padding-block: 8px; }
@@ -318,8 +318,8 @@
 .work-list-header { flex-wrap: wrap; gap: 10px; }
 @media (max-width: 760px) {
   .window-work-main { height: 85dvh; min-height: 480px; }
-  .window-activity-toolbar { padding: 10px 12px; }
-  .window-activity-results { padding-inline: 12px; }
+  .window-activity-toolbar { padding: 12px var(--web-panel-inset); }
+  .window-activity-results { padding-inline: var(--web-panel-inset); }
   .window-activity-toolbar .window-session-focus { flex-basis: 100%; flex-wrap: nowrap; }
   .window-activity-toolbar .window-session-focus > span { width: auto; }
 }

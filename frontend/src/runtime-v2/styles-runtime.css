@@ -6,7 +6,7 @@
   line-height: 1.5;
 }
 .runtime-page .page-heading-context { max-width: 60ch; color: var(--muted); font-size: var(--runtime-body-size); }
-.runtime-page .runtime-sync-status { margin: 12px auto 24px; max-width: 1680px; font-size: var(--runtime-caption-size); }
+.runtime-page .runtime-sync-status { margin: 12px auto 24px; max-width:var(--web-content-max); font-size: var(--runtime-caption-size); }
 .runtime-page .runtime-tabs button,
 .runtime-page .text-button { font-size: 14px; }
 .runtime-page .quiet-pill { display: inline-flex; }
@@ -35,7 +35,7 @@
 .runtime-server-version { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px 0; color: var(--muted); }
 .runtime-server-version code { color: var(--text); overflow-wrap: anywhere; }
 .runtime-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
-.runtime-config-group { min-width: 0; border: 0; border-radius: 14px; padding: 20px; background: var(--surface-soft); }
+.runtime-config-group { min-width: 0; border: 0; border-radius: var(--ui-radius-md); padding: var(--web-panel-inset); background: var(--surface-soft); }
 .runtime-config-group h3 { margin: 0; font-size: 17px; font-weight: 600; }
 .runtime-config-group > p { margin: 6px 0 20px; color: var(--muted); font-size: var(--runtime-caption-size); }
 .runtime-config-group dl { margin: 0; }

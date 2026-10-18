@@ -81,3 +81,28 @@ The solid-material check covers Runtime Work/Goals/Projects/Overview, Admin, bot
 The historical all-renderer `smoke.mjs`, `runtime-workflow.mjs` and `window-workspace.mjs` still contain assumptions predating the current Window-first UI. At the solid-Web baseline they respectively fail on a removed Desktop recent-project table, the removed Search Sessions control, and oldest-first activity despite the current newest-first default. The focused checks above exercise the current UI; those historical failures are recorded rather than reported as passing.
 
 `sidebar-geometry.mjs` adds 24 English/Chinese viewport/theme/collapse cases for the Runtime sidebar correction. It measures shared icon axes and label/row edges, checks that no old selection rail or inset selection stripe survives, bounds the three-line Window summary, and verifies keyboard access to the compact language control. Screenshots and `report.json` are stored under `artifacts/web-soft-surfaces/sidebar/`.
+
+`node scripts/ui-smoke/web-page-consistency.mjs` checks the broader Web page
+inventory against the built `frontend`: Window activity/collaboration/details,
+Goal detail, Projects/detail/add dialog, Runtime/configuration/diagnostics, Agent
+Inbox/conversations/profile/create form, both access gates, and every Admin
+section and project dialog. The English light/dark matrix covers
+1440/1280/1024/768/390 px plus 1920 px content measures. Representative initial
+loading/failure/empty/stale fixtures run at 1440 and 390 px; a 390×600 modal check
+uses ordinary wheel scrolling to verify action reachability. Assertions cover
+viewport containment, shared content measures and header edges, selection rails,
+modal keyboard focus/restoration, and visible request states. Screenshots and
+geometry/failure evidence go to ignored `artifacts/web-page-consistency/`.
+The report names its limits; these are isolated Chromium fixtures, not live
+backend, native WebView, real-model, or complete protocol-error coverage.
+Full Session record workflow/collaboration/inspector and trace payload details
+need their separate focused checks; this matrix does not claim those surfaces.
+
+
+`node scripts/ui-smoke/web-detail-consistency.mjs` complements the page matrix
+with full Session workflow/collaboration, Context/Evidence keyboard tabs where
+visible, stale messages with retained draft, the Session Window chooser, trace
+search and retained payload display. The same six widths and both themes produce
+76 captures under `artifacts/web-page-consistency/details/`. It also checks that
+selected Session rows have no layout rail, retain their full outline and align
+the timestamp with the title. These are synthetic fixture reads only.

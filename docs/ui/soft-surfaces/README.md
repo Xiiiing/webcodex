@@ -35,3 +35,38 @@ The follow-up uses aligned labeled utility rows and a subtle full outline for se
 ![Admin at 1440 px](admin-overview-1440-light.png)
 
 ![Mobile Admin in dark mode](admin-overview-390-dark.png)
+
+## Full-page consistency evidence
+
+After building the frontend, run `node scripts/ui-smoke/web-page-consistency.mjs`
+and `node scripts/ui-smoke/web-detail-consistency.mjs`. Reports, geometry and
+screenshots are regenerated under ignored `artifacts/web-page-consistency/`.
+Both use production bundles with isolated data at 1440/1280/1024/768/390/1920px in
+light and dark themes. They check document overflow, shared content edges, selected
+row geometry, absence of selection rails, dialog focus/restoration and readable
+selected tabs. Ordinary wheel scrolling reaches the Admin form actions at 390×600.
+
+| Web surface | Exercised browser evidence |
+| --- | --- |
+| Runtime access | Locked gate and advanced settings; theme/accent and language checks also run in the existing focused harnesses. |
+| Work / Window | Activity, expanded identity, Session filter, collaboration, call diagnostics and retained payload. |
+| Work / Goal | Selected plan, progress and context; denied/error detail states also have React regressions. |
+| Session record | Workflow, collaboration, stale messages with retained draft, inspector Context/Evidence keyboard selection, Window chooser. Inspector intentionally collapses below 1350px. |
+| Projects | Selected family/workspace, branch check, nested Session navigation and Add Project dialog. |
+| Runtime | Overview, fleet/configuration, expanded diagnostics, Agent Inbox, Conversations, Profile, technical details and creation form. |
+| Admin | Access, overview, Runners, Projects, Diagnostics/activity, Register/Create/Enable/Disable/Unregister dialogs. |
+| Exceptional data | Representative Admin loading/first failure/empty/stale; Agent loading/first failure/empty; Project empty; Session stale. These are synthetic conditions, not an exhaustive catalogue of backend errors. |
+
+The full-page matrix uses English Chromium. English/Chinese sidebars have a
+separate geometry matrix. Screenshots are fixture evidence; real authenticated
+reads are reported separately. No real project lifecycle operation or real model
+workflow is exercised. Native Desktop, MCP embedded pages, other browsers and
+another computer's actual LAN access remain outside this evidence.
+
+![Agent conversations with consistent selection](runtime-agent-conversations-1440-light.png)
+
+![Session workflow and aligned selected row](session-workflow-1440-light.png)
+
+![Session collaboration in dark mode](session-collaboration-390-dark.png)
+
+![Short mobile Admin dialog after scrolling](admin-create-short-390-light.png)

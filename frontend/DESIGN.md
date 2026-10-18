@@ -114,3 +114,25 @@ Runtime displays the existing allowlisted effective configuration projection
 (authentication switches, MCP host wait budgets in seconds, request tracing), with
 readable labels and canonical parameter names. It never reads raw environment
 variables or displays credentials; the existing runtime-read boundary applies.
+
+## Web layout and selection contract
+
+Runtime and Admin opt into `ui/web.css` with a renderer attribute. Their shared
+content measure is 1440px; the shell uses a 226px navigation rail and 16px gaps.
+Page insets are 24px and panel insets 20px, both 16px on mobile. Independent regions
+use 24px gaps (20px on mobile); controls use a 40px minimum where space permits.
+Dense table cells, transcript rows and technical evidence retain compact spacing.
+
+Primary navigation and selected tab buttons use monochrome inverse ink. Selected
+Window, Session, Goal, Agent, Conversation, Project and workspace rows use the same
+subtle full outline and low-intensity accent surface. Selection does not insert a
+layout element or an inset stripe. Semantic status and focus colors retain their
+meaning independently of selection. Nested native form styling targets direct
+native controls, leaving Mantine composite input internals to Mantine.
+
+Web dialogs scroll within the viewport, including short mobile screens. Admin's
+selected anchor follows document scrolling. Initial inventory loading, initial
+failure, successful empty data and stale retained Agent data are distinct UI
+states; the underlying request and mutation controllers retain their authority.
+See the [Web gallery](../docs/ui/soft-surfaces/README.md) for the page inventory,
+reproducible browser checks and evidence boundaries.
