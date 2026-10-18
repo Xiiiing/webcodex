@@ -11,7 +11,8 @@ export default defineConfig({
     alias: [
       { find: /^@mantine\/core$/, replacement: fileURLToPath(new URL("./node_modules/@mantine/core/esm/index.mjs", import.meta.url)) },
       { find: /^@mantine\/hooks$/, replacement: fileURLToPath(new URL("./node_modules/@mantine/hooks/esm/index.mjs", import.meta.url)) },
-      { find: /^lucide-react$/, replacement: fileURLToPath(new URL("./node_modules/lucide-react/dist/cjs/lucide-react.js", import.meta.url)) },
+      // Keep unused icons tree-shakeable while resolving the Desktop instance.
+      { find: /^lucide-react$/, replacement: fileURLToPath(new URL("./node_modules/lucide-react/dist/esm/lucide-react.mjs", import.meta.url)) },
     ],
   },
   clearScreen: false,
