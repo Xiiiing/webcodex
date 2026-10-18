@@ -5,7 +5,7 @@
 .activity-project-filter select { width: 100%; min-width: 0; max-width: 340px; min-height: 36px; border: 1px solid var(--line); border-radius: var(--ui-radius-sm); padding: 6px 10px; color: var(--text); background: var(--surface); font: inherit; }
 .activity-feed-heading { align-items: end; flex-wrap: wrap; gap: 12px; }
 .window-call-card { padding: 16px 0; display: grid; gap: 10px; border-bottom: 1px solid var(--line); min-width: 0; }
-.window-call-card.running { padding: 16px; margin-top: 10px; border: 1px solid var(--accent); border-radius: var(--ui-radius-sm); background: var(--ui-accent-soft); }
+.window-call-card.running { padding: 16px; margin-top: 10px; border: 1px solid var(--accent); border-radius: var(--ui-radius-sm); background: var(--surface-soft); }
 .window-call-card.running .window-project-tag { background: var(--surface); }
 .window-call-card header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .window-call-card header strong { font-size: 14px; overflow-wrap: anywhere; }
@@ -52,7 +52,7 @@
   font-size: 11.5px;
 }
 .window-work-row:hover { background: var(--surface-soft); }
-.window-work-row.selected { background: var(--accent-soft); }
+.window-work-row.selected { background: var(--surface-soft); }
 
 .window-work-main { grid-template-rows: auto 42px minmax(0, 1fr); }
 .window-center-tabs { flex: 0 0 auto; }
@@ -118,7 +118,6 @@
   font-variant-numeric: tabular-nums;
 }
 .window-session-focus-select {
-  --session-hue: 220;
   position: relative;
   min-width: 0;
   flex: 1 1 360px;
@@ -152,24 +151,14 @@
   font-weight: 650;
 }
 .window-session-focus-select[data-active="true"] select {
-  border-color: color-mix(in srgb, hsl(var(--session-hue) 65% 44%) 58%, var(--line));
-  background-color: color-mix(in srgb, hsl(var(--session-hue) 70% 52%) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  background-color: color-mix(in srgb, var(--accent) 7%, var(--surface));
 }
 .window-session-focus-select select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-.window-session-tag {
-  --session-hue: 220;
-}
-[data-session-tone="1"] { --session-hue: 148; }
-[data-session-tone="2"] { --session-hue: 32; }
-[data-session-tone="3"] { --session-hue: 282; }
-[data-session-tone="4"] { --session-hue: 188; }
-[data-session-tone="5"] { --session-hue: 350; }
-[data-session-tone="6"] { --session-hue: 72; }
-[data-session-tone="7"] { --session-hue: 255; }
 .window-session-tag {
   display: inline-flex;
   gap: 5px;
@@ -186,8 +175,8 @@
 }
 .window-session-tag:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
 .window-session-tag.selected {
-  border-color: color-mix(in srgb, hsl(var(--session-hue) 64% 45%) 55%, var(--line));
-  background: color-mix(in srgb, hsl(var(--session-hue) 70% 52%) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   color: var(--text);
 }
 .window-session-tag:disabled { cursor: default; opacity: .72; }
@@ -225,7 +214,7 @@
   height: 7px;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: hsl(var(--session-hue) 68% 48%);
+  background: var(--accent);
 }
 .window-session-panel { min-height: 100%; }
 .window-collaboration-placeholder { min-height: 420px; }
@@ -256,7 +245,7 @@
 .project-browser .project-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
 .project-browser .project-card { grid-template-columns: minmax(0, 1fr); min-height: 96px; gap: 12px; padding: 14px 12px; }
 .project-browser .project-card-body { grid-template-columns: 1fr 1fr; padding-left: 46px; gap: 8px; }
-.project-browser .project-family-details { min-width: 0; width: 100%; margin: 0; gap: 24px; }
+.project-browser .project-family-details { min-width: 0; width: 100%; margin: 0; gap: 24px; padding: 24px; border: 1px solid var(--ui-border-subtle); border-radius: var(--ui-radius-xl); background: var(--surface); box-shadow: var(--ui-shadow-surface); }
 .project-browser .project-family-heading { margin: 0; }
 .project-browser .project-sessions { margin: 0; }
 .project-browser .project-workspace-row { grid-template-columns: 32px minmax(0, 1fr) auto; }

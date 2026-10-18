@@ -125,3 +125,22 @@ test("Admin can authorize a fresh mutation after an in-flight mutation loses aut
   await waitFor(() => expect(mutations).toBe(2));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
+
+test("Admin keeps normal, warning, and error statuses distinct with visible status text", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+    ...dashboardFixture,
+    devices: [
+      { client_id: "runner-online", status: "online" },
+      { client_id: "runner-pending", status: "pending" },
+      { client_id: "runner-offline", status: "offline" },
+    ],
+  })));
+
+  render(<UiProvider><AdminApp /></UiProvider>);
+  fireEvent.change(screen.getByLabelText("Admin token"), { target: { value: "fixture-secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock console" }));
+  const runners = await screen.findByRole("region", { name: "Connected Runners table. Scroll horizontally to view all fields." });
+  expect(within(runners).getByText("online").closest(".admin-status-badge")?.getAttribute("data-tone")).toBe("good");
+  expect(within(runners).getByText("pending").closest(".admin-status-badge")?.getAttribute("data-tone")).toBe("warning");
+  expect(within(runners).getByText("offline").closest(".admin-status-badge")?.getAttribute("data-tone")).toBe("error");
+});

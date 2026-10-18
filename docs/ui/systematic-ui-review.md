@@ -1,6 +1,6 @@
 # WebCodex interface system
 
-The Runtime WebUI, Desktop, and Admin Console are separate builds of the same product. Their data and operation contracts remain independent, while their visual language comes from `frontend/src/ui/foundation.css`.
+The Runtime WebUI, Desktop, and Admin Console are separate builds of the same product. Their data and operation contracts remain independent, while their semantic visual foundation comes from `frontend/src/ui/foundation.css`. Runtime and Admin now opt into the solid Web material in `frontend/src/ui/web.css`; Desktop retains its existing material. The historical audits below describe earlier revisions.
 
 ## Audit (22 September 2026)
 
@@ -90,3 +90,11 @@ CSS in these areas now supplies layout constraints and shared tokens; the compon
 The light-theme Session screenshot exposed a fixed near-black `.active-command` card inside otherwise light operational content. A computed-style sweep of the fixture's Runtime Goals, Session, Projects, Runtime Overview, Window Activity, Agents, and Admin overview found this as the only large dark content surface in light mode. Its border, icon, title, status, and footer were fixed to dark-theme colors too. The execution summary now uses semantic surface, border, text, and accent tokens in both themes; the timeline heading and run-status divider use the same contract. Desktop's regular content surfaces were already token-based, while its two native dialog backdrops now resolve from a light/dark token.
 
 The browser smoke checks large surfaces in representative Runtime, Desktop, and Admin views against the active theme, plus the execution summary at the reported 1900px compact-sidebar width. Small brand marks, status icons, and genuinely modal dimming remain distinct from content surfaces.
+
+## Solid Web surface revision
+
+The supplied dashboard images informed this Web-only pass: neutral canvas, opaque rounded regions, clear whitespace and one restrained accent. Runtime and Admin retain their left navigation and existing information architecture. Navigation selection is black/white, inverted in dark mode; blue stays the default and custom accents still apply to actions, focus and progress. Routine status labels are quiet, while exceptional states and meaningful success evidence keep their semantic text/icons and color. No decorative charts, copied artwork or fabricated metrics were added.
+
+Runtime separates its work list, execution pane and context through solid regions. Project details sit on one reading surface; Runtime summaries and fleet/configuration regions use whitespace and consistent geometry. Admin uses separate metric regions, rounded scrollable tables and opaque dialogs. Legacy light-only Runtime colors were replaced at their source, and obsolete dark overrides removed. The former glass layout file is now `styles-workbench.css`, rather than an additional layer of visual patches.
+
+Web tokens are gated by an explicit renderer attribute and imported only by Web entrypoints, including portal surfaces. Desktop and MCP embedded renderers are unchanged. See the [solid Web gallery and validation boundary](soft-surfaces/README.md) for fixture screenshots and reproducible checks. The older [glass gallery](liquid-glass/README.md) remains historical comparison evidence.

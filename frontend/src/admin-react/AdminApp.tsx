@@ -1,7 +1,6 @@
 import { displayProjectPath, projectPresentationName } from "../ui/projectPresentation.js";
 import { Alert, Badge, Button, Checkbox, Menu, Modal, PasswordInput, Switch, Table, TextInput } from "@mantine/core";
 import { Activity, AlertTriangle, Ellipsis, Folder, LayoutDashboard, LockKeyhole, MoonStar, Plus, RefreshCw, Sun, Users } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { AdminHttpError, AdminRefreshController } from "../admin_controller.js";
 import { AdminMutationController, AdminMutationError, type MutationKind, type MutationErrorCode } from "../admin_mutation_controller.js";
@@ -77,8 +76,8 @@ async function requestMutation(kind: MutationKind, token: string, body: Record<s
 
 function Status({ value }: { value: unknown }) {
   const tone = semanticStatus(value);
-  return <Badge className="admin-status-badge" size="sm" radius="xl" variant="light"
-    color={tone === "good" ? "green" : tone === "warning" ? "yellow" : tone === "error" ? "red" : "blue"}>{display(value)}</Badge>;
+  return <Badge className="admin-status-badge" size="sm" radius="xl" variant="light" data-tone={tone}
+    color={tone === "warning" ? "yellow" : tone === "error" ? "red" : "gray"}>{display(value)}</Badge>;
 }
 
 function Section({ id, eyebrow, title, error, actions, children }: {
@@ -124,7 +123,6 @@ function ProjectActionMenu({ project, onAction }: {
 }
 
 export function AdminApp() {
-  const reduceMotion = useReducedMotion();
   const [appearance, setAppearance] = useState<Appearance>(savedAppearance);
   const [accent, setAccent] = useState(loadAccentPreference);
   const [tokenInput, setTokenInput] = useState("");
@@ -315,13 +313,11 @@ export function AdminApp() {
   ] as const;
 
   return <div className="admin-shell ui-canvas">
-    <aside className="admin-rail ui-glass" aria-label="WebCodex Admin navigation">
+    <aside className="admin-rail ui-surface" aria-label="WebCodex Admin navigation">
       <div className="product-identity"><BrandMark /><div><strong>WebCodex</strong><span>Admin console</span></div></div>
       <nav className="section-nav" aria-label="Dashboard sections">
         {navigation.map(([id, label, Icon]) => <a key={id} href={`#${id}`} aria-current={activeSection === id ? "location" : undefined}
           aria-label={label} title={label} onClick={() => setActiveSection(id)}>
-          {activeSection === id && <motion.span className="admin-nav-rail" layoutId="admin-nav-rail" initial={false}
-            transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 420, damping: 38 }} aria-hidden="true" />}
           <Icon size={18} aria-hidden="true" /><span>{label}</span></a>)}
       </nav>
       <div className="rail-footer">
@@ -342,8 +338,8 @@ export function AdminApp() {
         </form>
         {gateError && <Alert color="red" role="alert" mt="md">{gateError}</Alert>}
       </section> : <>
-        <header className="workspace-toolbar ui-glass"><div className="page-context"><span className="eyebrow">Control plane</span><h1>Operations</h1></div>
-          <div className="toolbar-actions"><Badge color="green" variant="light" className="status" role="status">{status}</Badge>
+        <header className="workspace-toolbar ui-surface"><div className="page-context"><span className="eyebrow">Control plane</span><h1>Operations</h1></div>
+          <div className="toolbar-actions"><Badge color="gray" variant="light" className="status" role="status">{status}</Badge>
             <Switch label="Live" checked={auto} onChange={(event) => changeAuto(event.currentTarget.checked)} size="sm" />
             <Button variant="default" leftSection={<RefreshCw size={15} />} onClick={() => void refreshRef.current!.refresh()}>Refresh</Button>
             <Button variant="subtle" color="gray" onClick={() => lock()}>Lock</Button></div>

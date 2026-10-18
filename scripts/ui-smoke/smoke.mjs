@@ -659,7 +659,8 @@ try {
     await page.locator('#overview-section .overview-item').first().waitFor();
     assert.equal(await page.locator('#projects-section .admin-data-table').count(), 1);
     report.checks.push(`Admin ${width} component project table`);
-    await activeRail('.section-nav a[aria-current] .admin-nav-rail', `Admin ${width}`);
+    assert.equal(await page.locator('.section-nav a[aria-current]').count(), 1, 'Admin has exactly one current navigation destination');
+    report.checks.push(`Admin ${width} current navigation destination`);
     const sectionEdges = await page.locator('#overview-section, #devices-section, #projects-section').evaluateAll(elements => elements.map(element => {
       const rect = element.getBoundingClientRect(); return [rect.left, rect.right];
     }));

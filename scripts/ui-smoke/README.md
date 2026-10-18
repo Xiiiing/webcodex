@@ -63,3 +63,18 @@ at 390/1024/1440 pixels. It checks message/composer separation, reading space,
 fixed activity controls, and text containment. Screenshots and geometry evidence
 are written to `artifacts/localized-layout/`. This uses Chromium renderer fixtures;
 it does not validate native Windows/macOS WebView rendering.
+
+## Solid Web material checks
+
+After building `frontend` and `apps/desktop`, run:
+
+```sh
+node scripts/ui-smoke/web-soft-surfaces.mjs
+node scripts/ui-smoke/projects-runtime.mjs
+node scripts/ui-smoke/agents-workbench.mjs
+node scripts/ui-smoke/session-navigation.mjs
+```
+
+The solid-material check covers Runtime Work/Goals/Projects/Overview, Admin, both access gates and dialogs at 1440/1280/1024/768/390 px in both themes. It checks opaque chrome, monochrome selected navigation, neutral normal-status badges, custom-accent persistence, search, modal keyboard focus/restoration, and Desktop foundation isolation. Screenshots and `report.json` are written to ignored `artifacts/web-soft-surfaces/`. These are production bundles against isolated fixtures, not live backend evidence.
+
+The historical all-renderer `smoke.mjs`, `runtime-workflow.mjs` and `window-workspace.mjs` still contain assumptions predating the current Window-first UI. At the solid-Web baseline they respectively fail on a removed Desktop recent-project table, the removed Search Sessions control, and oldest-first activity despite the current newest-first default. The focused checks above exercise the current UI; those historical failures are recorded rather than reported as passing.

@@ -36126,4 +36126,5 @@ function V7({ children: e }) {
 }
 var ST = document.getElementById("root");
 if (!ST) throw new Error("Runtime WebUI root element is missing");
+document.documentElement.dataset.uiRenderer = "runtime";
 (0, HO.createRoot)(ST).render(/* @__PURE__ */ (0, c.jsx)(x.StrictMode, { children: /* @__PURE__ */ (0, c.jsx)(V7, { children: /* @__PURE__ */ (0, c.jsx)(P7, {}) }) }));
