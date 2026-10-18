@@ -44,3 +44,58 @@ focused matrix keeps authority intact and tests the current reachable controls.
 ![Preferences on the compact rail](preferences-780-dark-zh-CN.png)
 
 ![Shared accent palette](accent-palette-1440-dark-zh-CN.png)
+
+## Mounted resize and theme audit
+
+Fresh fixed-size screenshots are supplemented by two repeatable mounted-flow checks:
+
+```sh
+node scripts/ui-smoke/desktop-resize-theme.mjs
+node scripts/ui-smoke/desktop-dialogs.mjs
+```
+
+The audited run passed 54 localized page states / 11,850 assertions / 324
+screenshots and 68 localized dialog cases / 3,136 assertions / 602 screenshots,
+with zero failures or renderer errors. Desktop typechecking, all 740 tests and
+the production build passed. Both harnesses use the production frontend and
+isolated native-command fixtures. The page
+matrix keeps each view mounted through 1440×960, 1280×760, 1024×580, 780×580,
+1180×760 and back to 1440×960. It flips light/dark and follows OS scheme changes,
+checking heading/content origins, selected navigation and tabs, input drafts,
+horizontal overflow and access to sidebar preferences. The inline update
+confirmation additionally checks its geometry and action reachability.
+
+| Inventory | Mounted coverage in English and Chinese |
+| --- | --- |
+| Main destinations | Home, Projects, all three Activity tabs, Connection, Console |
+| Extensions | Coding Agents, SSH Resources, MCP providers, native plugins, skills, instructions |
+| Settings | General, access, network, runtime, configuration, diagnostics, about |
+| Setup and banners | First run, create/join/quick-share setup, setup completion, running operation, update confirmation |
+| Project dialogs | Add local folder/device, single and batch unregister |
+| Connections | Generic create/edit/delete; named and quick Cloudflare creation, existing owner edit, OAuth confirmation |
+| Extensions dialogs | Coding Agent create/edit/remove/authorize, SSH create/remove/authorize, MCP create/edit/delete, plugin registration, project/Runner instruction previews |
+| Runtime and diagnostics dialogs | Runtime restart warning, Runner capacity restart, full trace, save/restart, configuration recovery, sensitive clipboard confirmation |
+| Work and permissions dialogs | Window detail, Session detail, Window→Session replacement, HTML computer permissions welcome |
+
+The dialog matrix covers 34 variants in both languages. Each remains open through
+1440×960 → 1024×760 → 780×580 → 1440×960 and light/dark changes. Checks include
+stable bounds, containment, header/body spacing, trapped keyboard focus, ordinary
+wheel access to final controls, Escape, reopening, header close and return to the
+original visible opener. Opening an associated Session from Window detail now
+inherits the original work-list opener; the replacement no longer loses focus
+when its preceding dialog disappears. Regression tests also cover StrictMode
+and repeated open/close cycles.
+
+These checks establish the listed reachable page/dialog variants, not every
+asynchronous loading/busy/error permutation. Native OS file pickers, system
+permission prompts and installers do not use this CSS and are not simulated as
+native acceptance. Configuration, authorization, credential-copy, destructive
+confirmation and process effects remain unsubmitted; the setup-completion
+fixture alone returns a synthetic configuration result. Reports and synthetic
+screenshots live in ignored `artifacts/desktop-soft-surfaces/{resize-theme,dialogs}/`.
+
+![Short-window Activity layout in dark mode](resize-activity-780-dark.png)
+
+![Short-window connection form in light mode](dialog-connection-780-light.png)
+
+![Short-window Session detail after replacing Window detail](dialog-session-780-dark.png)

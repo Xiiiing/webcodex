@@ -109,3 +109,13 @@ Desktop dependency instances, preserving provider and React identity. Native
 input CSS excludes Mantine composite inputs. Public fixtures, the layout contract
 and explicit native-validation boundaries live in the
 [Desktop gallery](desktop-soft-surfaces/README.md).
+
+A follow-up mounted-flow audit covers every main destination, Settings/Extensions
+category and reachable app-owned dialog variant in English and Chinese. Live
+resize reaches the native 780×580 minimum, flips light/dark without remounting,
+and checks stable layout, draft/selection retention, scrolling and focus. It
+found a Window→Session replacement losing its original opener; dialog ownership
+now transfers that return target through the replacement. The
+[Desktop audit inventory](desktop-soft-surfaces/README.md#mounted-resize-and-theme-audit)
+distinguishes these fixture checks from native Linux smoke and untested OS/error
+permutations.
