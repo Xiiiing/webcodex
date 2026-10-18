@@ -24,9 +24,9 @@ The existing broad UI smoke, legacy Session workflow smoke and Window workspace 
 
 ## Sidebar correction
 
-The follow-up uses aligned labeled utility rows and a subtle full outline for selected content. Geometry is checked in both English and Chinese with `node scripts/ui-smoke/sidebar-geometry.mjs`.
+The Runtime preference strip uses three compact Mantine controls: accent preset popover, cyclic appearance button and a language radio menu. The expanded rail shows one horizontal row; compact rails retain three centered targets. Lock is a separate action in the Runtime identity footer. Geometry, preference changes, keyboard focus and popup bounds are checked in English/Chinese with `node scripts/ui-smoke/sidebar-geometry.mjs`.
 
-![Aligned Chinese preferences](preferences-1440-light-zh-CN.png)
+![Three compact Chinese preference controls](preferences-1440-light-zh-CN.png)
 
 ![Selected Window without an inset stripe](selection-1440-light-zh-CN.png)
 
@@ -70,3 +70,20 @@ another computer's actual LAN access remain outside this evidence.
 ![Session collaboration in dark mode](session-collaboration-390-dark.png)
 
 ![Short mobile Admin dialog after scrolling](admin-create-short-390-light.png)
+
+
+## Compact preference controls
+
+Runtime uses Mantine `ActionIcon`, `Popover`, `ColorSwatch` and `Menu.RadioGroup`
+for the preference strip, including the access gate and mobile settings entry.
+The accent popover offers the five existing presets and a custom hex input.
+Appearance cycles System → Light → Dark → System; the current state is shown by
+its icon and tooltip. The language menu marks the current choice and uses the
+library's keyboard and focus behavior. Preference storage and credential lock
+continue through their existing owners. The sidebar check exercises preset and
+custom colors, the cycle, language persistence, Escape/focus restoration, compact
+layout and popup containment across five widths and both themes.
+
+![Mantine accent preset card](palette-1440-light-zh-CN.png)
+
+![Mantine language radio menu](language-1440-light-zh-CN.png)

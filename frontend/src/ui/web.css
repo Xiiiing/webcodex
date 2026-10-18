@@ -74,3 +74,13 @@
     --web-section-gap: 20px;
   }
 }
+
+:root[data-ui-renderer="runtime"] .runtime-preference-popover {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-elevated);
+  color: var(--ui-text-primary);
+  box-shadow: var(--ui-shadow-floating);
+}
+:root[data-ui-renderer="runtime"] .runtime-preference-popover .mantine-ColorSwatch-root {
+  cursor: pointer;
+}

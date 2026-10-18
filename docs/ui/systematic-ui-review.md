@@ -131,3 +131,17 @@ nested-detail harness covers Session workflow/collaboration, inspector keyboard
 tabs, Session Window chooser, trace search and retained payload display. The
 [gallery inventory](soft-surfaces/README.md) distinguishes these fixture checks
 from private live-read smoke and explicitly unverified environments.
+
+
+## Compact Runtime preferences
+
+The next user revision replaces permanently labeled preference rows with three
+small controls, reducing the sidebar footer to one row. Runtime now uses Mantine
+[ActionIcon](https://mantine.dev/core/action-icon/),
+[Popover](https://mantine.dev/core/popover/) and
+[Menu](https://mantine.dev/core/menu/) components, including a library radio group
+for language selection. The accent card retains the existing five presets and
+custom color input; appearance still cycles through System/Light/Dark. The same
+controls serve mobile settings and the access gate. Lock remains separately
+available in the Runtime footer and mobile settings. Shared Desktop/Admin
+controls and preference storage are unchanged.

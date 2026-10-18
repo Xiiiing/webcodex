@@ -80,7 +80,13 @@ The solid-material check covers Runtime Work/Goals/Projects/Overview, Admin, bot
 
 The historical all-renderer `smoke.mjs`, `runtime-workflow.mjs` and `window-workspace.mjs` still contain assumptions predating the current Window-first UI. At the solid-Web baseline they respectively fail on a removed Desktop recent-project table, the removed Search Sessions control, and oldest-first activity despite the current newest-first default. The focused checks above exercise the current UI; those historical failures are recorded rather than reported as passing.
 
-`sidebar-geometry.mjs` adds 24 English/Chinese viewport/theme/collapse cases for the Runtime sidebar correction. It measures shared icon axes and label/row edges, checks that no old selection rail or inset selection stripe survives, bounds the three-line Window summary, and verifies keyboard access to the compact language control. Screenshots and `report.json` are stored under `artifacts/web-soft-surfaces/sidebar/`.
+`sidebar-geometry.mjs` covers 24 English/Chinese viewport/theme/collapse cases
+for the Runtime preference strip. It verifies exactly three icon controls,
+horizontal/compact geometry, Mantine language radio-menu keyboard behavior,
+five presets/custom color persistence, appearance cycle, popup viewport bounds,
+Escape/focus restoration and separate lock reachability. It also retains the
+selected-Window outline/metadata checks. Screenshots and `report.json` are stored
+under `artifacts/web-soft-surfaces/sidebar/`.
 
 `node scripts/ui-smoke/web-page-consistency.mjs` checks the broader Web page
 inventory against the built `frontend`: Window activity/collaboration/details,

@@ -136,3 +136,12 @@ failure, successful empty data and stale retained Agent data are distinct UI
 states; the underlying request and mutation controllers retain their authority.
 See the [Web gallery](../docs/ui/soft-surfaces/README.md) for the page inventory,
 reproducible browser checks and evidence boundaries.
+
+
+Runtime preferences use three compact Mantine icon controls: an accent Popover
+with existing presets/custom hex input, an appearance cycle, and a language radio
+Menu. The expanded rail arranges them horizontally; the 70px rail stacks the same
+three targets. The access gate and mobile settings reuse these controls. Lock is
+separate from preferences in the Runtime footer. Mantine owns popover/menu focus,
+Escape and keyboard navigation; existing preference/credential owners retain
+persistence and lock behavior.
