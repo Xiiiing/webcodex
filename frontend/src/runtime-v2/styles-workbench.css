@@ -88,13 +88,16 @@ summary:focus-visible, a:focus-visible { outline: 2px solid var(--ui-accent); ou
 
 .session-main, .goal-main, .window-work-main { overflow: hidden; border: 1px solid var(--ui-border-subtle); border-radius: var(--ui-radius-xl); background: var(--ui-content); box-shadow: var(--ui-shadow-surface); }
 .session-main { grid-template-rows: 100px 42px minmax(0, 1fr); }
-.goal-main { grid-template-rows: 90px minmax(0, 1fr); }
+.goal-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 .session-header, .goal-detail-header {
   min-height: 76px; margin: 0; border: 0; border-bottom: 1px solid var(--ui-border-subtle); border-radius: 0;
   background: var(--ui-content); box-shadow: none;
   -webkit-backdrop-filter: none; backdrop-filter: none;
 }
 .session-heading h2, .goal-detail-heading h2 { font-size: 19px; letter-spacing: -.035em; }
+.goal-detail-header { min-width: 0; min-height: 90px; flex-wrap: wrap; gap: 8px 16px; padding: 16px var(--web-panel-inset); }
+.goal-detail-heading { flex: 1 1 220px; }
+.goal-header-meta { flex-wrap: wrap; }
 .timeline-measure { width: min(920px, calc(100% - 52px)); }
 .workflow-support { min-width: 0; display: grid; gap: 16px; align-content: start; }
 .message-content p, .task-prompt p, .agent-working-note p { font-size: var(--ui-font-body); line-height: 1.6; }

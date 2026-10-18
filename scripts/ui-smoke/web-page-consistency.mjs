@@ -62,11 +62,21 @@ async function capture(page, surface, width, theme) {
       boxes: Object.fromEntries(selectors.map(selector => [selector, [...document.querySelectorAll(selector)].filter(visible).map(element => ({ ...box(element), maxWidth: getComputedStyle(element).maxWidth, paddingInline: Number.parseFloat(getComputedStyle(element).paddingLeft) + Number.parseFloat(getComputedStyle(element).paddingRight) }))])),
       selections: [...document.querySelectorAll('.window-work-row[aria-current="true"], .goal-list-row.selected, .agent-row.selected, .project-card[aria-pressed="true"], .conversation-list button.selected')].filter(visible).map(element => ({ className: element.className, shadow: getComputedStyle(element).boxShadow, before: getComputedStyle(element, '::before').content, beforeShadow: getComputedStyle(element, '::before').boxShadow })),
       decorativeRails: document.querySelectorAll('.ui-selection-rail').length,
+      goalHeader: (() => {
+        const header = document.querySelector('.goal-detail-header');
+        if (!header) return null;
+        return { header: box(header), panel: box(header.parentElement), children: [...header.children].map(box) };
+      })(),
     };
   });
   const context = { surface, width, theme };
   check(Math.max(geometry.rootWidth, geometry.bodyWidth) <= width + 1, 'No document horizontal overflow', context);
   check(geometry.decorativeRails === 0, 'No decorative selection rails', context);
+  if (geometry.goalHeader) {
+    const { header, panel, children } = geometry.goalHeader;
+    check(header.x >= panel.x && header.right <= panel.right + 1, 'Goal header fits its content panel', context);
+    check(children.every(child => child.x >= header.x && child.right <= header.right + 1 && child.y >= header.y && child.bottom <= header.bottom + 1), 'Goal title and metadata remain inside the header', context);
+  }
   for (const selection of geometry.selections) check(!selection.shadow.includes('inset') && !selection.beforeShadow.includes('inset'), 'Selected entity has no inset stripe', { ...context, selection: selection.className });
   for (const [selector, boxes] of Object.entries(geometry.boxes)) for (const box of boxes) {
     check(box.x >= -1 && box.right <= width + 1, 'Surface stays within viewport', { ...context, selector });
@@ -121,7 +131,10 @@ async function runtimePages(page, width, theme) {
   await nav.getByRole('button', { name: /^Projects/ }).click();
   const beta = page.getByTestId('project-card-agent:fixture-runner:beta');
   await beta.click(); await page.getByRole('heading', { name: 'Fixture beta', exact: true }).waitFor();
-  if (width <= 900) check(await page.locator('.project-family-details').evaluate(element => element === document.activeElement), 'Mobile project detail receives focus', { width, theme });
+  if (width <= 900) {
+    await page.waitForFunction(() => document.activeElement === document.querySelector('.project-family-details'));
+    check(await page.locator('.project-family-details').evaluate(element => element === document.activeElement), 'Mobile project detail receives focus', { width, theme });
+  }
   await page.getByRole('button', { name: 'Check branch', exact: true }).click();
   await page.getByText('codex/fixture-ui', { exact: true }).waitFor();
   await capture(page, 'projects', width, theme);
