@@ -145,3 +145,16 @@ three targets. The access gate and mobile settings reuse these controls. Lock is
 separate from preferences in the Runtime footer. Mantine owns popover/menu focus,
 Escape and keyboard navigation; existing preference/credential owners retain
 persistence and lock behavior.
+
+Runtime reserves its page scrollbar gutter so switching between the long Overview
+and short, denied or available Agent content does not recenter the heading and
+tab strip. Runtime Overview/Agents and Window/Collaboration each use two equal
+120px tracks, shrinking together when constrained, independent of the selected
+label or activity count. Expanding Window details can move the tabs vertically;
+switching their content preserves the expanded header geometry.
+
+Window details use a semantic definition list with labels above their values:
+Window ID, Runner ID, Directory and Project ID. Full values wrap within each
+field, with an exact-value copy action. First observed reflects the Window's
+first-seen timestamp. Desktop/embedded styles and backend authority remain
+independent of these Web presentation rules.

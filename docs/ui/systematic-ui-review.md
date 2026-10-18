@@ -145,3 +145,20 @@ custom color input; appearance still cycles through System/Light/Dark. The same
 controls serve mobile settings and the access gate. Lock remains separately
 available in the Runtime footer and mobile settings. Shared Desktop/Admin
 controls and preference storage are unchanged.
+
+## Stable view switches and Window identity
+
+The next screenshots exposed a measurable layout shift. With a real 17px classic
+scrollbar, the long Runtime Overview centered its heading 8.5px to the left of the
+short/denied Agent view. The source used automatic overflow without a reserved
+gutter; both view switches also sized buttons from their unequal labels/counts.
+Runtime now reserves the page gutter and the two targeted switches use equal
+stable tracks. Their heading and switch coordinates are checked across repeated
+Overview/denied/available Agent transitions and Window/Collaboration changes.
+
+Window identity fields previously squeezed icon, label and a long code into one
+row. They now use a two-column semantic definition list, stacking on narrow
+screens, with each label above its complete value/copy action. Project address
+is accurately labeled Project ID, Window/Runner labels explicitly name IDs, and
+First observed describes the first-seen timestamp. No API/read/permission or
+credential boundary changes accompany these presentation corrections.

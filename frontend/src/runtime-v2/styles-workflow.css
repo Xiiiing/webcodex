@@ -60,22 +60,24 @@
 .window-work-header h2 { white-space: normal; overflow-wrap: anywhere; }
 .window-work-header > .quiet-pill { margin-top: 4px; }
 .window-header-facts {
-  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 24px;
+  gap: 12px;
+  margin: 0;
 }
 .window-header-fact {
   min-width: 0;
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 4px 6px;
-  align-items: center;
   align-content: start;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--ui-radius-md);
+  background: var(--surface-soft);
 }
-.window-header-fact > svg { color: var(--quiet); }
-.window-header-fact > small { color: var(--quiet); font-size: 11px; font-weight: 600; }
-.window-header-fact > .copy-identity { grid-column: 2; width: 100%; }
+.window-header-fact dt { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.window-header-fact dt > svg { flex: 0 0 auto; color: var(--quiet); }
+.window-header-fact dd { min-width: 0; margin: 0; }
+.window-header-fact .copy-identity { width: 100%; gap: 6px 12px; font-size: 13px; line-height: 1.5; }
 .window-header-timeline {
   grid-column: 1 / -1;
   display: flex;
@@ -89,7 +91,7 @@
 .window-header-event small { font-size: inherit; color: var(--quiet); }
 .window-header-event strong { overflow-wrap: anywhere; font-weight: 500; }
 .window-header-event time { font-variant-numeric: tabular-nums; }
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .window-header-facts { grid-template-columns: minmax(0, 1fr); }
 }
 .window-call-card.session-linked { cursor: pointer; }
@@ -283,9 +285,6 @@
 .window-header-details { grid-column: 1 / -1; min-width: 0; font-size: 12px; }
 .window-header-details > summary { width: fit-content; max-width: 100%; color: var(--muted); cursor: pointer; overflow-wrap: anywhere; }
 .window-header-details[open] > summary { margin-bottom: 10px; }
-.window-header-facts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; }
-.window-header-fact { grid-template-columns: 16px auto minmax(0, 1fr); }
-.window-header-fact > .copy-identity { grid-column: auto; }
 .window-header-timeline { margin-top: 10px; }
 .window-center-tabs { min-height: 42px; height: auto; flex-wrap: wrap; }
 .window-center-tabs > button { white-space: normal; height: auto; min-height: 42px; }

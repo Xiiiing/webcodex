@@ -87,3 +87,24 @@ layout and popup containment across five widths and both themes.
 ![Mantine accent preset card](palette-1440-light-zh-CN.png)
 
 ![Mantine language radio menu](language-1440-light-zh-CN.png)
+
+
+## Stable two-tab switches
+
+`node scripts/ui-smoke/tab-alignment.mjs` uses production bundles with a measurable
+17px classic scrollbar, so the Overview/Agent gutter regression is exercised in
+headless Chromium. The matrix covers 2560/1920/1440/1280/1024/768/390px in both
+themes, representative Chinese layouts and explicit rail collapse. It compares
+heading and switch coordinates/track widths across repeated tall Overview,
+denied Agent and available Agent states, plus Window/Collaboration transitions.
+Metadata checks associate each semantic label with its full value, exercise exact
+copy payloads and verify long canonical IDs wrap within their own field. Reports
+and screenshots are under ignored `artifacts/web-page-consistency/tabs/verified/`.
+The verified matrix passes 2,120 assertions across 20 cases/200 screenshots with
+no renderer errors. The baseline reproduces an 8.5px heading shift; the fixed
+switches measure 120px per track. Mobile Window comparisons first bring the
+expanded switch above fixed navigation, then check both viewport and document
+coordinates to distinguish ordinary scrolling from reflow. `--baseline` records
+pre-fix defects separately and is not a passing regression.
+
+![Window identity groups and equal view buttons](window-metadata-1440-light-zh-CN.png)

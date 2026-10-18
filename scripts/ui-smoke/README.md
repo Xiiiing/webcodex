@@ -112,3 +112,19 @@ search and retained payload display. The same six widths and both themes produce
 76 captures under `artifacts/web-page-consistency/details/`. It also checks that
 selected Session rows have no layout rail, retain their full outline and align
 the timestamp with the title. These are synthetic fixture reads only.
+
+`node scripts/ui-smoke/tab-alignment.mjs` exercises Runtime Overview → denied
+Agent → Overview → available Agent → Overview, plus Window/Collaboration switches
+with expanded and collapsed metadata. It checks stable heading/tab bounds, equal
+tab tracks, canonical metadata labels/values, exact fixture-only clipboard writes,
+and long-ID wrapping. English covers 2560/1920/1440/1280/1024/768/390 px in both
+themes; Chinese samples 1920/390 px and sidebar collapse samples 1440 px. The
+harness enables measurable classic scrollbars by removing Playwright's default
+`--hide-scrollbars` argument. `--baseline` records pre-fix evidence without claiming
+a passing regression. Screenshots/reports are separated under ignored
+`artifacts/web-page-consistency/tabs/baseline/` and `verified/`.
+For mobile Window y comparisons, the expanded switch is first centered above
+fixed navigation so automatic scroll-to-click is not mistaken for reflow. Both
+viewport and document positions are then checked; snapshots record document and
+container scrolling. Runtime heading/switch viewport x/y checks remain strict
+through every denied/available transition.

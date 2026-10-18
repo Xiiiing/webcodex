@@ -4,6 +4,10 @@ export { RUNTIME_LANGUAGES, type RuntimeLanguage } from "./runtime_locales.js";
 export const LANGUAGE_STORAGE_KEY = "webcodex.runtime.language.v1";
 
 export const RUNTIME_ZH_TEXT: Record<string, string> = {
+  "First observed": "首次记录",
+  "Window ID": "窗口 ID",
+  "Runner ID": "机器 ID",
+  "Project ID": "项目 ID",
   "Loading Agents…": "正在加载 Agent…",
   "Agents could not be loaded. Refresh to retry.": "Agent 加载失败，请刷新重试。",
   "Durable communication refresh failed; previous data retained.": "通信数据刷新失败，已保留上次的数据。",
