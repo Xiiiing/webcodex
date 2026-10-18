@@ -143,8 +143,14 @@ small controls, reducing the sidebar footer to one row. Runtime now uses Mantine
 for language selection. The accent card retains the existing five presets and
 custom color input; appearance still cycles through System/Light/Dark. The same
 controls serve mobile settings and the access gate. Lock remains separately
-available in the Runtime footer and mobile settings. Shared Desktop/Admin
-controls and preference storage are unchanged.
+available in the Runtime footer and mobile settings. Preference storage is unchanged.
+
+Admin subsequently adopts the same source-owned accent and appearance controls
+from `AppearanceControls.tsx`, replacing its labeled appearance row and native
+color disclosure. Its two 36px targets align horizontally on expanded/mobile
+navigation and vertically on compact rails. The shared Mantine palette has the
+same opaque surface and preset/custom interactions in both Web renderers. Admin
+remains English-only; Desktop retains its existing controls.
 
 ## Stable view switches and Window identity
 

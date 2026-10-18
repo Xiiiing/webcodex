@@ -36,6 +36,16 @@ The Runtime preference strip uses three compact Mantine controls: accent preset 
 
 ![Mobile Admin in dark mode](admin-overview-390-dark.png)
 
+Admin preferences reuse Runtime's compact Mantine accent/appearance controls.
+The two 36px buttons use a row on expanded/mobile navigation and a column on
+compact rails. `node scripts/ui-smoke/admin-preferences.mjs` covers both themes
+and all five widths at the gate and dashboard: 20 cases, including preset/custom
+persistence, appearance cycling, focus trapping/restoration and popup bounds.
+
+![Compact Admin preferences](admin-preferences-1440-dark.png)
+
+![Shared Admin accent palette](admin-palette-1440-dark.png)
+
 ## Full-page consistency evidence
 
 After building the frontend, run `node scripts/ui-smoke/web-page-consistency.mjs`

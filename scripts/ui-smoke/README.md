@@ -128,3 +128,13 @@ fixed navigation so automatic scroll-to-click is not mistaken for reflow. Both
 viewport and document positions are then checked; snapshots record document and
 container scrolling. Runtime heading/switch viewport x/y checks remain strict
 through every denied/available transition.
+
+`node scripts/ui-smoke/admin-preferences.mjs` checks Admin's two shared compact
+preference buttons after building `frontend`. The English access gate and unlocked
+dashboard cover 1440/1280/1024/768/390 px in both themes: exact 36 px targets,
+responsive axes/gaps, centered icons, all five presets, custom color and appearance
+persistence across reload, the appearance cycle, keyboard focus trapping,
+Escape/focus restoration, outside dismissal, popup bounds, and horizontal overflow.
+Screenshots and the report go to ignored
+`artifacts/web-soft-surfaces/admin-preferences/`. These are isolated Chromium
+fixtures, not live backend or native WebView evidence.

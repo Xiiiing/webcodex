@@ -144,7 +144,11 @@ Menu. The expanded rail arranges them horizontally; the 70px rail stacks the sam
 three targets. The access gate and mobile settings reuse these controls. Lock is
 separate from preferences in the Runtime footer. Mantine owns popover/menu focus,
 Escape and keyboard navigation; existing preference/credential owners retain
-persistence and lock behavior.
+persistence and lock behavior. Admin reuses the same accent and appearance controls
+through `ui/AppearanceControls.tsx`: two 36px icons in a row, stacked on the
+compact rail. Its existing English-only console does not gain a language setting.
+Both Web renderers share the palette surface, presets and custom input, while
+Desktop retains its own controls.
 
 Runtime reserves its page scrollbar gutter so switching between the long Overview
 and short, denied or available Agent content does not recenter the heading and

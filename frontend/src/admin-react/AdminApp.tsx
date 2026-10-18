@@ -1,11 +1,11 @@
 import { displayProjectPath, projectPresentationName } from "../ui/projectPresentation.js";
 import { Alert, Badge, Button, Checkbox, Menu, Modal, PasswordInput, Switch, Table, TextInput } from "@mantine/core";
-import { Activity, AlertTriangle, Ellipsis, Folder, LayoutDashboard, LockKeyhole, MoonStar, Plus, RefreshCw, Sun, Users } from "lucide-react";
+import { Activity, AlertTriangle, Ellipsis, Folder, LayoutDashboard, LockKeyhole, Plus, RefreshCw, Users } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { AdminHttpError, AdminRefreshController } from "../admin_controller.js";
 import { AdminMutationController, AdminMutationError, type MutationKind, type MutationErrorCode } from "../admin_mutation_controller.js";
 import { AdminMutationDialogCoordinator } from "../admin_mutation_view.js";
-import { AccentPicker } from "../runtime-v2/components/ui/AccentPicker.js";
+import { AppearanceControls } from "../ui/AppearanceControls.js";
 import { ACCENT_CHANGE_EVENT, ACCENT_STORAGE_KEY, applyAccentPreference, loadAccentPreference, normalizeAccent, persistAccentPreference } from "../ui/accent.js";
 import { BrandMark } from "../ui/BrandMark.js";
 import { capabilityLabels, display, emptyDashboard, mergeDashboard, record, semanticStatus, type DashboardSection, type DashboardView, type JsonRecord } from "./model.js";
@@ -363,9 +363,9 @@ export function AdminApp() {
       </nav>
       <div className="rail-footer">
         <p className="rail-status"><span aria-hidden="true" /> Control plane</p>
-        <Button variant="subtle" color="gray" onClick={cycleAppearance} title={`Appearance: ${appearance}`} aria-label={`Appearance: ${appearance}`} className="appearance-button"
-          leftSection={appearance === "dark" ? <MoonStar size={16} /> : <Sun size={16} />}>Appearance · {appearance}</Button>
-        <AccentPicker color={accent} onChange={changeAccent} language="en" />
+        <div className="admin-preference-buttons" role="group" aria-label="Preferences">
+          <AppearanceControls accent={accent} appearance={appearance} onAccentChange={changeAccent} onAppearanceCycle={cycleAppearance} />
+        </div>
       </div>
     </aside>
     <main className="admin-workspace">

@@ -103,7 +103,7 @@ export function App() {
     const closeOnEscape = (event: KeyboardEvent) => {
       // Let the library close its child popup and restore its trigger first.
       if (event.key === "Escape" && !event.defaultPrevented &&
-          !(event.target instanceof Element && event.target.closest(".runtime-preference-popover"))) {
+          !(event.target instanceof Element && event.target.closest(".appearance-preference-popover"))) {
         setMobileSettingsOpen(false);
       }
     };

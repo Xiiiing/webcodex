@@ -112,7 +112,7 @@ try {
       await page.keyboard.press('Escape');
       await adminDialog.waitFor({ state: 'hidden' });
       // An accent change persists, but never recolors primary navigation.
-      await page.locator('.accent-picker > summary').click();
+      await page.getByRole('button', { name: 'Accent color', exact: true }).click();
       await page.getByRole('button', { name: 'Violet', exact: true }).click();
       await page.keyboard.press('Escape');
       assert.equal(await page.evaluate(() => localStorage.getItem('webcodex.ui.accent.v1')), '#7c3aed');

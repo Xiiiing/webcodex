@@ -75,12 +75,21 @@
   }
 }
 
-:root[data-ui-renderer="runtime"] .runtime-preference-popover {
+:root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) .appearance-preference-popover {
   border-color: var(--ui-border);
   background: var(--ui-surface-elevated);
   color: var(--ui-text-primary);
   box-shadow: var(--ui-shadow-floating);
 }
-:root[data-ui-renderer="runtime"] .runtime-preference-popover .mantine-ColorSwatch-root {
+:root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) .appearance-preference-popover .mantine-ColorSwatch-root {
   cursor: pointer;
+}
+
+:root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) .appearance-preference-button.mantine-ActionIcon-root {
+  flex: 0 0 36px;
+  color: var(--ui-text-secondary);
+}
+:root:is([data-ui-renderer="runtime"], [data-ui-renderer="admin"]) .appearance-preference-button.mantine-ActionIcon-root:hover {
+  background: var(--ui-surface-secondary);
+  color: var(--ui-text-primary);
 }

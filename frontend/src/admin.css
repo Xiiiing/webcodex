@@ -24,9 +24,7 @@ button:focus-visible, input:focus-visible, a:focus-visible, .table-wrap:focus-vi
 .rail-footer { display: grid; gap: 7px; margin-top: auto; padding: 14px 6px 2px; border-top: 1px solid var(--ui-glass-edge); }
 .rail-status { display: flex; align-items: center; gap: 8px; margin: 0 0 3px; color: var(--ui-text-tertiary); font-size: var(--ui-font-caption); }
 .rail-status span { width: 6px; height: 6px; border-radius: 50%; background: var(--ui-text-secondary); }
-.appearance-button { justify-content: flex-start; color: var(--ui-text-secondary); }
-.rail-footer .accent-picker > summary { min-height: 36px; background: transparent; }
-.rail-footer .accent-picker-panel { top: auto; bottom: calc(100% + 8px); }
+.admin-preference-buttons { display: flex; align-items: center; justify-content: center; gap: 12px; }
 
 .admin-workspace { width: min(calc(var(--web-content-max) + 2 * var(--web-page-inset)), 100%); min-width: 0; margin: 0 auto; padding: 0 var(--web-page-inset) 72px; }
 .gate { width: min(490px, 100%); margin: clamp(64px, 15vh, 160px) auto; padding: 32px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-xl); background: var(--ui-content); box-shadow: var(--ui-shadow-raised); animation: workspace-enter var(--ui-motion-slow) var(--ui-ease) both; }
@@ -104,11 +102,7 @@ button:focus-visible, input:focus-visible, a:focus-visible, .table-wrap:focus-vi
   .product-identity > div, .section-nav a span, .rail-status { display: none; }
   .section-nav a { justify-content: center; padding-inline: 0; }
   .rail-footer { justify-items: center; padding-inline: 0; }
-  .appearance-button { width: 40px; min-width: 40px; padding: 0; font-size: 0; }
-  .appearance-button .mantine-Button-section { margin: 0; }
-  .rail-footer .accent-picker > summary { display: grid; place-items: center; width: 40px; padding: 0; }
-  .rail-footer .accent-picker > summary > span { display: none; }
-  .rail-footer .accent-picker-panel { left: 48px; bottom: 0; }
+  .admin-preference-buttons { flex-direction: column; gap: 8px; }
 }
 @media (min-width: 701px) and (max-width: 850px) { .workspace-toolbar { flex-wrap: wrap; } .toolbar-actions { width: 100%; } }
 @media (max-width: 700px) {
@@ -118,12 +112,8 @@ button:focus-visible, input:focus-visible, a:focus-visible, .table-wrap:focus-vi
   .section-nav { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
   .section-nav a { flex: 1 0 auto; justify-content: center; min-height: 40px; padding: 7px 9px; }
   .section-nav a span { display: none; }
-  .rail-footer { display: flex; align-items: center; gap: 4px; margin: 0 0 0 8px; padding: 0; border: 0; }
-  .appearance-button { width: 36px; min-width: 36px; padding: 0; font-size: 0; }
-  .appearance-button .mantine-Button-section { margin: 0; }
-  .accent-picker > summary { display: grid; place-items: center; width: 36px; min-height: 36px; padding: 0; }
-  .accent-picker > summary span { display: none; }
-  .rail-footer .accent-picker-panel { top: calc(100% + 8px); right: 0; bottom: auto; left: auto; }
+  .rail-footer { display: flex; align-items: center; margin: 0 0 0 8px; padding: 0; border: 0; }
+  .admin-preference-buttons { gap: 8px; }
   .admin-workspace { padding: 16px var(--web-page-inset) 48px; }
   .workspace-toolbar { position: static; margin-top: 0; }
   .admin-section { margin-top: var(--web-section-gap); }
