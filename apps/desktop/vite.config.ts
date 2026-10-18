@@ -1,9 +1,19 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { dedupe: ["react", "react-dom"] },
+  // Shared UI source must use the Desktop provider's library instances in Vite
+  // and in Vitest's external dependency graph.
+  resolve: {
+    dedupe: ["react", "react-dom", "@mantine/core", "@mantine/hooks", "lucide-react"],
+    alias: [
+      { find: /^@mantine\/core$/, replacement: fileURLToPath(new URL("./node_modules/@mantine/core/esm/index.mjs", import.meta.url)) },
+      { find: /^@mantine\/hooks$/, replacement: fileURLToPath(new URL("./node_modules/@mantine/hooks/esm/index.mjs", import.meta.url)) },
+      { find: /^lucide-react$/, replacement: fileURLToPath(new URL("./node_modules/lucide-react/dist/cjs/lucide-react.js", import.meta.url)) },
+    ],
+  },
   clearScreen: false,
   test: {
     environment: "jsdom",

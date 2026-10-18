@@ -63,3 +63,19 @@ at 390/1024/1440 pixels. It checks message/composer separation, reading space,
 fixed activity controls, and text containment. Screenshots and geometry evidence
 are written to `artifacts/localized-layout/`. This uses Chromium renderer fixtures;
 it does not validate native Windows/macOS WebView rendering.
+
+For Desktop neutral surfaces and preference controls, build `apps/desktop` and run
+`node scripts/ui-smoke/desktop-soft-surfaces.mjs`. It covers all seven destinations,
+all seven Settings and six Extensions categories, Activity tabs and details, Connection
+and native Plugin dialogs, selected project rows, and long bilingual metadata at
+1440/1280/1024/780/768/390 pixels, in both themes and English/Chinese. The 780-pixel
+case represents the native minimum width; narrower cases are supplementary renderer
+checks. Assertions cover shared content origin and bounded reading measure, overflow,
+large blur removal, rounded monochrome navigation without rails, selected entity label contrast of at least 4.5:1, stable category
+geometry and equal tab treatment, and compact preferences in expanded/compact
+navigation. Real control interactions cover accent presets/custom input, invalid
+input, appearance cycling, language, focus return, reload persistence, and absence
+of configuration/service effects while browsing. Screenshots and detailed geometry,
+check, error, and failure evidence go to ignored `artifacts/desktop-soft-surfaces/`.
+These isolated Chromium fixtures do not establish native WebView or real-model
+acceptance. Set `WEBCODEX_SMOKE_BROWSER` for an installed Chromium executable.

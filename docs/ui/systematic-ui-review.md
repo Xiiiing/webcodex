@@ -90,3 +90,22 @@ CSS in these areas now supplies layout constraints and shared tokens; the compon
 The light-theme Session screenshot exposed a fixed near-black `.active-command` card inside otherwise light operational content. A computed-style sweep of the fixture's Runtime Goals, Session, Projects, Runtime Overview, Window Activity, Agents, and Admin overview found this as the only large dark content surface in light mode. Its border, icon, title, status, and footer were fixed to dark-theme colors too. The execution summary now uses semantic surface, border, text, and accent tokens in both themes; the timeline heading and run-status divider use the same contract. Desktop's regular content surfaces were already token-based, while its two native dialog backdrops now resolve from a light/dark token.
 
 The browser smoke checks large surfaces in representative Runtime, Desktop, and Admin views against the active theme, plus the execution summary at the reported 1900px compact-sidebar width. Small brand marks, status icons, and genuinely modal dimming remain distinct from content surfaces.
+
+
+## Desktop solid-surface extension
+
+Desktop now opts into its own renderer-scoped neutral theme, extending the
+approved Web design to the shared Windows/Linux/macOS UI. The seven native
+destinations retain their lifecycle, connection, permission and configuration
+responsibilities. A rounded sidebar, monochrome navigation/category tabs, stable
+reading measure, opaque content regions and full-outline entity selections
+replace the former glass chrome and accent rails.
+
+Sidebar preferences use the same source-owned Mantine accent/appearance controls
+as the pending Web implementation, plus a language radio menu. The compact rail
+retains all three targets. Existing locale/theme storage and native effects are
+unchanged. The Desktop bundler resolves shared Mantine/Lucide code through the
+Desktop dependency instances, preserving provider and React identity. Native
+input CSS excludes Mantine composite inputs. Public fixtures, the layout contract
+and explicit native-validation boundaries live in the
+[Desktop gallery](desktop-soft-surfaces/README.md).
