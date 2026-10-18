@@ -15,6 +15,20 @@ from scripts import agent_loop_report as report
 
 
 class AgentLoopBenchmarkTests(unittest.TestCase):
+    def test_long_handoff_uses_published_timing_without_weakening_execution_checks(self) -> None:
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        case = report._case_by_id(manifest, "long_validation_handoff")
+        self.assertNotIn("sync_wait_secs", case["prompt"])
+        self.assertNotIn("sync_wait_secs", case["validation"])
+        self.assertIn("published validation options", case["prompt"])
+        self.assertIn("let the Server control synchronous handoff timing", case["prompt"])
+        self.assertTrue(case["correctness"]["requires_real_handoff_for_valid_case"])
+        self.assertTrue(case["correctness"]["same_execution_must_be_preserved"])
+        self.assertTrue(case["correctness"]["redispatch_forbidden"])
+        self.assertTrue(case["validation"]["required"])
+        self.assertEqual(case["validation"]["command"], "cargo test --lib")
+        self.assertEqual(case["validation"]["expected_terminal_result"], "success")
+
     def _install_manifest(self, repo: Path) -> None:
         target = repo / "scripts/agent_loop_cases.json"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -22,6 +36,55 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
             report.DEFAULT_CASE_MANIFEST.read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+
+    def test_default_selection_contracts_and_source_oracles(self) -> None:
+        from scripts import agent_efficiency_benchmark as efficiency
+
+        self.assertEqual(benchmark.DEFAULT_SELECTION_CASES, (
+            "selection_single_read", "selection_batch_read",
+            "selection_cross_tool_review", "selection_compound_source_context",
+        ))
+        self.assertEqual(efficiency.CASES, (
+            "readonly_review", "guarded_multi_file_edit", "long_validation_handoff",
+        ))
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        repo = report.DEFAULT_CASE_MANIFEST.parent.parent
+        for case_id in benchmark.DEFAULT_SELECTION_CASES:
+            with self.subTest(case_id=case_id):
+                case = report._case_by_id(manifest, case_id)
+                self.assertEqual(case["experiment"], "tool_selection")
+                self.assertEqual(case["target"], "webcodex_repository")
+                self.assertTrue(case["correctness"]["workspace_must_remain_clean"])
+                self.assertFalse(case["validation"]["required"])
+                oracle = benchmark._fixture_oracle(case, repo)
+                if case_id == "selection_cross_tool_review":
+                    self.assertFalse(oracle["available"])
+                else:
+                    self.assertTrue(oracle["passed"], oracle)
+                annotation = benchmark._annotation(
+                    case, variant=report.TOOL_SELECTION_VARIANT,
+                    surface=report.TOOL_SELECTION_VARIANT,
+                    base_revision="a" * 40, receipt={"status": "pass"}, oracle=oracle,
+                )
+                # Fixture eligibility and driver status never supply an answer verdict.
+                self.assertNotEqual(annotation.get("correctness", {}).get("task_verdict"), "pass")
+
+    def test_compound_selection_oracle_rejects_missing_or_wrong_source(self) -> None:
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        case = report._case_by_id(manifest, "selection_compound_source_context")
+        repo = report.DEFAULT_CASE_MANIFEST.parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel in case["correctness"]["fixture_oracle"]["files"]:
+                target = root / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((repo / rel).read_bytes())
+            self.assertTrue(benchmark._fixture_oracle(case, root)["passed"])
+            source = root / "src/tool_runtime/search_and_read.rs"
+            source.write_text("unrelated implementation\n", encoding="utf-8")
+            self.assertFalse(benchmark._fixture_oracle(case, root)["passed"])
+            source.unlink()
+            self.assertFalse(benchmark._fixture_oracle(case, root)["passed"])
 
     def test_pair_order_alternates(self) -> None:
         self.assertEqual(benchmark._pair_order(0), ("direct", "code_mode"))
@@ -1098,6 +1161,13 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "paired Host driver requires POSIX process-group ownership")
     def test_fallback_task_timing_starts_after_worktree_setup(self) -> None:
+        self._check_task_timing_after_setup(explicit_null=False)
+
+    @unittest.skipIf(os.name == "nt", "paired Host driver requires POSIX process-group ownership")
+    def test_explicit_unknown_task_timing_excludes_manual_wait(self) -> None:
+        self._check_task_timing_after_setup(explicit_null=True)
+
+    def _check_task_timing_after_setup(self, *, explicit_null: bool) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
@@ -1117,10 +1187,14 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
             for name in ("worktrees", "receipts", "annotations"):
                 (bench_root / name).mkdir(parents=True, exist_ok=True)
             driver = root / "driver.py"
+            driver_receipt = {"status": "unsupported"}
+            if explicit_null:
+                driver_receipt["task_timing"] = None
             driver.write_text(
                 "import os\n"
+                "assert 'WEBCODEX_BENCH_HOST_CELL_POLICY' not in os.environ\n"
                 "from pathlib import Path\n"
-                "Path(os.environ['WEBCODEX_BENCH_DRIVER_RESULT']).write_text('{\"status\":\"unsupported\"}', encoding='utf-8')\n",
+                f"Path(os.environ['WEBCODEX_BENCH_DRIVER_RESULT']).write_text({json.dumps(driver_receipt)!r}, encoding='utf-8')\n",
                 encoding="utf-8",
             )
 
@@ -1133,24 +1207,29 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
 
             benchmark._worktree_add = recorded_add
             try:
-                benchmark._run_sample(
-                    repo,
-                    bench_root,
-                    [sys.executable, str(driver)],
-                    case,
-                    variant="direct",
-                    pair_index=0,
-                    ordinal=0,
-                    base_revision=base,
-                    case_manifest=manifest_path,
-                )
+                with mock.patch.dict(os.environ, {"WEBCODEX_BENCH_HOST_CELL_POLICY": "host_single_call"}):
+                    sample = benchmark._run_sample(
+                        repo,
+                        bench_root,
+                        [sys.executable, str(driver)],
+                        case,
+                        variant="direct",
+                        pair_index=0,
+                        ordinal=0,
+                        base_revision=base,
+                        case_manifest=manifest_path,
+                    )
             finally:
                 benchmark._worktree_add = original
 
+            self.assertEqual(sample["driver_exit_code"], 0)
             annotation = json.loads(
                 (bench_root / "annotations" / "readonly_review-p1-1-direct.json").read_text(encoding="utf-8")
             )
-            self.assertGreaterEqual(annotation["task_timing"]["started_at_ms"], setup_done_ms[0])
+            if explicit_null:
+                self.assertIsNone(annotation.get("task_timing"))
+            else:
+                self.assertGreaterEqual(annotation["task_timing"]["started_at_ms"], setup_done_ms[0])
 
     def test_non_repository_case_target_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1343,7 +1422,7 @@ Path(os.environ['WEBCODEX_BENCH_DRIVER_RESULT']).write_text('{"status":"unsuppor
 
     def test_generic_temporal_requirements_cannot_be_replaced_by_driver_claims(self):
         for case_id in benchmark.GENERIC_CASES:
-            expected = case_id in {'generic_mixed_files_conflict', 'generic_encoded_csv'}
+            expected = False
             self.assertEqual(benchmark._generic_temporal_evidence_proven({'id':case_id}, {'claimed':True}, 'direct'), expected)
 
 
@@ -1373,8 +1452,64 @@ Path(os.environ['WEBCODEX_BENCH_DRIVER_RESULT']).write_text('{"status":"unsuppor
                            {'available': True, 'passed': False}, {'available': True, 'passed': True}):
                 with self.subTest(case=case_id, oracle=oracle):
                     result = self._strict_generic_matrix(case_id, oracle)
-                    expected = oracle == {'available': True, 'passed': True}
+                    expected = False  # A final-file oracle alone is never runtime proof.
                     self.assertEqual(benchmark._strict_passed(result, [case_id], 1), expected)
+
+    def test_all_six_strict_proofs_bind_each_sample_own_fixture_without_pair_root_equality(self):
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        for case_id in benchmark.GENERIC_CASES:
+            result = self._strict_generic_matrix(case_id, {"available": True, "passed": True})
+            for index, sample in enumerate(result["cases"][0]["pairs"][0]["samples"]):
+                token = str(index + 1) * 64
+                sample["fixture_oracle"] = dict(sample["fixture_oracle"], fixture_identity=token)
+                sample["summary"]["benchmark"] = {"base_revision": "a" * 40}
+                sample["temporal_evidence"] = {"schema_version": benchmark.temporal.PROOF_SCHEMA_VERSION,
+                    "fixture_identity": token, "case_id": case_id, "base_revision": "a" * 40,
+                    "case_fingerprint": report._case_fingerprint(report._case_by_id(manifest, case_id)),
+                    "available": True, "passed": True,
+                    "checks": {name: True for name in benchmark.temporal.CHECK_NAMES[case_id]}}
+            self.assertTrue(benchmark._strict_passed(result, [case_id], 1))
+            result["cases"][0]["pairs"][0]["samples"][0]["temporal_evidence"]["schema_version"] = 1
+            self.assertFalse(benchmark._strict_passed(result, [case_id], 1))
+
+    def test_bootstrap_audit_and_driver_written_correct_files_cannot_pass_no_mock(self):
+        from scripts.tests.test_agent_loop_report import AgentLoopReportTests
+        audit = AgentLoopReportTests()
+        audit.setUp()
+        self.addCleanup(audit.tearDown)
+        audit.insert_event("bootstrap", tool="work_on_project", trace_id="11111111-1111-4111-8111-111111111111")
+        manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        root = audit.root / "benchmark"
+        for name in ("worktrees", "receipts", "annotations"):
+            (root / name).mkdir(parents=True)
+        driver = root / "driver.py"
+        driver.write_text("""import json,os,shutil
+from pathlib import Path
+root=Path.cwd()
+if os.environ['WEBCODEX_BENCH_CASE_ID']=='generic_mixed_files_conflict':
+    for source in (root/'input').iterdir():
+        shutil.copyfile(source, root/'sorted'/('note-2.txt' if source.name=='note.txt' else source.name))
+else:
+    (root/'merged.csv').write_bytes('name,value\\nAlice,2\\nBob,3\\n陈,5\\n丁,7\\n'.encode())
+    (root/'report.json').write_text('{"count":4,"total":17}')
+Path(os.environ['WEBCODEX_BENCH_DRIVER_RESULT']).write_text(json.dumps({
+    'status':'pass','audit_db':AUDIT,'workflow_session_id':'wc_sess_test',
+    'correctness':{'task_verdict':'pass','validation_verdict':'pass'}}))
+""".replace("AUDIT", repr(str(audit.audit_db))))
+        for case_id in ("generic_mixed_files_conflict", "generic_encoded_csv"):
+            case = report._case_by_id(manifest, case_id)
+            samples = []
+            for ordinal, variant in enumerate(("direct", "host_code_mode")):
+                sample = benchmark._run_sample(root, root, [sys.executable, "-B", str(driver)], case,
+                    variant=variant, pair_index=0, ordinal=ordinal, base_revision="a" * 40,
+                    case_manifest=report.DEFAULT_CASE_MANIFEST)
+                self.assertTrue(sample["fixture_oracle"]["passed"], sample)
+                self.assertEqual(sample["summary"]["canonical_calls"]["by_name"], {"work_on_project": 1})
+                self.assertEqual(sample["status"], "partial", sample)
+                samples.append(sample)
+            result = {"candidate_variant": "host_code_mode", "cases": [{"case_id": case_id,
+                       "pairs": [{"pair_index": 0, "samples": samples}]}]}
+            self.assertFalse(benchmark._strict_passed(result, [case_id], 1))
 
     def test_strict_generic_temporal_gate_rejects_forged_pass_with_passing_oracle(self):
         for case_id in ('generic_failure_repair', 'generic_pending_independent_join',

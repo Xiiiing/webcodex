@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode, useState } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../i18n/locale";
 import { DesktopMantineProvider } from "../components/DesktopMantineProvider";
 import { RuntimeConsolePanel } from "./console/RuntimeConsolePanel";
@@ -14,7 +14,7 @@ import { continuationFromWindow } from "./activity/window-evidence";
 import { AccentPicker } from "../components/AccentPicker";
 import { useRuntimeUpdates } from "../hooks/useRuntimeUpdates";
 import { AboutPanel, UpdateBanner } from "./settings/AboutPanel";
-import type { DesktopState } from "../models/topology";
+import type { DesktopOperationKind, DesktopState } from "../models/topology";
 import type { DiagnosticSnapshot, RuntimeSettings, RuntimeCandidate } from "../models/runtime-shell";
 import type { WindowDetail } from "../models/workspace";
 
@@ -172,6 +172,197 @@ it("links users from About to issues, source builds, and contribution guidance",
     fireEvent.click(screen.getByRole("button", { name: label }));
     await waitFor(() => expect(api.openDiagnosticResource).toHaveBeenCalledWith(resource));
   }
+});
+
+describe("Runtime Console diagnostic contention", () => {
+  const busy = { code: "desktop_operation_busy", message: "Busy", next_action: "Wait" };
+  const consoleState: DesktopState = {
+    ...state, persistent_environment: "env-fixture",
+    workspace_runner: { server_url: "http://127.0.0.1:1", client_id: "runner", config_path: "/fixture/runner.toml" },
+  };
+  const operating = (kind: DesktopOperationKind): DesktopState => ({
+    ...consoleState,
+    current_operation: { id: "operation", kind, phase: "running", started_at_ms: 1, cancellable: false },
+  });
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  }
+  const renderConsole = () => render(wrap(<RuntimeConsolePanel state={consoleState} onSettings={vi.fn()} />));
+  const advance = async (ms = 0) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+  beforeEach(() => {
+    vi.useFakeTimers();
+    api.getState.mockResolvedValue(operating("runtime_refresh"));
+  });
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+  it.each(["runtime_refresh", null] as const)("recovers from a controlled busy read when the refresh is %s without an error flash", async operation => {
+    const pending = deferred<DiagnosticSnapshot>();
+    api.diagnostics.mockReturnValueOnce(pending.promise);
+    renderConsole();
+    // The read overlaps a background refresh; it may finish before getState.
+    api.getState.mockResolvedValue(operation ? operating(operation) : consoleState);
+    await act(async () => { pending.reject(busy); });
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeVisible();
+    await advance(199);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(1);
+    expect(api.diagnostics).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Open in browser" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(10_000);
+    expect(api.diagnostics).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["runtime_switch", "configuration_restore", "local_setup", "runner_restart"] as const)("does not retry contention with %s", async kind => {
+    api.diagnostics.mockRejectedValue(busy);
+    api.getState.mockResolvedValue(operating(kind));
+    renderConsole();
+    await advance(10_000);
+    expect(screen.getByRole("alert")).toHaveTextContent(busy.code);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(api.getState).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops when another operation begins during the retry delay", async () => {
+    api.diagnostics.mockRejectedValueOnce(busy);
+    renderConsole();
+    await advance();
+    api.getState.mockResolvedValue(operating("runtime_switch"));
+    await advance(200);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent(busy.code);
+  });
+
+  it("exhausts five retries and leaves a stable busy error without polling", async () => {
+    api.diagnostics.mockRejectedValue(busy);
+    const view = renderConsole();
+    await advance(999);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(1);
+    expect(api.diagnostics).toHaveBeenCalledTimes(6);
+    expect(screen.getByRole("alert")).toHaveTextContent(busy.code);
+    view.rerender(wrap(<RuntimeConsolePanel state={{ ...consoleState, activity_sequence: 99 }} onSettings={vi.fn()} />));
+    await advance(10_000);
+    expect(api.diagnostics).toHaveBeenCalledTimes(6);
+    expect(api.getState).toHaveBeenCalledTimes(10);
+    expect(screen.getByRole("alert")).toHaveTextContent(busy.code);
+  });
+
+  it("does not start another diagnostic read after a slow state read exceeds the deadline", async () => {
+    const pending = deferred<DesktopState>();
+    api.diagnostics.mockRejectedValueOnce(busy);
+    api.getState.mockReturnValueOnce(pending.promise);
+    renderConsole();
+    await advance(2_000);
+    await act(async () => { pending.resolve(consoleState); });
+    await advance(10_000);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent(busy.code);
+  });
+
+  it.each(["diagnostic_identity_changed", "runtime_identity_unavailable"])("preserves a real %s diagnostic failure", async code => {
+    api.diagnostics.mockRejectedValue({ ...busy, code });
+    renderConsole();
+    await advance(10_000);
+    expect(screen.getByRole("alert")).toHaveTextContent(code);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(api.getState).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original busy error when the competing operation cannot be observed", async () => {
+    api.diagnostics.mockRejectedValueOnce(busy);
+    api.getState.mockRejectedValue(new Error("State unavailable"));
+    renderConsole();
+    await advance(10_000);
+    expect(screen.getByRole("alert")).toHaveTextContent(busy.code);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  const changedIdentities: [string, DesktopState][] = [
+    ["environment", { ...consoleState, persistent_environment: "replacement" }],
+    ["Runner", { ...consoleState, workspace_runner: { ...consoleState.workspace_runner!, client_id: "replacement" } }],
+    ["configuration", { ...consoleState, workspace_runner: { ...consoleState.workspace_runner!, config_path: "/fixture/replacement.toml" } }],
+    ["Server", { ...consoleState, workspace_runner: { ...consoleState.workspace_runner!, server_url: "http://127.0.0.1:2" } }],
+    ["Runtime", { ...consoleState, binaries: { ...consoleState.binaries!, directory: "/fixture/replacement" } }],
+  ];
+  it.each(changedIdentities)("rejects a changed %s identity before retrying even with stale props", async (_, changed) => {
+    api.diagnostics.mockRejectedValueOnce(busy);
+    renderConsole();
+    await advance();
+    api.getState.mockResolvedValue(changed);
+    await advance(10_000);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("diagnostic_identity_changed");
+    expect(screen.queryByRole("button", { name: "Copy Runtime Console credential" })).not.toBeInTheDocument();
+  });
+
+  it("cancels a scheduled retry when configuration props change at the same Server URL", async () => {
+    api.diagnostics.mockRejectedValueOnce(busy);
+    const view = renderConsole();
+    await advance();
+    api.diagnostics.mockResolvedValue({ ...diagnostic, resources: [], can_copy_console_credential: false, credential_copy_fence: null });
+    view.rerender(wrap(<RuntimeConsolePanel state={changedIdentities[2][1]} onSettings={vi.fn()} />));
+    await advance(10_000);
+    expect(api.diagnostics).toHaveBeenCalledTimes(2);
+    expect(api.getState).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Open in browser" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each(["success", "busy"])("ignores a superseded request's late %s result", async result => {
+    const pending = deferred<DiagnosticSnapshot>();
+    api.diagnostics.mockReturnValueOnce(pending.promise);
+    renderConsole();
+    api.diagnostics.mockResolvedValue({ ...diagnostic, resources: [], can_copy_console_credential: false, credential_copy_fence: null });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await advance();
+    await act(async () => { if (result === "success") pending.resolve(diagnostic); else pending.reject(busy); });
+    await advance(10_000);
+    expect(api.diagnostics).toHaveBeenCalledTimes(2);
+    expect(api.getState).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Open in browser" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each(["diagnostics", "state", "delay"])("cancels on unmount while waiting for %s", async stage => {
+    const diagnosticRead = deferred<DiagnosticSnapshot>();
+    const stateRead = deferred<DesktopState>();
+    api.diagnostics.mockReturnValueOnce(diagnosticRead.promise);
+    if (stage === "state") api.getState.mockReturnValueOnce(stateRead.promise);
+    const view = renderConsole();
+    if (stage !== "diagnostics") await act(async () => { diagnosticRead.reject(busy); });
+    const stateReads = api.getState.mock.calls.length;
+    view.unmount();
+    if (stage === "diagnostics") await act(async () => { diagnosticRead.reject(busy); });
+    if (stage === "state") await act(async () => { stateRead.resolve(consoleState); });
+    await advance(10_000);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(api.getState).toHaveBeenCalledTimes(stateReads);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("never retries a busy credential copy or browser launch", async () => {
+    api.copyRuntimeConsoleCredential.mockRejectedValue(busy);
+    api.openDiagnosticResource.mockRejectedValue(busy);
+    renderConsole();
+    await advance();
+    fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
+    await advance(10_000);
+    expect(api.openDiagnosticResource).toHaveBeenCalledExactlyOnceWith("runtime_console");
+    fireEvent.click(screen.getByRole("button", { name: "Copy Runtime Console credential" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy sensitive credential" }));
+    await advance(10_000);
+    expect(api.copyRuntimeConsoleCredential).toHaveBeenCalledExactlyOnceWith("identity-fence");
+    expect(within(screen.getByRole("dialog")).getByRole("alert")).toHaveTextContent(busy.code);
+    expect(api.diagnostics).toHaveBeenCalledTimes(1);
+    expect(api.getState).not.toHaveBeenCalled();
+  });
 });
 
 describe("Diagnostics are explicit and secret-free", () => {
@@ -489,4 +680,157 @@ it("does not treat an incoming request gap as proof of a later meaningful call",
   expect(value?.next_meaningful_call).toBe("not_observed");
   expect(value?.previous_response_gap_ms).toBe(5000);
   expect(value?.next_call_gap_ms).toBeNull();
+});
+
+function settingsDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (value: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+describe("Diagnostics observation and action races", () => {
+  const first = { ...state, persistent_environment: "fixture-A" };
+  const second = { ...state, persistent_environment: "fixture-B" };
+  const busy = { code: "desktop_operation_busy", message: "Busy", next_action: "Wait" };
+
+  it("recovers a busy initial read after background refresh without flashing an error", async () => {
+    vi.useFakeTimers();
+    try {
+      api.getState.mockResolvedValue({ ...first, current_operation: { id: "refresh", kind: "runtime_refresh", phase: "running", started_at_ms: 1, cancellable: true } });
+      api.diagnostics.mockRejectedValueOnce(busy);
+      const view = render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(199); });
+      expect(api.diagnostics).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      api.getState.mockResolvedValue(first);
+      view.rerender(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(api.diagnostics).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("combobox", { name: "Tool Request Tracing" })).toBeEnabled();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      view.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["success", "failure"])("ignores an older initial read's late %s after manual refresh and a draft edit", async result => {
+    const initial = settingsDeferred<DiagnosticSnapshot>();
+    api.diagnostics.mockReturnValueOnce(initial.promise);
+    render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+    api.diagnostics.mockResolvedValue({ ...diagnostic, trace: { ...diagnostic.trace, configured_mode: "full", revision: "new-revision" } });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Tool Request Tracing" })).toHaveValue("full"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Tool Request Tracing" }), { target: { value: "metadata" } });
+    await act(async () => { if (result === "success") initial.resolve(diagnostic); else initial.reject(busy); });
+    expect(screen.getByRole("combobox", { name: "Tool Request Tracing" })).toHaveValue("metadata");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.setToolRequestTracing).toHaveBeenCalledWith(expect.objectContaining({ mode: "metadata", expected_revision: "new-revision" })));
+  });
+
+  it("preserves an edited mode when a current manual observation completes", async () => {
+    render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Tool Request Tracing" }), { target: { value: "metadata" } });
+    api.diagnostics.mockResolvedValue({ ...diagnostic, trace: { ...diagnostic.trace, configured_mode: "full", revision: "updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    expect(screen.getByRole("combobox", { name: "Tool Request Tracing" })).toHaveValue("metadata");
+    expect(within(screen.getByText("Saved recording setting").parentElement!).getByText("Full inputs & results")).toBeVisible();
+  });
+
+  it.each([
+    ["environment", second],
+    ["Server address", { ...first, topology: { ...first.topology!, server: { kind: "remote" as const, url: "https://replacement.invalid" } } }],
+    ["Runner configuration", { ...first, workspace_runner: { client_id: "other", config_path: "/fixture/other.toml", server_url: "https://replacement.invalid" } } as DesktopState],
+  ])("clears credential input before a changed %s can receive it", async (_, replacement) => {
+    const view = render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Restore Server user credential" }));
+    fireEvent.change(screen.getByLabelText("Existing Server user API token"), { target: { value: "fixture-placeholder-not-a-credential" } });
+    view.rerender(wrap(<DiagnosticsPanel state={replacement} onState={vi.fn()} />));
+    expect(screen.queryByLabelText("Existing Server user API token")).not.toBeInTheDocument();
+    expect(api.repairEnvironmentUserCredential).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Restore Server user credential" }));
+    expect(screen.getByLabelText("Existing Server user API token")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Save credential" })).toBeDisabled();
+  });
+
+  it("discards a trace confirmation and old edit authority when the environment changes", async () => {
+    const view = render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Tool Request Tracing" }), { target: { value: "full" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("dialog");
+    const pending = settingsDeferred<DiagnosticSnapshot>();
+    api.diagnostics.mockReturnValueOnce(pending.promise);
+    view.rerender(wrap(<DiagnosticsPanel state={second} onState={vi.fn()} />));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Tool Request Tracing" })).not.toBeInTheDocument();
+    await act(async () => pending.resolve({ ...diagnostic, trace: { ...diagnostic.trace, can_edit: false, can_restart: false } }));
+    expect(screen.getByRole("combobox", { name: "Tool Request Tracing" })).toBeDisabled();
+    expect(api.setToolRequestTracing).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"])("ignores a credential repair's late %s after target replacement", async result => {
+    const pending = settingsDeferred<DesktopState>();
+    const onState = vi.fn();
+    api.repairEnvironmentUserCredential.mockReturnValueOnce(pending.promise);
+    const view = render(wrap(<DiagnosticsPanel state={first} onState={onState} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Restore Server user credential" }));
+    fireEvent.change(screen.getByLabelText("Existing Server user API token"), { target: { value: "fixture-placeholder-not-a-credential" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save credential" }));
+    expect(api.repairEnvironmentUserCredential).toHaveBeenCalledExactlyOnceWith({ environmentId: "fixture-A", userToken: "fixture-placeholder-not-a-credential" });
+    view.rerender(wrap(<DiagnosticsPanel state={second} onState={onState} />));
+    await screen.findByRole("button", { name: "Restore Server user credential" });
+    await act(async () => { if (result === "success") pending.resolve(first); else pending.reject(busy); });
+    expect(onState).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore Server user credential" })).toBeEnabled();
+  });
+
+  it("does not recreate a trace confirmation after its environment was replaced", async () => {
+    const pending = settingsDeferred<RuntimeSettings>();
+    api.runtimeSettings.mockReturnValueOnce(pending.promise);
+    const view = render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Tool Request Tracing" }), { target: { value: "metadata" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Restart Server" }));
+    expect(api.runtimeSettings).toHaveBeenCalledTimes(1);
+    view.rerender(wrap(<DiagnosticsPanel state={second} onState={vi.fn()} />));
+    await act(async () => pending.resolve({ ...settings, active_jobs: 3 }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.setToolRequestTracing).not.toHaveBeenCalled();
+  });
+
+  it.each(["unmount", "replace"])("does not export to a late save-dialog result after %s", async event => {
+    const pending = settingsDeferred<string>();
+    dialog.save.mockReturnValueOnce(pending.promise);
+    const view = render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Export Support Bundle" }));
+    expect(dialog.save).toHaveBeenCalledTimes(1);
+    if (event === "unmount") view.unmount();
+    else view.rerender(wrap(<DiagnosticsPanel state={second} onState={vi.fn()} />));
+    await act(async () => pending.resolve("/fixture/support.zip"));
+    expect(api.exportSupportBundle).not.toHaveBeenCalled();
+  });
+
+  it("never retries a busy credential mutation", async () => {
+    api.repairEnvironmentUserCredential.mockRejectedValue(busy);
+    render(wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />));
+    fireEvent.click(await screen.findByRole("button", { name: "Restore Server user credential" }));
+    fireEvent.change(screen.getByLabelText("Existing Server user API token"), { target: { value: "fixture-placeholder-not-a-credential" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save credential" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(busy.code);
+    expect(api.repairEnvironmentUserCredential).toHaveBeenCalledTimes(1);
+    expect(api.getState).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Existing Server user API token")).toHaveValue("");
+  });
+
+  it("ignores the first StrictMode effect's late result", async () => {
+    const initial = settingsDeferred<DiagnosticSnapshot>();
+    api.diagnostics.mockReturnValueOnce(initial.promise);
+    api.diagnostics.mockResolvedValue({ ...diagnostic, trace: { ...diagnostic.trace, configured_mode: "full" } });
+    render(<StrictMode>{wrap(<DiagnosticsPanel state={first} onState={vi.fn()} />)}</StrictMode>);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Tool Request Tracing" })).toHaveValue("full"));
+    await act(async () => initial.resolve(diagnostic));
+    expect(screen.getByRole("combobox", { name: "Tool Request Tracing" })).toHaveValue("full");
+  });
 });
