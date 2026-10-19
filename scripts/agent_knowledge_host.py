@@ -359,7 +359,7 @@ def main(argv=None):
         if name == "checkpoint":
             item.add_argument("--trace-id", required=True)
     args = parser.parse_args(argv)
-    os.umask(0o077)
+    previous_umask = os.umask(0o077)
     try:
         if args.command == "drive":
             return drive(args)
@@ -400,6 +400,8 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, AssertionError, subprocess.SubprocessError) as error:
         print("knowledge_host: " + type(error).__name__, file=sys.stderr)
         return 2
+    finally:
+        os.umask(previous_umask)
 
 
 if __name__ == "__main__":

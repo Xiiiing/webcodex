@@ -22,6 +22,33 @@ class KnowledgeBenchmarkTests(unittest.TestCase):
         self.manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
         self.case = report._case_by_id(self.manifest, "knowledge_identifier")
 
+    @unittest.skipUnless(os.name == "posix", "POSIX umask and directory permission contract")
+    def test_host_main_scopes_private_umask_and_restores_it_on_all_exits(self):
+        for caller_mask in (0o022, 0o077):
+            for error in (None, ValueError("handled"), RuntimeError("unhandled")):
+                with self.subTest(caller_mask=caller_mask, error=error), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    def drive(args):
+                        (root / "inside").mkdir()
+                        self.assertEqual((root / "inside").stat().st_mode & 0o777, 0o700)
+                        if error is not None:
+                            raise error
+                        return 0
+                    previous = os.umask(caller_mask)
+                    try:
+                        with patch.object(host, "drive", side_effect=drive):
+                            argv = ["drive", "--state-dir", str(root), "--bin-dir", str(root),
+                                    "--model-config", str(root / "unused.json")]
+                            if isinstance(error, RuntimeError):
+                                with self.assertRaisesRegex(RuntimeError, "unhandled"):
+                                    host.main(argv)
+                            else:
+                                self.assertEqual(host.main(argv), 2 if error else 0)
+                        (root / "after").mkdir()
+                        self.assertEqual((root / "after").stat().st_mode & 0o777, 0o777 & ~caller_mask)
+                    finally:
+                        os.umask(previous)
+
     def test_six_opt_in_cases_do_not_change_default_matrix_or_force_lanes(self):
         self.assertEqual(benchmark.DEFAULT_CASES, ("readonly_review", "guarded_multi_file_edit", "long_validation_handoff"))
         self.assertEqual(len(benchmark.DEFAULT_SELECTION_CASES), 4)
