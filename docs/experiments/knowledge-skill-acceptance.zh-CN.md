@@ -115,6 +115,13 @@ python3 scripts/agent_knowledge_host.py submit \
   --session '<canonical Session ID>' --answer-file /private/final-answer.json
 ```
 
+若 Host 只显示错误而没有最终答案，将操作人员的原始观察保存为私有 UTF-8 文本，
+用 `--host-failure-file /private/failure.txt` 替代 `--answer-file`。
+该路径单独标记操作人员观察，并提交 `answer=null`，不会补造模型 JSON。
+Host 未显示 Session 时，从本次尝试的 bootstrap 捕获取得精确 Session。
+本地工具成功不能证明 Host 收到或显示了响应，也不能直接归因为模型失败；
+捕获或身份不完整仍为 `partial`。
+
 driver 关闭专属服务、保留有界私有捕获后返回候选回执，由父采集器独立判断。
 沿用每个 driver 30 分钟进程组限制，须在 29 分钟内提交。
 人工中断不能算合格测量。仅关闭本任务拥有的进程，保留已有实验环境。

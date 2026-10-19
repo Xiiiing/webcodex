@@ -12,7 +12,7 @@ from unittest.mock import Mock
 
 from scripts import agent_loop_benchmark as benchmark, agent_loop_report as report
 from scripts import agent_knowledge_evidence as evidence
-from scripts.agent_knowledge_fixture import CASE_IDS
+from scripts.agent_knowledge_fixture import CASE_IDS, KnowledgeFixture
 from scripts.agent_knowledge_host import private_directory, write_private, read_private, archive_capture
 from scripts import agent_knowledge_host as host
 
@@ -110,6 +110,24 @@ class KnowledgeBenchmarkTests(unittest.TestCase):
 
 
 class PrivateHostHandoffTests(unittest.TestCase):
+    def test_host_failure_preserves_observation_without_inventing_model_answer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            write_private(root / "ready.json", {"case_id": "knowledge_procedure"})
+            failure = root / "failure.txt"
+            failure.write_text("无法加载此回复", encoding="utf-8")
+            failure.chmod(0o600)
+            self.assertEqual(host.main(["submit", "--sample-dir", str(root),
+                "--session", "exact-session", "--host-failure-file", str(failure)]), 0)
+            submitted = read_private(root / "submission.json")
+            self.assertEqual(submitted, {"workflow_session_id": "exact-session", "answer": None})
+            observation = read_private(root / "host-failure-observation.json")
+            self.assertEqual(observation["reported_text"], "无法加载此回复")
+            self.assertIs(observation["final_answer_observed"], False)
+            self.assertEqual(observation["root_cause"], "unknown")
+            fixture = KnowledgeFixture(root / "fixture", "knowledge_identifier").prepare()
+            self.assertFalse(evidence.check_answer(submitted["answer"], fixture))
+
     def test_imported_connection_requires_a_bound_owner_and_valid_username(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = private_directory(Path(temporary) / "private")

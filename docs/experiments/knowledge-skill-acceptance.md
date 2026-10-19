@@ -133,6 +133,14 @@ python3 scripts/agent_knowledge_host.py submit \
   --session '<canonical Session ID>' --answer-file /private/final-answer.json
 ```
 
+If the Host displays an error without a final answer, save the operator's exact
+observation as private UTF-8 text and use `--host-failure-file /private/failure.txt`
+instead of `--answer-file`. This retains a separately labeled operator observation
+and submits `answer=null`; it never manufactures model JSON. Obtain the exact
+Session from that attempt's bootstrap capture if the Host did not display it.
+Local tool success alone does not establish Host receipt/rendering or a model
+failure, and incomplete capture or identity remains `partial`.
+
 The driver stops its services, retains bounded private captures, and returns a
 candidate receipt. The parent independently verifies evidence before assigning
 status. Each driver has the existing 30-minute process-group limit; submission

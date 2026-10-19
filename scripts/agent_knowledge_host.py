@@ -290,7 +290,10 @@ def main(argv=None):
         if name != "info":
             item.add_argument("--session", required=True)
         if name == "submit":
-            item.add_argument("--answer-file", type=Path, required=True)
+            outcome = item.add_mutually_exclusive_group(required=True)
+            outcome.add_argument("--answer-file", type=Path)
+            outcome.add_argument("--host-failure-file", type=Path,
+                help="private UTF-8 operator report when the Host displayed no final answer")
         if name == "checkpoint":
             item.add_argument("--trace-id", required=True)
     args = parser.parse_args(argv)
@@ -302,7 +305,16 @@ def main(argv=None):
         if args.command == "info":
             print(json.dumps(ready, ensure_ascii=False, indent=2))
         elif args.command == "submit":
-            answer = read_private(args.answer_file)
+            if args.host_failure_file is not None:
+                message = trace._read(args.host_failure_file, MAX_HANDOFF_BYTES).decode("utf-8")
+                if not message.strip():
+                    raise ValueError("Host failure report must not be empty")
+                write_private(args.sample_dir / "host-failure-observation.json", {
+                    "origin": "operator_reported_host_failure", "reported_text": message,
+                    "final_answer_observed": False, "root_cause": "unknown"})
+                answer = None
+            else:
+                answer = read_private(args.answer_file)
             write_private(args.sample_dir / "submission.json", {"workflow_session_id": args.session, "answer": answer})
         else:
             if ready["case_id"] not in {"knowledge_source_update", "knowledge_skill_update"}:
