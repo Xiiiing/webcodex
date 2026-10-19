@@ -73,7 +73,15 @@ class RecordedSample(HostSample):
             self.plugin({"action": "call", "binding": binding, "arguments": {"query": "ledger"}})
             self.old_source = fixture.snapshot_sources(0)[0]
         elif fixture.case_id in evidence.DIRECTED_SKILL:
-            definition = self.call("load_skill", {"project": self.project_ref, "name": "receipt-audit"}, direct=True)
+            if fixture.case_id == "knowledge_skill_read":
+                catalog = self.call("list_skills", {"project": self.project_ref})
+                selected = [item for item in catalog["skills"] if item.get("name") == "receipt-audit"]
+                if len(selected) != 1:
+                    raise AssertionError("expected one exact project Skill")
+                definition = self.call("read_skill_file", {"project": self.project_ref,
+                    "skill_id": selected[0]["skill_id"], "path": "SKILL.md"}, direct=True)
+            else:
+                definition = self.call("load_skill", {"project": self.project_ref, "name": "receipt-audit"}, direct=True)
             self.old_definition = definition
             self.call("read_skill_file", {"project": self.project_ref, "skill_id": definition["skill_id"],
                 "path": "reference.md", "expected_definition_revision": definition["definition_revision"]}, direct=True)

@@ -126,6 +126,19 @@ class KnowledgeSemanticsTests(unittest.TestCase):
             checks, _ = self.check(fixture, wrong)
             self.assertFalse(checks["required_resource_path"])
 
+    def test_direct_skill_reads_can_supply_discovery_and_revision_bound_sources(self):
+        fixture = self.fixture("knowledge_skill_read")
+        calls = skill_reads(fixture)[1:]
+        for item in calls:
+            item["tool"] = "read_skill_file"
+            item["output"]["name"] = "receipt-audit"
+        checks, adoption = self.check(fixture, calls)
+        self.assertTrue(all(checks.values()), checks)
+        self.assertEqual(adoption, {"knowledge_plugin": False, "skill": True})
+        calls[-1]["output"]["definition_revision"] = "0" * 64
+        with self.assertRaises(trace.EvidenceUnavailable):
+            self.check(fixture, calls)
+
     def test_plugin_wrong_project_hash_and_range_are_not_source_evidence(self):
         fixture = self.fixture("knowledge_paraphrase")
         for field, value in (("project", "foreign"), ("plugin", "other-plugin")):
