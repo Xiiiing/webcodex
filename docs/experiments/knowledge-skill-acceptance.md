@@ -8,6 +8,8 @@ This opt-in protocol supports the T01/T02 scope of
 permission model, provider algorithm or Memory. The original selection defaults
 and strict gates remain unchanged. Public material contains synthetic facts and
 sanitized conclusions; raw Host answers, captures and operator state stay private.
+The [historical results](knowledge-skill-acceptance-results.md) retain the initial
+attempts, authorized supplements, measured failures and operator interventions.
 
 ## Evidence gap
 
@@ -43,7 +45,7 @@ is prescribed. Ordinary file reads may pass either free case without proving
 Plugin/Skill adoption. The four directed cases fail their resource-path check
 when only ordinary files were read. Bootstrap-only or a driver-declared pass
 cannot prove a sample. Final JSON must contain exactly `facts` (the requested
-`key=value` strings) and `sources` (relative path and inclusive line range).
+`key=value` strings) and `sources` (project-relative path and inclusive line range).
 Report malformed or wrong answers as answer-contract failures, without inventing calls.
 The Host prompt explicitly asks for the canonical Session ID separately before
 the final JSON. Earlier saved prompts asking for the ID "with your final JSON"
@@ -72,6 +74,8 @@ independently verifies that read in the exact Workflow Session before changing
 one admitted file. The Host then continues in the same conversation. For Skill
 updates the definition changes, rather than only an ancillary resource. Actual
 old-hash/revision refusals are retained as failed calls, not missing capture.
+Checkpoint feedback is an operator intervention and must be reported separately;
+it never substitutes for the actual required resource reads or proves unassisted recovery.
 The report describes whether the model recognized invalidation and how it
 recovered; a script's deliberate stale read proves only the runtime guard.
 
