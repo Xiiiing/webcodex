@@ -1,0 +1,156 @@
+"""New explicit cases cannot borrow historical or driver-declared acceptance."""
+import copy
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+from unittest.mock import Mock
+
+from scripts import agent_loop_benchmark as benchmark, agent_loop_report as report
+from scripts import agent_knowledge_evidence as evidence
+from scripts.agent_knowledge_fixture import CASE_IDS
+from scripts.agent_knowledge_host import private_directory, write_private, read_private, archive_capture
+from scripts import agent_knowledge_host as host
+
+
+class KnowledgeBenchmarkTests(unittest.TestCase):
+    def setUp(self):
+        self.manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
+        self.case = report._case_by_id(self.manifest, "knowledge_identifier")
+
+    def test_six_opt_in_cases_do_not_change_default_matrix_or_force_lanes(self):
+        self.assertEqual(benchmark.DEFAULT_CASES, ("readonly_review", "guarded_multi_file_edit", "long_validation_handoff"))
+        self.assertEqual(len(benchmark.DEFAULT_SELECTION_CASES), 4)
+        for name in CASE_IDS:
+            case = report._case_by_id(self.manifest, name)
+            self.assertEqual(case["target"], evidence.TARGET)
+            self.assertEqual(case["experiment"], "tool_selection")
+            self.assertNotIn("code_mode_surface", case)
+            self.assertEqual(benchmark._surface(case, "tool_selection"), "tool_selection")
+
+    def proof(self):
+        return {"schema_version": 1, "case_id": self.case["id"],
+            "case_fingerprint": report._case_fingerprint(self.case), "base_revision": "a" * 40,
+            "fixture_identity": "b" * 64, "available": True, "passed": True,
+            "canonical_call_count": 2, "checks": {key: True for key in evidence.CHECK_NAMES}}
+
+    def test_strict_proof_binds_all_identity_and_exact_boolean_checks(self):
+        summary = {"benchmark": {"base_revision": "a" * 40}}
+        self.assertTrue(benchmark._knowledge_evidence_proven(self.case, summary, self.proof(), "b" * 64))
+        for key, value in (("case_id", "knowledge_procedure"), ("base_revision", "c" * 40),
+                           ("case_fingerprint", "d" * 64), ("schema_version", True),
+                           ("canonical_call_count", True), ("available", 1), ("passed", 1)):
+            proof = self.proof(); proof[key] = value
+            self.assertFalse(benchmark._knowledge_evidence_proven(self.case, summary, proof, "b" * 64))
+        for value in (False, 1, None):
+            proof = self.proof(); proof["checks"]["source_content_observed"] = value
+            self.assertFalse(benchmark._knowledge_evidence_proven(self.case, summary, proof, "b" * 64))
+        proof = self.proof(); proof["checks"]["invented"] = True
+        self.assertFalse(benchmark._knowledge_evidence_proven(self.case, summary, proof, "b" * 64))
+
+    def test_actual_run_ignores_driver_supplied_pass_proof_without_capture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("worktrees", "receipts", "annotations"):
+                (root / name).mkdir()
+            driver = root / "driver.py"
+            driver.write_text('import os,json\nfrom pathlib import Path\n'
+                'Path(os.environ["WEBCODEX_BENCH_DRIVER_RESULT"]).write_text(json.dumps({"status":"pass",'
+                '"audit_db":"/nonexistent-knowledge-audit.db","workflow_session_id":"invented",'
+                '"knowledge_evidence":{"available":True,"passed":True},"answer":{"facts":[],"sources":[]}}))\n')
+            manifest = root / "manifest.json"; manifest.write_text(json.dumps(self.manifest))
+            with patch.object(benchmark, "_summary_for_receipt", return_value={"benchmark": {"base_revision": "a" * 40}}):
+                result = benchmark._run_sample(Path.cwd(), root, [sys.executable, str(driver)], self.case,
+                    variant="tool_selection", pair_index=0, ordinal=0, base_revision="a" * 40, case_manifest=manifest)
+            self.assertEqual(result["status"], "partial")
+            self.assertFalse(result["knowledge_evidence"]["available"])
+            self.assertFalse(list((root / "worktrees").iterdir()))
+
+    def test_unsupported_driver_remains_unsupported_without_audit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("worktrees", "receipts", "annotations"):
+                (root / name).mkdir()
+            driver = root / "unsupported.py"
+            driver.write_text('import os\nfrom pathlib import Path\n'
+                'Path(os.environ["WEBCODEX_BENCH_DRIVER_RESULT"]).write_text(\'{"status":"unsupported"}\')\n')
+            result = benchmark._run_sample(Path.cwd(), root, [sys.executable, str(driver)], self.case,
+                variant="tool_selection", pair_index=0, ordinal=0, base_revision="a" * 40, case_manifest=root / "manifest.json")
+            self.assertEqual(result["status"], "unsupported")
+
+    def test_published_identity_is_bounded_and_matches_clean_runtime_source(self):
+        receipt = {"host_config_digest": "b" * 64, "runtime_identity": {
+            "build": {"version": "0.5.0", "commit_prefix": "a" * 12, "dirty": False, "built_at": 10},
+            "binary_sha256": {"webcodex-server": "c" * 64, "webcodex-runner": "d" * 64}}}
+        self.assertIsNotNone(benchmark._knowledge_host_identity(receipt, "a" * 40))
+        for key, value in (("dirty", True), ("built_at", True), ("commit_prefix", "e" * 12), ("version", "/private/path")):
+            bad = copy.deepcopy(receipt); bad["runtime_identity"]["build"][key] = value
+            self.assertIsNone(benchmark._knowledge_host_identity(bad, "a" * 40))
+        bad = copy.deepcopy(receipt); bad["runtime_identity"]["private"] = "never publish"
+        self.assertIsNone(benchmark._knowledge_host_identity(bad, "a" * 40))
+
+    def test_strict_matrix_rejects_missing_or_mixed_host_configuration(self):
+        identity = {"model_config_digest": "b" * 64, "runtime_identity": {
+            "build": {"version": "0.5.0", "commit_prefix": "a" * 12, "dirty": False, "built_at": 10},
+            "binary_sha256": {"webcodex-server": "c" * 64, "webcodex-runner": "d" * 64}}}
+        sample = {"case_id": self.case["id"], "status": "pass", "variant": "tool_selection", "surface": "tool_selection",
+            "summary": {"benchmark": {"base_revision": "a" * 40}, "correctness": {"task_verdict": "pass", "validation_verdict": "not_required"}},
+            "fixture_oracle": {"available": True, "passed": True, "fixture_identity": "b" * 64},
+            "knowledge_evidence": self.proof(), "host_identity": identity}
+        result = {"experiment": "tool_selection", "cases": [{"case_id": self.case["id"], "samples": [sample, copy.deepcopy(sample)]}]}
+        self.assertTrue(benchmark._strict_passed(result, [self.case["id"]], 2, self.manifest))
+        result["cases"][0]["samples"][1]["host_identity"]["model_config_digest"] = "e" * 64
+        self.assertFalse(benchmark._strict_passed(result, [self.case["id"]], 2, self.manifest))
+        result["cases"][0]["samples"][1]["host_identity"] = None
+        self.assertFalse(benchmark._strict_passed(result, [self.case["id"]], 2, self.manifest))
+
+
+class PrivateHostHandoffTests(unittest.TestCase):
+    def test_failed_prepare_closes_owned_processes_and_releases_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            model = root / "model.json"; write_private(model, {"host": "chatgpt_web"})
+            args = argparse.Namespace(state_dir=root, bin_dir=root, model_config=model, public_url=None)
+            env = {"WEBCODEX_BENCH_" + key: "test" for key in ("WORKSPACE", "CASE_ID", "BASE_REVISION",
+                "CASE_FINGERPRINT", "PROMPT", "DRIVER_RESULT", "FIXTURE_COORDINATION", "TEMPORAL_TRACE_ROOT")}
+            env.update(WEBCODEX_BENCH_CASE_ID="knowledge_identifier", WEBCODEX_BENCH_TARGET=evidence.TARGET)
+            sample = Mock(); sample.prepare.side_effect = ValueError("prepare failed after launch")
+            with patch.dict(os.environ, env), patch.object(host, "runtime_identity", return_value={}), patch.object(host, "HostSample", return_value=sample):
+                with self.assertRaises(ValueError):
+                    host.drive(args)
+            sample.close.assert_called_once()
+            self.assertFalse((root / "active.lock").exists())
+
+    def test_handoffs_are_private_exclusive_and_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            path = root / "answer.json"
+            write_private(path, {"facts": [], "sources": []})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(read_private(path), {"facts": [], "sources": []})
+            with self.assertRaises(FileExistsError):
+                write_private(path, {})
+            with self.assertRaises(ValueError):
+                write_private(root / "large.json", {"value": "x" * 65536})
+
+    def test_private_capture_archive_never_follows_symlink_or_hardlink(self):
+        import os
+        for link in ("symlink", "hardlink"):
+            with self.subTest(link=link), tempfile.TemporaryDirectory() as temporary:
+                root = private_directory(Path(temporary) / "private")
+                source = private_directory(root / "capture")
+                outside = root / "outside"; outside.write_text("not a capture"); outside.chmod(0o600)
+                if link == "symlink":
+                    (source / "bad").symlink_to(outside)
+                else:
+                    os.link(outside, source / "bad")
+                with self.assertRaises(ValueError):
+                    archive_capture(source, root / "archive")
+
+
+if __name__ == "__main__":
+    unittest.main()
