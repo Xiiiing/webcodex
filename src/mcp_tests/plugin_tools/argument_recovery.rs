@@ -106,6 +106,14 @@ async fn plugin_argument_recovery_missing_project_describe_never_invokes_tool_or
                 assert_eq!(output["error"]["code"], "plugin_project_required");
                 assert_eq!(output["dispatchState"], "not_started");
                 assert!(output.get("binding").is_none());
+                let recovery = output["recovery"].as_str().unwrap();
+                let fallback = result["result"]["content"][0]["text"].as_str().unwrap();
+                assert!(
+                    fallback.contains(recovery),
+                    "text-only Hosts must receive the same recovery"
+                );
+                assert!(fallback.contains(output["error"]["message"].as_str().unwrap()));
+                assert!(fallback.len() <= 1024);
                 output["recovery"].clone()
             } else {
                 let result =

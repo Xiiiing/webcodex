@@ -175,7 +175,10 @@ live provider 与最近一次 disposable `check` candidate 保留 bounded、cont
 
 对 `projectBound` 工具，在 `describe` 时显式传入目标已授权 `project`。缺少它时，
 错误保留 `plugin_project_required`，并提示对同一 Runner/provider/tool 补充该 Project
-重新 describe；此时没有调用 provider 工具，也没有创建 binding。Project selector
+重新 describe；此时没有调用 provider 工具，也没有创建 binding。WebCodex 生成的
+gateway 错误还会将已有 recovery 投影到有界的 MCP 错误文本，供只展示文本的 Host
+使用；结构化错误字段仍为权威数据。恢复指导优先显示，避免长错误消息挤占原有
+1,024 字节文本上限。provider 自身返回的工具结果保持原样。Project selector
 内容非法与在 `call` 上传入 Project 会得到不同的参数提示。
 同一目标 Project 可复用已保留的 schema/binding，call 只传 `binding` 和符合 schema
 的 `arguments`。更换目标 Project 必须 describe 新目标并取得新 binding；仅删除

@@ -1308,7 +1308,15 @@ fn bounded_gateway_error_fallback(message: &str) -> String {
 }
 
 fn gateway_error_result(error: GatewayError) -> Value {
-    let text = bounded_gateway_error_fallback(&error.message);
+    // Hosts may expose only error text. Keep recovery ahead of a potentially
+    // long message without increasing the existing fallback byte budget.
+    let text = match error.recovery {
+        Some(recovery) => bounded_gateway_error_fallback(&format!(
+            "Recovery: {recovery}\n\n{}",
+            bounded_gateway_error_fallback(&error.message)
+        )),
+        None => bounded_gateway_error_fallback(&error.message),
+    };
     let dispatch_state = error.dispatch_state.map(dispatch_state_name);
     let mut structured = json!({
         "error": {"code": error.code, "message": error.message}
@@ -1386,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn webcodex_generated_gateway_results_keep_canonical_data_only_in_structured_content() {
+    fn webcodex_generated_gateway_results_project_bounded_recovery_text() {
         let metadata = json!({
             "runner": "runner-a",
             "plugins": [{"plugin": "repo-tools", "status": "ready"}]
@@ -1427,7 +1435,17 @@ mod tests {
         let fallback = rendered["content"][0]["text"].as_str().unwrap();
         assert!(fallback.len() <= GATEWAY_ERROR_FALLBACK_BYTES);
         assert!(!fallback.contains("plugin_replaced"));
-        assert!(!fallback.contains("Re-list the Plugin"));
+        assert!(fallback.starts_with("Recovery: Re-list the Plugin before retrying."));
+        assert!(fallback.contains("é"));
+
+        let without_recovery = gateway_error_result(GatewayError::local(
+            "plugin_not_found",
+            "Plugin unavailable",
+        ));
+        assert_eq!(without_recovery["content"][0]["text"], "Plugin unavailable");
+        assert!(without_recovery["structuredContent"]
+            .get("recovery")
+            .is_none());
     }
 
     #[test]

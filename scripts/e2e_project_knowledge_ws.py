@@ -109,6 +109,10 @@ class KnowledgeSmoke(InteractiveSmoke):
         recovery = missing.get("recovery", "")
         check(all(phrase in recovery for phrase in ["action=describe", "intended explicit project",
                   "only binding and arguments", "uncertain effect"]), "missing Project recovery is not actionable")
+        fallback = self.last_result["content"][0]["text"]
+        check(fallback.startswith("Recovery: " + recovery) and missing["error"]["message"] in fallback
+              and len(fallback.encode("utf-8")) <= 1024,
+              "text-only Hosts must receive bounded, complete missing-Project recovery")
         api = self.post("/api/tools/call", {"tool": "plugin_tool", "params": describe}, self.owner)
         check(api.get("success") is False and api.get("output", {}).get("failure_kind") == "plugin_project_required"
               and api["output"].get("dispatch_certainty") == "not_started"
@@ -178,6 +182,8 @@ class KnowledgeSmoke(InteractiveSmoke):
               "retired binding must require fresh describe without redispatch")
         check("projectBound" in missing_binding.get("recovery", "") and "unknown outcome" in missing_binding["recovery"],
               "lost binding recovery must retain Project selection and uncertain-effect guidance")
+        check(missing_binding["recovery"] in self.last_result["content"][0]["text"],
+              "text-only Hosts must retain lost-binding and unknown-outcome guidance")
         projects = self.post("/api/tools/call", {"tool": "list_projects", "params": {}}, self.owner)
         check(projects.get("success") and any(item.get("id") == PROJECT for item in projects["output"]["projects"]), "disabling provider affected Projects")
         print("PASS: removing optional provider retires bindings while Project discovery remains available")
