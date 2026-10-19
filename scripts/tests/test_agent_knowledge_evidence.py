@@ -207,6 +207,44 @@ class KnowledgeSemanticsTests(unittest.TestCase):
         with self.assertRaises(trace.EvidenceUnavailable):
             self.check(fixture, before + plugin_reads(fixture, stage=0, index=6), advance)
 
+    def test_session_messages_bind_without_borrowing_project_source_authority(self):
+        fixture = self.fixture()
+        bootstrap = call("work_on_project", {"client_id": "runner", "path": str(fixture.root)},
+                         {"session_id": "wc_sess_test", "session_ref": "~s2",
+                          "resolved_project": "project"}, index=0)
+        reads = ordinary_reads(fixture, index=1)
+        message = call("post_session_message", {"session_id": "wc_sess_test", "kind": "progress",
+            "message": "Checkpoint", "tags": ["checkpoint"], "delivery_key": "checkpoint-1"},
+            {"session_id": "wc_sess_test", "message": {"session_id": "wc_sess_test",
+             "author_session_id": None}}, index=2)
+        message["project"] = None
+        calls = [bootstrap, *reads, message]
+        for selector in ("wc_sess_test", "~s2"):
+            message["arguments"]["session_id"] = selector
+            self.assertEqual(evidence._bind_fixture(calls, fixture.root, "wc_sess_test"), {"project"})
+        # Session messages do not supply the required source observation themselves.
+        with self.assertRaises(trace.EvidenceUnavailable):
+            evidence._bind_fixture([bootstrap, message], fixture.root, "wc_sess_test")
+        variants = []
+        for selector in ("wc_sess_foreign", "~s3", "~s02", None, []):
+            wrong = copy.deepcopy(calls); wrong[-1]["arguments"]["session_id"] = selector
+            variants.append(wrong)
+        for field in ("project", "source_session_id", "target_session_id", "client_id"):
+            wrong = copy.deepcopy(calls); wrong[-1]["arguments"][field] = "foreign"
+            variants.append(wrong)
+        wrong = copy.deepcopy(calls); wrong[-1]["project"] = "foreign"; variants.append(wrong)
+        wrong = copy.deepcopy(calls); wrong[-1]["output"]["session_id"] = "foreign"; variants.append(wrong)
+        wrong = copy.deepcopy(calls); wrong[-1]["output"]["message"]["session_id"] = "foreign"; variants.append(wrong)
+        wrong = copy.deepcopy(calls); wrong[-1]["output"]["message"]["author_session_id"] = "foreign"; variants.append(wrong)
+        wrong = copy.deepcopy(calls); wrong[-1]["started"] = 0; variants.append(wrong)
+        wrong = copy.deepcopy(calls); wrong[1]["project"] = "foreign"; variants.append(wrong)
+        for index, wrong in enumerate(variants):
+            with self.subTest(index=index), self.assertRaises(trace.EvidenceUnavailable):
+                evidence._bind_fixture(wrong, fixture.root, "wc_sess_test")
+        checks, adoption = evidence.check_calls([bootstrap, message], fixture, {"project"})
+        self.assertFalse(checks["source_content_observed"])
+        self.assertEqual(adoption, {"knowledge_plugin": False, "skill": False})
+
     def test_answers_reject_fabrication_duplicates_wrong_paths_ranges_and_booleans(self):
         fixture = self.fixture()
         original = answer(fixture)
@@ -352,6 +390,20 @@ class KnowledgeCaptureTests(unittest.TestCase):
         serialized = json.dumps(result)
         for private in (str(self.fixture.root), self.bootstrap, self.read_trace, "wc_sess_test"):
             self.assertNotIn(private, serialized)
+
+    def test_real_capture_session_message_with_null_audit_project_binds(self):
+        identity = self.capture("post_session_message", {"session_id": "wc_sess_test", "kind": "progress",
+            "message": "Checkpoint", "tags": ["checkpoint"], "delivery_key": "checkpoint-1"},
+            {"session_id": "wc_sess_test", "message": {"session_id": "wc_sess_test",
+             "author_session_id": None}}, index=3)
+        with sqlite3.connect(self.audit.audit_db) as connection:
+            connection.execute("UPDATE action_events SET project=NULL WHERE event_id=?", (identity,))
+        result = self.verify()
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["canonical_call_count"], 3)
+        with sqlite3.connect(self.audit.audit_db) as connection:
+            connection.execute("UPDATE action_events SET client_window_key='foreign' WHERE event_id=?", (identity,))
+        self.assertFalse(self.verify()["available"])
 
     def test_bootstrap_only_is_unavailable_even_with_correct_final_answer(self):
         with sqlite3.connect(self.audit.audit_db) as connection:

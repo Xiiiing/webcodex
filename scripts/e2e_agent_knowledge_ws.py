@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -80,6 +81,9 @@ class RecordedSample(HostSample):
             self.call("read_files", {"project": self.project_ref,
                 "items": [{"path": path} for path in fixture.required_sources],
                 "with_line_numbers": True}, direct=True)
+            if fixture.case_id == "knowledge_identifier":
+                self.call("post_session_message", {"session_id": self.session_ref,
+                    "kind": "progress", "message": "Scripted verifier marker; no operator handoff."})
 
 
 def host_handoff_smoke(bin_dir, source_revision, manifest):
@@ -121,6 +125,10 @@ def host_handoff_smoke(bin_dir, source_revision, manifest):
             ready_path = ready_files[0]
             try:
                 ready = read_private(ready_path)
+                prompt = (ready_path.parent / "prompt.txt").read_bytes()
+                if (ready.get("host_protocol") != "knowledge-host-v2"
+                        or ready.get("prompt_sha256") != hashlib.sha256(prompt).hexdigest()):
+                    raise AssertionError("operator prompt identity mismatch")
                 adapter = RecordedSample.__new__(RecordedSample)
                 adapter.url, adapter.owner = ready["loopback_url"], read_private(state / "connection.json")["owner"]
                 adapter.rpc_id, adapter.calls = 0, []

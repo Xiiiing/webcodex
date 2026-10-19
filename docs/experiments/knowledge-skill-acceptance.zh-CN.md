@@ -43,6 +43,16 @@ bootstrap-only 和 driver 自报成功均不能证明通过。
 Host 提示明确要求在最终 JSON 之前单独报告 canonical Session ID。
 早期已保存提示要求将 ID 与最终 JSON 一同回报，对两者是否分开存在歧义；
 保留这些提示的原始答案及冻结规则判断，并在报告中将提示歧义与事实正确性分别说明。
+v2 Host 协议进一步明确现有 recorder 契约：在 Project/资源发现前只 bootstrap 一次，保留精确 Session，
+相关 MCP 调用通过 `_wc.record` 记录，包括没有业务 `session_id` 参数的调用。
+记录元数据不能作为额外业务选择器加入已绑定资源调用。
+检查点暂停与确认通过同一个 ChatGPT 对话传递，不通过 UI 卡片或 Session 消息等待操作人员。
+这些说明不指定知识/Skill 工具名或检索顺序。
+私有 `ready.json` 记录协议版本与完整提示的 SHA-256。
+已获授权的补采保留首轮尝试和结果文件，使用独立输出，并固定自身源码与配置身份。
+知识验收器将 Session 控制消息的精确授权目标与文件系统工作分别绑定，
+仍核对捕获中的 Window/principal 及返回的 Session 身份；消息不能作为来源读取证据。
+通用 Project 绑定与缺失 Window 的拒绝规则保持不变。
 
 两个更新场景在完整首次读取后暂停。协调器独立核对精确 Workflow Session 中的读取，
 再修改唯一允许的来源文件，之后模型在原会话继续。

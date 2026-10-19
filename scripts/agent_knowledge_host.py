@@ -236,8 +236,16 @@ def drive(args):
         sample.prepare()
         prompt = (f'This is sample {sample_id}, case {required["CASE_ID"]}. Start a fresh ChatGPT Web conversation. '
             f'Work only in the existing checkout at {required["WORKSPACE"]}, on Runner {sample.client_id}; '
-            'bootstrap that exact path and retain the returned canonical Workflow Session identity. '
-            'Record relevant tool calls to that exact Session. Report the canonical Session ID separately, before the final JSON. '
+            'before any Project/resource discovery, bootstrap that exact path and retain the returned canonical Workflow Session identity. '
+            'Bootstrap once; resume the same canonical Session rather than creating another one. '
+            'Record relevant tool calls to that exact Session using the MCP recorder metadata _wc.record '
+            '(the canonical Session ID or its returned session_ref), including calls without a business session_id field. '
+            'Recorder metadata does not add business Project or Session arguments to a bound resource call. '
+            'The operator checkpoint is coordinated in this ChatGPT conversation: return a plain-text pause and wait for the user. '
+            'Do not open UI cards or send Session messages to request or wait for the operator checkpoint. '
+            'When the case requires knowledge or Skill resources, retain actual source ranges and hash/revision evidence; '
+            'a description alone is not a source read, and filesystem facts alone do not establish the required resource path. '
+            'Report the canonical Session ID separately, before the final JSON. '
             'The final JSON must have exactly the keys facts and sources; facts must be a list of key=value strings. '
             'Keep Session metadata outside that JSON.\n\n'
             + required["PROMPT"])
@@ -249,7 +257,9 @@ def drive(args):
             "loopback_url": sample.url, "project": sample.project, "runner": sample.client_id,
             "coordination": required["FIXTURE_COORDINATION"], "audit_db": str(state / "data/webcodex.db"),
             "case_fingerprint": required["CASE_FINGERPRINT"], "base_revision": required["BASE_REVISION"],
-            "model_config_digest": config_digest, "runtime_identity": builds})
+            "model_config_digest": config_digest, "runtime_identity": builds,
+            "host_protocol": "knowledge-host-v2",
+            "prompt_sha256": hashlib.sha256((prompt + "\n").encode("utf-8")).hexdigest()})
         deadline = time.monotonic() + 29 * 60
         submitted = sample_root / "submission.json"
         while not submitted.exists():

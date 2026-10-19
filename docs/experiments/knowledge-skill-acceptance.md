@@ -49,6 +49,20 @@ The Host prompt explicitly asks for the canonical Session ID separately before
 the final JSON. Earlier saved prompts asking for the ID "with your final JSON"
 are ambiguous about that separation; retain their original answers and rubric
 verdicts, and report this prompt confound alongside factual correctness.
+The v2 Host protocol also makes the existing recorder contract explicit:
+bootstrap once before Project/resource discovery, retain the exact Session, and use `_wc.record` for relevant MCP
+calls, including calls without a business `session_id`. Recorder metadata must
+not be added as extra business selectors to a bound resource call. Operator
+pauses and confirmations travel through the same ChatGPT conversation, without
+opening UI cards or using Session messages as an operator transport. These
+instructions do not prescribe a knowledge/Skill tool name or retrieval order.
+Private `ready.json` records the protocol version and exact prompt SHA-256.
+An authorized supplemental collection retains the original attempts and result
+file, uses a separate output, and freezes its own source/configuration identity.
+The knowledge verifier binds Session-only control messages to their exact
+authorized target separately from filesystem work. It still verifies their
+recorded Window/principal and returned Session identity; they supply no source
+evidence. Generic Project binding and missing-Window rejection remain unchanged.
 
 The update cases pause after the first complete resource read. The coordinator
 independently verifies that read in the exact Workflow Session before changing

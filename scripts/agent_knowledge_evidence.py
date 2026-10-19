@@ -140,6 +140,38 @@ def read_calls(events, root, session):
     return calls
 
 
+def _bind_fixture(calls, fixture_root, workflow_session_id):
+    """Bind Project work normally; messages carry Session authority, not files."""
+    messages = [call for call in calls if call["tool"] == "post_session_message"]
+    project_calls = [call for call in calls if call["tool"] != "post_session_message"]
+    projects = trace._bind_fixture(project_calls, fixture_root, workflow_session_id)
+    bootstraps = [call for call in project_calls if call["tool"] == "work_on_project"
+                  and call["result"]["success"] is True]
+    allowed_arguments = {"session_id", "kind", "message", "tags", "reply_to", "priority",
+                         "requires_ack", "delivery_key"}
+    for call in messages:
+        args, output = call["arguments"], call["output"]
+        sessions = {workflow_session_id}
+        observed_bootstraps = [bootstrap for bootstrap in bootstraps
+                               if bootstrap["ended"] <= call["started"]]
+        for bootstrap in observed_bootstraps:
+            reference = bootstrap["output"].get("session_ref")
+            if isinstance(reference, str) and re.fullmatch(r"~s[1-9][0-9]{0,18}", reference):
+                sessions.add(reference)
+        message = output.get("message")
+        if (not observed_bootstraps or set(args) - allowed_arguments
+                or not isinstance(args.get("session_id"), str)
+                or args["session_id"] not in sessions
+                or call["project"] not in (None, *projects)
+                or call["result"]["success"] is not True
+                or output.get("session_id") != workflow_session_id
+                or not isinstance(message, dict)
+                or message.get("session_id") != workflow_session_id
+                or message.get("author_session_id") not in (None, workflow_session_id)):
+            raise trace.EvidenceUnavailable("fixture_binding_mismatch")
+    return projects
+
+
 def _coverage(root, events):
     trace._coverage(root, events)
     selected = {event.get("server_trace_id") for event in events if event.get("action_name") == "toolsCall"}
@@ -313,7 +345,7 @@ def advance_after_read(*, capture_root, audit_db, workflow_session_id, fixture, 
     events = trace._audit_events(audit_db, workflow_session_id)
     _coverage(root, events)
     calls = read_calls(events, root, workflow_session_id)
-    projects = trace._bind_fixture(calls, fixture.root, workflow_session_id)
+    projects = _bind_fixture(calls, fixture.root, workflow_session_id)
     selected = next((call for call in calls if call["trace_id"] == trace_id), None)
     if selected is None or selected["result"]["success"] is not True:
         raise ValueError("update requires the actual first read")
@@ -349,7 +381,7 @@ def verify(*, capture_root, audit_db, workflow_session_id, fixture, base_revisio
         events = trace._audit_events(audit_db, workflow_session_id)
         _coverage(root, events)
         calls = read_calls(events, root, workflow_session_id)
-        projects = trace._bind_fixture(calls, fixture.root, workflow_session_id)
+        projects = _bind_fixture(calls, fixture.root, workflow_session_id)
         checks, adoption = check_calls(calls, fixture, projects, advance)
         checks.update(fixture_root_session_project=True, fixture_integrity=fixture.oracle()["passed"] is True,
                       answer_facts_and_citations=check_answer(answer, fixture))
