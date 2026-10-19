@@ -32,7 +32,7 @@ MAX_ANSWER_BYTES = 32 * 1024
 SETUP = frozenset(("work_on_project", "read_tool_manifest", "get_runtime_status", "list_projects"))
 
 
-def _source_match(item, source, *, hash_key=None):
+def _source_match(item, source, *, hash_key=None, numbered=False):
     """Match returned source bytes/range, never a caller's citation alone."""
     start, end, text = item.get("start_line"), item.get("end_line"), item.get("text")
     lines = source["text"].splitlines()
@@ -41,7 +41,13 @@ def _source_match(item, source, *, hash_key=None):
         return False
     if hash_key is not None and item.get(hash_key) != source["source_hash"]:
         return False
-    return text.removesuffix("\n") == "\n".join(lines[start - 1:end])
+    selected = lines[start - 1:end]
+    # Match the canonical read_files renderer exactly, including each line's
+    # number and delimiter. Never strip arbitrary prefixes from source text.
+    expected = "\n".join(selected)
+    if numbered:
+        expected = "\n".join(f"{start + index} | {line}" for index, line in enumerate(selected))
+    return text.removesuffix("\n") == expected
 
 
 def _walk(value, depth=0):
@@ -272,7 +278,8 @@ def check_calls(calls, fixture, projects, advance=None):
                         block.setdefault("start_line", matches[0].get("start_line", 1))
                     if "end_line" not in block and isinstance(block.get("text"), str) and type(block.get("start_line")) is int:
                         block["end_line"] = block["start_line"] + len(block["text"].splitlines()) - 1
-                    if not _source_match(block, source):
+                    if not _source_match(block, source, numbered=(
+                            tool == "read_files" and block.get("format") == "numbered")):
                         raise trace.EvidenceUnavailable("fixture_binding_mismatch")
                     observed[stage].add(path)
                     first_sources.setdefault(call["trace_id"], set()).add(path)

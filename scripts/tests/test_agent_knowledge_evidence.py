@@ -78,6 +78,31 @@ class KnowledgeSemanticsTests(unittest.TestCase):
         self.assertEqual(adoption, {"knowledge_plugin": False, "skill": False})
         self.assertTrue(evidence.check_answer(answer(fixture), fixture))
 
+    def test_numbered_read_matches_exact_canonical_line_prefixes(self):
+        fixture = self.fixture()
+        calls = ordinary_reads(fixture)
+        block = calls[0]["output"]["items"][0]["output"]
+        # Exercise a selected range starting after line one, as well as full reads.
+        for start in (1, 2):
+            with self.subTest(start=start):
+                source = fixture.sources()[0]
+                block.update(format="numbered", start_line=start,
+                    text="\n".join(f"{index} | {line}" for index, line in
+                        enumerate(source["text"].splitlines()[start - 1:], start)))
+                checks, adoption = self.check(fixture, calls)
+                self.assertTrue(all(checks.values()), checks)
+                self.assertEqual(adoption, {"knowledge_plugin": False, "skill": False})
+        for text in ("1 | invented", block["text"].replace("2 | ", "02 | "),
+                     block["text"].replace("3 | ", "4 | "),
+                     block["text"].replace("2 | ", "2: ")):
+            wrong = copy.deepcopy(calls)
+            wrong[0]["output"]["items"][0]["output"]["text"] = text
+            with self.subTest(text=text), self.assertRaises(trace.EvidenceUnavailable):
+                self.check(fixture, wrong)
+        block["format"] = "plain"
+        with self.assertRaises(trace.EvidenceUnavailable):
+            self.check(fixture, calls)
+
     def test_directed_ordinary_reads_prove_content_but_not_requested_resource(self):
         for case in ("knowledge_paraphrase", "knowledge_skill_read"):
             with self.subTest(case=case):

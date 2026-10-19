@@ -78,7 +78,8 @@ class RecordedSample(HostSample):
                 "path": "reference.md", "expected_definition_revision": definition["definition_revision"]}, direct=True)
         else:
             self.call("read_files", {"project": self.project_ref,
-                "items": [{"path": path} for path in fixture.required_sources]}, direct=True)
+                "items": [{"path": path} for path in fixture.required_sources],
+                "with_line_numbers": True}, direct=True)
 
 
 def host_handoff_smoke(bin_dir, source_revision, manifest):
