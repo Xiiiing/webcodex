@@ -52,6 +52,16 @@ second static selected button:
 
 ![Runtime message kind selection during motion](runtime-message-motion.png)
 
+Short browser recordings from the passing fixtures are included for review:
+
+- [Desktop category and activity motion](desktop-motion.webm)
+- [Runtime tabs and segmented controls](runtime-motion.webm)
+- [Workbench project navigation and context](workbench-motion.webm)
+
+The recordings include deterministic paused intermediate frames used by the
+assertions, as well as live interactions. They are synthetic browser fixtures,
+with no live user data.
+
 ## Reproducing the checks
 
 Build frontend and Desktop, then run:
