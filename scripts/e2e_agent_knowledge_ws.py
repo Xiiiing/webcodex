@@ -134,7 +134,7 @@ def host_handoff_smoke(bin_dir, source_revision, manifest):
             try:
                 ready = read_private(ready_path)
                 prompt = (ready_path.parent / "prompt.txt").read_bytes()
-                if (ready.get("host_protocol") != "knowledge-host-v2"
+                if (ready.get("host_protocol") != "knowledge-host-v3"
                         or ready.get("prompt_sha256") != hashlib.sha256(prompt).hexdigest()):
                     raise AssertionError("operator prompt identity mismatch")
                 adapter = RecordedSample.__new__(RecordedSample)

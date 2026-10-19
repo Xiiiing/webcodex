@@ -64,6 +64,27 @@ def read_private(path):
     return value
 
 
+def collection_identity(base_revision, model_config):
+    if re.fullmatch(r"[0-9a-f]{40}", base_revision) is None:
+        raise ValueError("collection source revision must be exact")
+    model = read_private(model_config)
+    if model.get("host") != "chatgpt_web":
+        raise ValueError("model configuration must identify ChatGPT Web")
+    digest = hashlib.sha256(json.dumps(model, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return {"base_revision": base_revision, "model_config_digest": digest}
+
+
+def stopped_collection(state, identity):
+    path = state / "collection-stop.json"
+    if not path.exists():
+        return None
+    value = read_private(path)
+    if (set(value) != {*identity, "reason"} or any(value.get(key) != item for key, item in identity.items())
+            or not isinstance(value["reason"], str) or not 1 <= len(value["reason"].strip()) <= 1024):
+        raise ValueError("collection stop request does not match this collection")
+    return value
+
+
 def archive_capture(source, destination):
     """Retain only bounded private regular trace files, without following links."""
     source = Path(source)
@@ -224,10 +245,15 @@ def drive(args):
         if required["CASE_ID"] not in CASE_IDS or os.environ.get("WEBCODEX_BENCH_TARGET") != "knowledge_skill_disposable_fixture":
             raise ValueError("knowledge driver requires an admitted knowledge fixture")
         builds = runtime_identity(args.bin_dir, required["BASE_REVISION"], require_clean=True)
-        model_record = read_private(args.model_config)
-        if model_record.get("host") != "chatgpt_web":
-            raise ValueError("model configuration must identify ChatGPT Web")
-        config_digest = hashlib.sha256(json.dumps(model_record, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        identity = collection_identity(required["BASE_REVISION"], args.model_config)
+        config_digest = identity["model_config_digest"]
+        stop = stopped_collection(state, identity)
+        if stop is not None:
+            # Only subsequent drivers observe this request. Never interrupt an
+            # active model sample or invent its Session, answer or execution.
+            write_private(Path(required["DRIVER_RESULT"]), {"status": "unsupported",
+                "reason_code": "operator_stopped_before_model_execution", "model_samples": 0})
+            return 0
         sample_id = uuid.uuid4().hex
         parent = private_directory(state / "samples")
         sample_root = private_directory(parent / sample_id)
@@ -241,8 +267,10 @@ def drive(args):
             'Record relevant tool calls to that exact Session using the MCP recorder metadata _wc.record '
             '(the canonical Session ID or its returned session_ref), including calls without a business session_id field. '
             'Recorder metadata does not add business Project or Session arguments to a bound resource call. '
-            'The operator checkpoint is coordinated in this ChatGPT conversation: return a plain-text pause and wait for the user. '
-            'Do not open UI cards or send Session messages to request or wait for the operator checkpoint. '
+            'Pause only if the case below explicitly requests a source/definition-change checkpoint. '
+            'For such a checkpoint, return a plain-text pause in this ChatGPT conversation and wait for the user. '
+            'Otherwise proceed directly to the final answer without operator approval. '
+            'Do not open UI cards or send Session messages to request or wait for a checkpoint. '
             'When the case requires knowledge or Skill resources, retain actual source ranges and hash/revision evidence; '
             'a description alone is not a source read, and filesystem facts alone do not establish the required resource path. '
             'Report the canonical Session ID separately, before the final JSON. '
@@ -258,7 +286,7 @@ def drive(args):
             "coordination": required["FIXTURE_COORDINATION"], "audit_db": str(state / "data/webcodex.db"),
             "case_fingerprint": required["CASE_FINGERPRINT"], "base_revision": required["BASE_REVISION"],
             "model_config_digest": config_digest, "runtime_identity": builds,
-            "host_protocol": "knowledge-host-v2",
+            "host_protocol": "knowledge-host-v3",
             "prompt_sha256": hashlib.sha256((prompt + "\n").encode("utf-8")).hexdigest()})
         deadline = time.monotonic() + 29 * 60
         submitted = sample_root / "submission.json"
@@ -296,6 +324,13 @@ def main(argv=None):
     run.add_argument("--bin-dir", type=Path, required=True)
     run.add_argument("--model-config", type=Path, required=True)
     run.add_argument("--public-url")
+    for name in ("stop-after-current", "resume-collection"):
+        item = commands.add_parser(name)
+        item.add_argument("--state-dir", type=Path, required=True)
+        item.add_argument("--base-revision", required=True)
+        item.add_argument("--model-config", type=Path, required=True)
+        if name == "stop-after-current":
+            item.add_argument("--reason", required=True)
     for name in ("submit", "checkpoint", "info"):
         item = commands.add_parser(name)
         item.add_argument("--sample-dir", type=Path, required=True)
@@ -313,6 +348,19 @@ def main(argv=None):
     try:
         if args.command == "drive":
             return drive(args)
+        if args.command in {"stop-after-current", "resume-collection"}:
+            state = private_directory(args.state_dir)
+            identity = collection_identity(args.base_revision, args.model_config)
+            path = state / "collection-stop.json"
+            if args.command == "stop-after-current":
+                if not 1 <= len(args.reason.strip()) <= 1024:
+                    raise ValueError("stop reason must be bounded and nonempty")
+                write_private(path, identity | {"reason": args.reason})
+            else:
+                if stopped_collection(state, identity) is None:
+                    raise ValueError("no matching collection stop request")
+                path.rename(state / ("collection-stop-" + uuid.uuid4().hex + ".json"))
+            return 0
         ready = read_private(args.sample_dir / "ready.json")
         if args.command == "info":
             print(json.dumps(ready, ensure_ascii=False, indent=2))

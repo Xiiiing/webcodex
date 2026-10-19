@@ -150,12 +150,48 @@ class PrivateHostHandoffTests(unittest.TestCase):
             env = {"WEBCODEX_BENCH_" + key: "test" for key in ("WORKSPACE", "CASE_ID", "BASE_REVISION",
                 "CASE_FINGERPRINT", "PROMPT", "DRIVER_RESULT", "FIXTURE_COORDINATION", "TEMPORAL_TRACE_ROOT")}
             env.update(WEBCODEX_BENCH_CASE_ID="knowledge_identifier", WEBCODEX_BENCH_TARGET=evidence.TARGET)
+            env["WEBCODEX_BENCH_BASE_REVISION"] = "a" * 40
             sample = Mock(); sample.prepare.side_effect = ValueError("prepare failed after launch")
             with patch.dict(os.environ, env), patch.object(host, "runtime_identity", return_value={}), patch.object(host, "HostSample", return_value=sample):
                 with self.assertRaises(ValueError):
                     host.drive(args)
             sample.close.assert_called_once()
             self.assertFalse((root / "active.lock").exists())
+
+    def test_stop_after_current_never_launches_future_sample_or_invents_model_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            model = root / "model.json"; write_private(model, {"host": "chatgpt_web"})
+            identity = host.collection_identity("a" * 40, model)
+            write_private(root / "collection-stop.json", identity | {"reason": "repair evaluator"})
+            env = {"WEBCODEX_BENCH_" + key: "test" for key in ("WORKSPACE", "CASE_ID", "BASE_REVISION",
+                "CASE_FINGERPRINT", "PROMPT", "DRIVER_RESULT", "FIXTURE_COORDINATION", "TEMPORAL_TRACE_ROOT")}
+            env.update(WEBCODEX_BENCH_CASE_ID="knowledge_identifier", WEBCODEX_BENCH_TARGET=evidence.TARGET,
+                WEBCODEX_BENCH_BASE_REVISION="a" * 40, WEBCODEX_BENCH_DRIVER_RESULT=str(root / "receipt.json"))
+            args = argparse.Namespace(state_dir=root, bin_dir=root, model_config=model, public_url=None)
+            with patch.dict(os.environ, env), patch.object(host, "runtime_identity", return_value={}), patch.object(host, "HostSample") as sample:
+                self.assertEqual(host.drive(args), 0)
+            sample.assert_not_called()
+            self.assertEqual(read_private(root / "receipt.json"), {"status": "unsupported",
+                "reason_code": "operator_stopped_before_model_execution", "model_samples": 0})
+            self.assertFalse((root / "active.lock").exists())
+            self.assertFalse((root / "samples").exists())
+
+    def test_collection_stop_rejects_other_source_configuration_and_replays(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            model = root / "model.json"; write_private(model, {"host": "chatgpt_web"})
+            common = ["--state-dir", str(root), "--base-revision", "a" * 40, "--model-config", str(model)]
+            self.assertEqual(host.main(["stop-after-current", *common, "--reason", "repair evaluator"]), 0)
+            with self.assertRaises(ValueError):
+                host.stopped_collection(root, host.collection_identity("b" * 40, model))
+            with self.assertRaises(ValueError):
+                host.stopped_collection(root, {"base_revision": "a" * 40, "model_config_digest": "other"})
+            self.assertEqual(host.main(["stop-after-current", *common, "--reason", "overwrite"]), 2)
+            self.assertEqual(host.main(["resume-collection", *common]), 0)
+            self.assertIsNone(host.stopped_collection(root, host.collection_identity("a" * 40, model)))
+            self.assertEqual(len(list(root.glob("collection-stop-*.json"))), 1)
+            self.assertEqual(host.main(["resume-collection", *common]), 2)
 
     def test_handoffs_are_private_exclusive_and_bounded(self):
         with tempfile.TemporaryDirectory() as temporary:

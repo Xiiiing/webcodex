@@ -43,10 +43,12 @@ bootstrap-only 和 driver 自报成功均不能证明通过。
 Host 提示明确要求在最终 JSON 之前单独报告 canonical Session ID。
 早期已保存提示要求将 ID 与最终 JSON 一同回报，对两者是否分开存在歧义；
 保留这些提示的原始答案及冻结规则判断，并在报告中将提示歧义与事实正确性分别说明。
-v2 Host 协议进一步明确现有 recorder 契约：在 Project/资源发现前只 bootstrap 一次，保留精确 Session，
+Host 协议进一步明确现有 recorder 契约：在 Project/资源发现前只 bootstrap 一次，保留精确 Session，
 相关 MCP 调用通过 `_wc.record` 记录，包括没有业务 `session_id` 参数的调用。
 记录元数据不能作为额外业务选择器加入已绑定资源调用。
 检查点暂停与确认通过同一个 ChatGPT 对话传递，不通过 UI 卡片或 Session 消息等待操作人员。
+v3 将暂停限定为两个更新场景。早期 v2 公共前缀可能造成不必要暂停，须保留原始回复，
+并单独记录操作人员的澄清，不将其描述为模型自主完成。
 这些说明不指定知识/Skill 工具名或检索顺序。
 私有 `ready.json` 记录协议版本与完整提示的 SHA-256。
 已获授权的补采保留首轮尝试和结果文件，使用独立输出，并固定自身源码与配置身份。
@@ -139,6 +141,13 @@ driver 关闭专属服务、保留有界私有捕获后返回候选回执，由�
 沿用每个 driver 30 分钟进程组限制，须在 29 分钟内提交。
 人工中断不能算合格测量。仅关闭本任务拥有的进程，保留已有实验环境。
 
+需要在当前样本结束后保存结果并停止后续采集时，使用 `stop-after-current`，提供
+`--state-dir`、`--base-revision`、`--model-config` 和有界 `--reason`。
+私有停止请求绑定精确源码和配置，不中断活动样本；后续 driver 在启动 Server、Runner 或模型
+会话前返回 `unsupported`。这些未执行案例不计为模型尝试。等待父进程保存原始结果后，
+用相同身份执行 `resume-collection` 归档停止请求，再开始独立续采。
+不得覆盖此前输出；不同协议版本须分别记录身份和结果。
+
 ## 核验与限制
 
 [`agent_knowledge_evidence.py`](../../scripts/agent_knowledge_evidence.py)
@@ -147,6 +156,11 @@ driver 关闭专属服务、保留有界私有捕获后返回候选回执，由�
 不允许的修改、错误 Project、缺少捕获、陈旧来源及伪造回执均不能通过。
 缺失或歧义证据为 `partial`，已观察到的验收失败为 `fail`，不支持的 adapter 保持 `unsupported`。
 原有 strict 失败仍为失败。证据完整、可归因的模型失败是有效测量，但 `--strict` 仍返回非零。
+
+部分 Plugin 参数解析拒绝发生在 Session 记录和 Provider 执行之前。仅当审计中的 Window/principal
+精确匹配、原始参数和错误捕获完整、错误为已知校验拒绝、无 Session 关联且没有运行时阶段时，
+知识验收器才单独计数。它不算 canonical Session 调用，也不提供来源证据。
+未知、其他范围、损坏或包含运行时阶段的捕获仍不完整；通用 trace coverage 保持不变。
 
 native Plugin 捕获会脱敏 opaque binding 和嵌套参数。因此核验结合实际 Project-bound describe、
 返回来源 hash、精确 Session 和协调器固定的唯一 Provider，不声称能还原或独立比较已脱敏 binding。

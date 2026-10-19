@@ -399,6 +399,7 @@ class KnowledgeCaptureTests(unittest.TestCase):
         self.assertTrue(result["passed"], result)
         self.assertEqual(set(result["checks"]), evidence.CHECK_NAMES)
         self.assertEqual(result["canonical_call_count"], 2)
+        self.assertEqual(result["adapter_rejection_count"], 0)
         self.assertEqual(result["resource_adoption"], {"knowledge_plugin": False, "skill": False})
         serialized = json.dumps(result)
         for private in (str(self.fixture.root), self.bootstrap, self.read_trace, "wc_sess_test"):
@@ -416,6 +417,74 @@ class KnowledgeCaptureTests(unittest.TestCase):
         self.assertEqual(result["canonical_call_count"], 3)
         with sqlite3.connect(self.audit.audit_db) as connection:
             connection.execute("UPDATE action_events SET client_window_key='foreign' WHERE event_id=?", (identity,))
+        self.assertFalse(self.verify()["available"])
+
+    def parser_rejection(self):
+        self.trace = str(uuid.uuid4())
+        self.directory = self.root / self.trace
+        self.directory.mkdir(mode=0o700)
+        (self.directory / "payloads").mkdir(mode=0o700)
+        self.private_write(self.directory / ".webcodex-tool-trace", b"")
+        self.events = []
+        self.audit.insert_event(self.trace, tool="plugin_tool", trace_id=self.trace,
+            status="failed", success=False, link=False, include_telemetry=False)
+        self.payload("raw_arguments", {"action": "call", "runner": None, "plugin": None,
+            "tool": None, "binding_present": True, "arguments_present": True})
+        self.payload("final_response", {"jsonrpc": "2.0", "id": 1, "error": {
+            "code": -32602, "message": evidence._PLUGIN_PROJECT_VALIDATION_ERROR}})
+        for name in ("mcp_tool_dispatch_failed", "mcp_tool_dispatch_finished", "mcp_tool_handler_returned"):
+            self.events.append({"server_trace_id": self.trace, "event": name, "tool_name": "plugin_tool",
+                "client_window_key": "hashed-window-a", "protocol_success": False,
+                "tool_success": False, "http_status": 400,
+                "category": "bad_request" if name.endswith("handler_returned") else "invalid_arguments"})
+        self.flush()
+        return self.trace
+
+    def test_captured_parser_rejection_is_not_session_execution_or_source_evidence(self):
+        self.parser_rejection()
+        result = self.verify()
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["canonical_call_count"], 2)
+        self.assertEqual(result["adapter_rejection_count"], 1)
+        self.assertEqual(result["resource_adoption"], {"knowledge_plugin": False, "skill": False})
+        selected = trace._audit_events(self.audit.audit_db, "wc_sess_test")
+        trace._coverage(self.root, selected)
+        # Without independent audit provenance the extra trace remains unverified.
+        with self.assertRaises(trace.EvidenceUnavailable):
+            evidence._coverage(self.root, selected)
+
+    def test_parser_rejection_rejects_unknown_foreign_corrupt_and_runtime_evidence(self):
+        identity = self.parser_rejection()
+        original = copy.deepcopy(self.events)
+        for field, value in (("principal_correlation_id", "foreign"), ("client_window_key", "foreign"),
+                             ("status", "success"), ("operation", "read_files")):
+            with sqlite3.connect(self.audit.audit_db) as connection:
+                connection.execute(f"UPDATE action_events SET {field}=? WHERE event_id=?", (value, identity))
+            self.assertFalse(self.verify()["available"], field)
+            with sqlite3.connect(self.audit.audit_db) as connection:
+                original_value = {"principal_correlation_id": "principal-a", "client_window_key": "hashed-window-a",
+                                  "status": "failed", "operation": "plugin_tool"}[field]
+                connection.execute(f"UPDATE action_events SET {field}=? WHERE event_id=?", (original_value, identity))
+        with sqlite3.connect(self.audit.audit_db) as connection:
+            connection.execute("INSERT INTO action_event_workflow_links VALUES (?,?)", (identity, "foreign-session"))
+        self.assertFalse(self.verify()["available"])
+        with sqlite3.connect(self.audit.audit_db) as connection:
+            connection.execute("DELETE FROM action_event_workflow_links WHERE event_id=?", (identity,))
+        variants = []
+        wrong = copy.deepcopy(original); wrong[0]["payload_sha256"] = "f" * 64; variants.append(wrong)
+        wrong = copy.deepcopy(original); wrong[-1]["http_status"] = 200; variants.append(wrong)
+        wrong = copy.deepcopy(original); wrong[-1]["client_window_key"] = "foreign"; variants.append(wrong)
+        for event in ({"event": "tool_runner_request_enqueued"}, {"phase": "kernel_arguments"},
+                      {"phase": "effective_arguments"},
+                      {"event": "tool_trace_payload_captured", "phase": "runner_result"}):
+            variants.append(original + [dict(event, server_trace_id=identity)])
+        for wrong in variants:
+            self.events = wrong; self.flush()
+            self.assertFalse(self.verify()["available"])
+        self.events = []
+        self.payload("raw_arguments", {"action": "call"})
+        self.payload("final_response", {"error": {"code": -32602, "message": "unknown rejection"}})
+        self.events.extend(original[2:]); self.flush()
         self.assertFalse(self.verify()["available"])
 
     def test_bootstrap_only_is_unavailable_even_with_correct_final_answer(self):

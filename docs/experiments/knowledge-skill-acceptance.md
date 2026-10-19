@@ -49,13 +49,16 @@ The Host prompt explicitly asks for the canonical Session ID separately before
 the final JSON. Earlier saved prompts asking for the ID "with your final JSON"
 are ambiguous about that separation; retain their original answers and rubric
 verdicts, and report this prompt confound alongside factual correctness.
-The v2 Host protocol also makes the existing recorder contract explicit:
+The Host protocol makes the existing recorder contract explicit:
 bootstrap once before Project/resource discovery, retain the exact Session, and use `_wc.record` for relevant MCP
 calls, including calls without a business `session_id`. Recorder metadata must
 not be added as extra business selectors to a bound resource call. Operator
 pauses and confirmations travel through the same ChatGPT conversation, without
 opening UI cards or using Session messages as an operator transport. These
 instructions do not prescribe a knowledge/Skill tool name or retrieval order.
+Version 3 makes pauses conditional on the two update cases. Earlier v2 samples
+can pause unnecessarily because its common prefix requested a checkpoint;
+preserve these replies and record any operator clarification separately.
 Private `ready.json` records the protocol version and exact prompt SHA-256.
 An authorized supplemental collection retains the original attempts and result
 file, uses a separate output, and freezes its own source/configuration identity.
@@ -165,6 +168,16 @@ status. Each driver has the existing 30-minute process-group limit; submission
 must arrive within 29 minutes. An interrupted operator run is not a qualified
 measurement. Stop only task-owned processes; keep existing experiments intact.
 
+To drain a collection after its active sample, use `stop-after-current` with
+`--state-dir`, `--base-revision`, `--model-config` and a bounded `--reason`.
+This owner-only request is pinned to that source/configuration. It leaves the
+active sample running; subsequent drivers return `unsupported` before starting
+any Server, Runner or model session. These unexecuted cases are not model
+attempts. Let the parent save its original result, then use `resume-collection`
+with the same identity to archive the request before a separate continuation.
+Never overwrite the previous output or mix protocol versions without reporting
+their separate identities.
+
 ## Evidence and limitations
 
 [`agent_knowledge_evidence.py`](../../scripts/agent_knowledge_evidence.py) reuses
@@ -177,6 +190,14 @@ Missing or ambiguous evidence is `partial`; an observed failed acceptance check
 is `fail`; unsupported adapters stay `unsupported`. Existing strict failures
 remain failures. A failed model attempt with complete attributable evidence is
 a valid measurement, even though `--strict` exits nonzero.
+
+An exactly recognized Plugin argument-parser rejection can be fully captured
+before Session recording and provider execution. The knowledge checker counts
+it separately only with matching audited Window/principal, intact raw/error
+payloads, the known validation error, no Session link, and no runtime phases.
+It supplies neither a canonical Session call nor source evidence. Unknown,
+foreign, corrupt or runtime-bearing traces remain incomplete evidence; generic
+trace coverage is unchanged.
 
 Native Plugin captures redact opaque bindings and nested arguments. The checker
 therefore combines an observed Project-bound description with returned source

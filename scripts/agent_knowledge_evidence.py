@@ -172,17 +172,84 @@ def _bind_fixture(calls, fixture_root, workflow_session_id):
     return projects
 
 
-def _coverage(root, events):
+# This exact message is emitted by PluginToolCall.validate before Session
+# canonicalization or provider invocation, not by a provider/runtime failure.
+_PLUGIN_PROJECT_VALIDATION_ERROR = (
+    "invalid arguments for tool 'plugin_tool': "
+    "project must be an exact bounded Project on action=describe")
+
+
+def _captured_plugin_rejection(root, identity, index, selected, audit_db):
+    """Recognize an audited adapter rejection without assigning it a Session."""
+    if audit_db is None or len(index) > 4096:
+        return False
+    scope_fields = ("client_window_key", "principal_correlation_kind", "principal_correlation_id")
+    scopes = {tuple(event.get(key) for key in scope_fields) for event in selected
+              if event.get("action_name") == "toolsCall"}
+    if len(scopes) != 1 or not all(isinstance(value, str) and value for value in next(iter(scopes))):
+        return False
+    scope = next(iter(scopes))
+    allowed_events = {"mcp_tool_request_received", "mcp_request_policy_selected", "mcp_tool_request_parsed",
+        "tool_trace_diagnostic", "tool_trace_payload_captured", "mcp_tool_dispatch_started",
+        "mcp_tool_dispatch_failed", "mcp_tool_dispatch_finished", "mcp_tool_response_serialized",
+        "mcp_tool_handler_returned"}
+    if any(item.get("event") not in allowed_events
+           or item.get("phase") in {"effective_arguments", "kernel_arguments"}
+           or (item.get("event") == "tool_trace_payload_captured"
+               and item.get("phase") not in {"raw_arguments", "final_response"})
+           or item.get("tool_name") not in (None, "plugin_tool")
+           or item.get("client_window_key") not in (None, scope[0]) for item in index):
+        return False
+    for name in ("mcp_tool_dispatch_failed", "mcp_tool_dispatch_finished", "mcp_tool_handler_returned"):
+        matches = [item for item in index if item.get("event") == name]
+        if len(matches) != 1:
+            return False
+        event = matches[0]
+        if event.get("client_window_key") != scope[0] or event.get("protocol_success") is not False:
+            return False
+        if name == "mcp_tool_handler_returned":
+            if event.get("http_status") != 400 or event.get("category") != "bad_request":
+                return False
+        elif event.get("category") != "invalid_arguments" or event.get("tool_success") is not False:
+            return False
+    payload = trace._payloads(root, identity, frozenset(("raw_arguments", "final_response")))
+    raw, final = payload["raw_arguments"], payload["final_response"]
+    if (not isinstance(raw, dict) or raw.get("action") not in ("call", "describe")
+            or not isinstance(final, dict) or "result" in final
+            or final.get("error") != {"code": -32602, "message": _PLUGIN_PROJECT_VALIDATION_ERROR}):
+        return False
+    connection = trace.report._open_sqlite_readonly(Path(audit_db))
+    deadline = trace.time.monotonic() + 5
+    try:
+        connection.set_progress_handler(lambda: int(trace.time.monotonic() >= deadline), 10000)
+        rows = connection.execute(f"""SELECT {trace.report._AUDIT_COLUMNS},
+            EXISTS(SELECT 1 FROM action_event_workflow_links l WHERE l.event_id=e.event_id) AS linked
+            FROM action_events e WHERE e.server_trace_id=? LIMIT 2""", (identity,)).fetchall()
+        if len(rows) != 1 or rows[0]["linked"]:
+            return False
+        audit = trace.report._row_to_audit_event(rows[0])
+        return (audit.get("action_name") == "toolsCall" and audit.get("operation") == "plugin_tool"
+                and audit.get("status") == "failed"
+                and tuple(audit.get(key) for key in scope_fields) == scope)
+    finally:
+        connection.close()
+
+
+def _coverage(root, events, *, audit_db=None):
     trace._coverage(root, events)
+    adapter_rejections = 0
     selected = {event.get("server_trace_id") for event in events if event.get("action_name") == "toolsCall"}
     for directory in root.iterdir():
         if directory.name == trace.CAPTURE_MARKER or directory.name in selected:
             continue
-        for line in trace._read(directory / "events.jsonl", trace.MAX_INDEX_BYTES).splitlines():
-            event = json.loads(line)
-            tool = event.get("tool_name")
-            if isinstance(tool, str) and tool not in SETUP:
+        index = [json.loads(line) for line in
+                 trace._read(directory / "events.jsonl", trace.MAX_INDEX_BYTES).splitlines()]
+        if any(isinstance(event.get("tool_name"), str) and event["tool_name"] not in SETUP
+               for event in index):
+            if not _captured_plugin_rejection(root, directory.name, index, events, audit_db):
                 raise trace.EvidenceUnavailable("unlinked_runtime_call")
+            adapter_rejections += 1
+    return adapter_rejections
 
 
 def check_answer(answer, fixture):
@@ -343,7 +410,7 @@ def advance_after_read(*, capture_root, audit_db, workflow_session_id, fixture, 
             or marker.get("fixture_identity") != trace.fixture_identity(fixture.root)):
         raise trace.EvidenceUnavailable("capture_identity_mismatch")
     events = trace._audit_events(audit_db, workflow_session_id)
-    _coverage(root, events)
+    _coverage(root, events, audit_db=audit_db)
     calls = read_calls(events, root, workflow_session_id)
     projects = _bind_fixture(calls, fixture.root, workflow_session_id)
     selected = next((call for call in calls if call["trace_id"] == trace_id), None)
@@ -379,7 +446,7 @@ def verify(*, capture_root, audit_db, workflow_session_id, fixture, base_revisio
                 "case_fingerprint": fingerprint, "fixture_identity": identity}:
             raise trace.EvidenceUnavailable("capture_identity_mismatch")
         events = trace._audit_events(audit_db, workflow_session_id)
-        _coverage(root, events)
+        adapter_rejections = _coverage(root, events, audit_db=audit_db)
         calls = read_calls(events, root, workflow_session_id)
         projects = _bind_fixture(calls, fixture.root, workflow_session_id)
         checks, adoption = check_calls(calls, fixture, projects, advance)
@@ -390,10 +457,10 @@ def verify(*, capture_root, audit_db, workflow_session_id, fixture, base_revisio
         return {"schema_version": 1, "case_id": fixture.case_id, "case_fingerprint": fingerprint,
             "base_revision": base_revision, "fixture_identity": identity, "available": True,
             "passed": all(checks.values()), "checks": checks, "resource_adoption": adoption,
-            "canonical_call_count": len(calls), "reason": None}
+            "canonical_call_count": len(calls), "adapter_rejection_count": adapter_rejections, "reason": None}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError,
             sqlite3.Error, subprocess.SubprocessError):
         return {"schema_version": 1, "case_id": fixture.case_id, "case_fingerprint": fingerprint,
             "base_revision": base_revision, "fixture_identity": identity, "available": False,
             "passed": None, "checks": {}, "resource_adoption": None,
-            "canonical_call_count": None, "reason": "knowledge_evidence_unavailable"}
+            "canonical_call_count": None, "adapter_rejection_count": None, "reason": "knowledge_evidence_unavailable"}
