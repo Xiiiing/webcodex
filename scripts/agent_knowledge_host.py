@@ -97,10 +97,14 @@ def connection(state):
     path = state / "connection.json"
     if path.exists():
         value = read_private(path)
-        if set(value) not in ({"port", "bootstrap"}, {"port", "bootstrap", "owner"}):
+        if set(value) not in ({"port", "bootstrap"}, {"port", "bootstrap", "owner"},
+                              {"port", "bootstrap", "owner", "username"}):
             raise ValueError("invalid private connection state")
         if type(value.get("port")) is not int or not 1024 <= value["port"] <= 65535:
             raise ValueError("invalid private port")
+        if "username" in value and (not isinstance(value["username"], str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", value["username"]) is None):
+            raise ValueError("invalid imported owner username")
         return value
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -147,6 +151,7 @@ class HostSample(InteractiveSmoke):
         self.env.update(HOME=str(sample_root / "home"), XDG_CACHE_HOME=str(sample_root / "cache"))
         (sample_root / "home").mkdir()
         self.connection = connection(state)
+        self.username = self.connection.get("username", "knowledge-owner")
         self.port, self.bootstrap = self.connection["port"], self.connection["bootstrap"]
         self.url = f"http://127.0.0.1:{self.port}"
         if public_url:
@@ -169,9 +174,9 @@ class HostSample(InteractiveSmoke):
     def prepare(self):
         self.start_server()
         if "owner" not in self.connection:
-            check(self.post("/api/users/create", {"username": "knowledge-owner"}, self.bootstrap).get("success") is True,
+            check(self.post("/api/users/create", {"username": self.username}, self.bootstrap).get("success") is True,
                   "fixture account creation failed")
-            self.connection["owner"] = self.pat("knowledge-owner", SCOPES)
+            self.connection["owner"] = self.pat(self.username, SCOPES)
             # This file is created by this driver; replace only the exact owned
             # connection state, never a caller-selected credential path.
             path = self.state / "connection.json"
@@ -181,14 +186,14 @@ class HostSample(InteractiveSmoke):
             os.replace(temporary, path)
         self.owner = self.connection["owner"]
         self.client_id = "knowledge-" + uuid.uuid4().hex[:16]
-        agent = self.post("/api/agent-tokens/create", {"username": "knowledge-owner",
+        agent = self.post("/api/agent-tokens/create", {"username": self.username,
             "client_id": self.client_id, "name": "knowledge-acceptance"}, self.bootstrap)
         check(isinstance(agent.get("token"), str), "fixture Runner enrollment failed")
         registry = self.root / "projects"
         registry.mkdir()
         (registry / "fixture.toml").write_text('id = "fixture"\npath = ' + json.dumps(str(self.workspace)) + '\n')
         settings = [f'server_url = {json.dumps(self.url)}', f'token = {json.dumps(agent["token"])}',
-            f'client_id = {json.dumps(self.client_id)}', 'owner = "knowledge-owner"',
+            f'client_id = {json.dumps(self.client_id)}', f'owner = {json.dumps(self.username)}',
             'transport = "websocket"', f'project_registry_dir = {json.dumps(str(registry))}',
             '[policy]', 'allow_cwd_anywhere = false', f'allowed_roots = {json.dumps([str(self.workspace)])}',
             '[[plugins.providers]]', 'id = "project-knowledge"', 'name = "Project Knowledge"',

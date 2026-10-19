@@ -82,7 +82,12 @@ driver 同时只运行一个隔离的 loopback Server/Runner。
 私有 `samples/<sample-id>/ready.json` 标明 Project、路径和精确源码，
 `prompt.txt` 是应粘贴到新网页会话的任务。
 顺序样本间仅复用本任务专属连接 URL 和认证数据库。
-通过新的独立 tunnel 和测试凭据，沿用正常
+操作人员预先配置的私有 `connection.json` 可在现有 `owner` PAT 之外指定 `username`。
+driver 会将样例 Runner 注册到该精确账号，保持 Project 可见性；默认仍为 `knowledge-owner`。
+有效授权须由操作人员独立配置；driver 不续期过期授权、不导入 token hash，也不修改原生恢复记录。
+复用已有保护记录的 tunnel，须通过受支持的恢复流程沿用原 URL、认证头和日志；
+新的评测状态目录不构成绕过旧记录的授权。
+通过专用测试 tunnel 和测试凭据，沿用正常
 [MCP 连接流程](../MCP.zh-CN.md)及
 [原生 tunnel client](../../crates/webcodex-openai-tunnel/README.md)。
 Secure MCP Tunnel 在本地使用专属 owner 的有 scope 限制的 PAT 转发至 loopback `/mcp`，

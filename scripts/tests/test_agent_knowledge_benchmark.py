@@ -110,6 +110,20 @@ class KnowledgeBenchmarkTests(unittest.TestCase):
 
 
 class PrivateHostHandoffTests(unittest.TestCase):
+    def test_imported_connection_requires_a_bound_owner_and_valid_username(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            for value in ({"port": 20000, "bootstrap": "test", "username": "restored-owner"},
+                          {"port": 20000, "bootstrap": "test", "owner": "test", "username": "../other"}):
+                path = root / "connection.json"
+                write_private(path, value)
+                with self.assertRaises(ValueError):
+                    host.connection(root)
+                path.unlink()
+            value = {"port": 20000, "bootstrap": "test", "owner": "test", "username": "restored-owner"}
+            write_private(root / "connection.json", value)
+            self.assertEqual(host.connection(root), value)
+
     def test_failed_prepare_closes_owned_processes_and_releases_lock(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = private_directory(Path(temporary) / "private")

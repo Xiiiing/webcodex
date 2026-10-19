@@ -92,7 +92,15 @@ The driver creates one isolated loopback Server and Runner at a time. A private
 `samples/<sample-id>/ready.json` identifies its Project, paths and exact source;
 `prompt.txt` is the task to paste into the fresh web conversation. Reuse the
 task-owned connection URL/auth database across these sequential samples only.
-Connect through a new dedicated tunnel and test credential using the normal
+An operator-provisioned connection may additionally specify `username` alongside
+its existing `owner` PAT in private `connection.json`. The driver then enrolls
+the sample Runner under that exact account, preserving Project visibility;
+the default remains `knowledge-owner`. The operator must independently provision
+a current authorized grant. The driver does not renew expired grants, import
+token hashes or modify native recovery history. Reusing a protected Tunnel
+requires its original URL/header and journal through supported recovery; a
+fresh evaluation state directory does not authorize bypassing that history.
+Connect through a dedicated test tunnel and test credential using the normal
 [MCP connection flow](../MCP.md) and
 [native tunnel client](../../crates/webcodex-openai-tunnel/README.md).
 With Secure MCP Tunnel, locally forward to the loopback `/mcp` using the

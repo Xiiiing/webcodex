@@ -14,12 +14,12 @@ from urllib.request import ProxyHandler, build_opener
 
 try:
     from scripts.agent_knowledge_fixture import KnowledgeFixture, CASE_IDS, SKILL
-    from scripts.agent_knowledge_host import HostSample, runtime_identity, read_private, write_private
+    from scripts.agent_knowledge_host import HostSample, SCOPES, runtime_identity, read_private, write_private
     from scripts.e2e_generic_agent_ws import GenericSmoke
     from scripts import agent_knowledge_evidence as evidence, agent_temporal_evidence as trace, agent_loop_report as report, agent_loop_benchmark as benchmark
 except ModuleNotFoundError:
     from agent_knowledge_fixture import KnowledgeFixture, CASE_IDS, SKILL
-    from agent_knowledge_host import HostSample, runtime_identity, read_private, write_private
+    from agent_knowledge_host import HostSample, SCOPES, runtime_identity, read_private, write_private
     from e2e_generic_agent_ws import GenericSmoke
     import agent_knowledge_evidence as evidence
     import agent_temporal_evidence as trace
@@ -90,6 +90,23 @@ def host_handoff_smoke(bin_dir, source_revision, manifest):
             (root / name).mkdir()
         config = state / "model.json"
         write_private(config, {"host": "chatgpt_web", "test_only": "scripted handoff, no model"})
+        # Restore an existing account rather than silently enrolling the Runner
+        # under the default owner. Its PAT must actually see the new Project.
+        seed_root, seed_capture = root / "seed", root / "seed-capture"
+        seed_root.mkdir(mode=0o700); seed_capture.mkdir(mode=0o700)
+        seed = HostSample(bin_dir, state, seed_root, root, seed_capture)
+        try:
+            seed.start_server()
+            username = "restored-fixture-owner"
+            if seed.post("/api/users/create", {"username": username}, seed.bootstrap).get("success") is not True:
+                raise AssertionError("existing owner setup failed")
+            owner = seed.pat(username, SCOPES)
+            imported = dict(seed.connection, owner=owner, username=username)
+        finally:
+            seed.close()
+        replacement = state / "restored-connection.json"
+        write_private(replacement, imported)
+        os.replace(replacement, state / "connection.json")
         case = report._case_by_id(manifest, "knowledge_identifier")
         def operator():
             deadline = time.monotonic() + 45
@@ -136,7 +153,7 @@ def host_handoff_smoke(bin_dir, source_revision, manifest):
         matrix = {"experiment": "tool_selection", "cases": [{"case_id": case["id"], "samples": [result]}]}
         if not benchmark._strict_passed(matrix, [case["id"]], 1, manifest):
             raise AssertionError("scripted Host handoff failed strict acceptance")
-        return {"passed": True, "model_samples": 0}
+        return {"passed": True, "imported_owner_preserved": True, "model_samples": 0}
 
 
 def run(bin_dir, source_revision):
