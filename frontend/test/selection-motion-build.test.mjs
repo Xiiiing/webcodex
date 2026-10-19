@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CSS_BEGIN, CSS_END, JS_BEGIN, JS_END, replaceSelectionRegion } from "../scripts/build-selection-motion.mjs";
+import { CSS_BEGIN, CSS_END, JS_BEGIN, JS_END, normalizeLineEndings, replaceSelectionRegion } from "../scripts/build-selection-motion.mjs";
+
+test("selection builder compares canonical LF regions across Windows CRLF checkouts", () => {
+  const checkedOut = `<style>${CSS_BEGIN}\r\nnew css\r\n${CSS_END}</style><script>${JS_BEGIN}\r\nnew js\r\n${JS_END}</script>`;
+  const canonical = normalizeLineEndings(checkedOut);
+  const result = replaceSelectionRegion(replaceSelectionRegion(canonical, "new css", CSS_BEGIN, CSS_END), "new js", JS_BEGIN, JS_END);
+  assert.equal(result, canonical);
+  assert.equal(normalizeLineEndings("a\r\nb\n"), "a\nb\n");
+});
 
 test("selection builder only replaces its strict generated region", () => {
   const original = `<style>${CSS_BEGIN}\nold css\n${CSS_END}</style><script>${JS_BEGIN}\nold js\n${JS_END}\ncontroller()</script>`;

@@ -315,6 +315,8 @@ footer { padding: 0 22px 12px; color: var(--muted); font-size: 12px; overflow-wr
     return result.output;
   }
   function errorMessage(error) { return "Unavailable: " + String(error.message || error).slice(0,512); }
+  // Authentication and permission loss must clear previously authorized work.
+  function accessLost(message) { return /denied|forbidden|unauthori[sz]ed|not authorized|authenticat(?:ion|e)?[\s_-]*(?:required|failed)|authori[sz]ation[\s_-]*required|permission[\s_-]*required|credentials?[\s_-]*(?:expired|revoked)/i.test(message); }
   function option(value, title) { const node = document.createElement("option"); node.value = value; node.textContent = title; return node; }
   function renderProjects() {
     el("projectSelect").replaceChildren(option("", "Choose a Project"));
@@ -542,7 +544,7 @@ footer { padding: 0 22px 12px; color: var(--muted); font-size: 12px; overflow-wr
       renderWorkbench();
     } catch(error) {if(!disposed&&generation===scope&&local===workGeneration){
       workReadMessage=errorMessage(error);
-      const denied=/denied|forbidden|unauthorized|not authorized/i.test(workReadMessage);
+      const denied=accessLost(workReadMessage);
       workReadStatus=denied?"denied":workHasSnapshot?"stale":"error";
       if(denied){workHasSnapshot=false;workNext=null;workbench={...workbench,capabilities:{},tasks:null,goals:null,agents:null,todos:[],errors:{}};}
       renderWorkbench();
@@ -592,7 +594,7 @@ footer { padding: 0 22px 12px; color: var(--muted); font-size: 12px; overflow-wr
       node.setAttribute("data-state",workReadStatus);
       if(node.hidden)continue;
       if(loading){node.append(textNode("h3","Loading work data…"),textNode("p","Projects load independently and remain available to browse.","muted"));continue;}
-      const denied=workReadStatus==="denied"||errors.some(([,message])=>/denied|forbidden|unauthorized|not authorized/i.test(message));
+      const denied=workReadStatus==="denied"||errors.some(([,message])=>accessLost(message));
       const stale=workReadStatus==="stale";
       node.setAttribute("data-state",denied?"denied":stale?"stale":"error");
       node.append(textNode("h3",stale?"Update failed · previous snapshot":denied?"Some work data is not accessible":"Some work data is unavailable"),textNode("p",stale?"Previously read data may have changed. Refresh before relying on its execution state.":"Loaded projects remain available. Unavailable data does not mean there are no work records.","muted"));

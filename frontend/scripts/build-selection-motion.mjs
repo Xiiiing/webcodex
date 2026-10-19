@@ -9,6 +9,9 @@ export const JS_END = "/* END GENERATED SELECTION MOTION */";
 export const CSS_BEGIN = "/* BEGIN GENERATED SELECTION MOTION CSS */";
 export const CSS_END = "/* END GENERATED SELECTION MOTION CSS */";
 
+// Windows Git checkouts may use CRLF; committed/generated regions use LF.
+export function normalizeLineEndings(text) { return text.replace(/\r\n/g, "\n"); }
+
 export function replaceSelectionRegion(html, content, begin, end) {
   if (html.split(begin).length !== 2 || html.split(end).length !== 2) throw new Error(`Expected exactly one selection motion region: ${begin}`);
   const start = html.indexOf(begin) + begin.length;
@@ -32,10 +35,10 @@ async function main() {
   if (results.some(result => Object.keys(result.metafile.inputs).some(path => path.split(/[\\/]/).includes("node_modules")))) {
     throw new Error("Selection motion bundle must contain only first-party modules");
   }
-  const html = readFileSync(path, "utf8");
+  const html = normalizeLineEndings(readFileSync(path, "utf8"));
   const script = results[0].outputFiles[0].text.replace(/<\/script/gi, "<\\/script");
   const css = results[1].outputFiles[0].text.replace(/<\/style/gi, "<\\/style");
-  const brand = readFileSync(resolve(root, "src/ui/brand-mark.svg"), "utf8");
+  const brand = normalizeLineEndings(readFileSync(resolve(root, "src/ui/brand-mark.svg"), "utf8"));
   const output = replaceSelectionRegion(replaceSelectionRegion(replaceSelectionRegion(html, script, JS_BEGIN, JS_END), css, CSS_BEGIN, CSS_END), brand, "<!-- BEGIN WORKBENCH BRAND -->", "<!-- END WORKBENCH BRAND -->");
   if (args.includes("--check")) {
     if (output !== html) throw new Error("Selection motion bundle out of date; run node frontend/scripts/build-selection-motion.mjs");

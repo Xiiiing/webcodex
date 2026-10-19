@@ -757,6 +757,15 @@ test("loading, successful empty work, stale refresh and denied refresh remain di
  view.nodes.refresh.onclick();await flush();await view.reject(view.calls("read_workbench_state").at(-1),{message:"Access denied"});
  assert.equal(view.nodes.workAvailability.getAttribute("data-state"),"denied");assert.equal(view.nodes.homeWork.children.length,0);assert.equal(view.nodes.newHomeWork.disabled,true);
 });
+for (const message of ["authentication_required", "Authentication required", "permission_required", "Credentials revoked"]) {
+ test(`revoked Workbench access clears previous work and actions: ${message}`,async()=>{
+  const view=await upgraded();assert.match(texts(view.nodes.homeWork),/Review files/);
+  view.nodes.refresh.onclick();await flush();await view.reject(view.calls("read_workbench_state").at(-1),{message});
+  assert.equal(view.nodes.workAvailability.getAttribute("data-state"),"denied");
+  assert.equal(view.nodes.homeWork.children.length,0);
+  assert.equal(view.nodes.newHomeWork.disabled,true);
+ });
+}
 test("a failed read in a new Project cannot revive the previous scope's work",async()=>{
  const view=await upgraded({tasks:{...workbenchState.tasks,next_offset:20,truncated:true}});assert.match(texts(view.nodes.homeWork),/Review files/);assert.equal(view.nodes.homeWorkMore.hidden,false);
  await selectProject(view);await view.reject(view.calls("read_workbench_state").at(-1),{message:"Project state unavailable"});
