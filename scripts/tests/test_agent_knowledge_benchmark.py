@@ -142,6 +142,60 @@ class PrivateHostHandoffTests(unittest.TestCase):
             write_private(root / "connection.json", value)
             self.assertEqual(host.connection(root), value)
 
+    def test_mcp_apps_configuration_validates_before_sample_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            model = root / "model.json"
+            env = {"WEBCODEX_BENCH_" + key: "test" for key in ("WORKSPACE", "CASE_ID", "BASE_REVISION",
+                "CASE_FINGERPRINT", "PROMPT", "DRIVER_RESULT", "FIXTURE_COORDINATION", "TEMPORAL_TRACE_ROOT")}
+            env.update(WEBCODEX_BENCH_CASE_ID="knowledge_identifier", WEBCODEX_BENCH_TARGET=evidence.TARGET,
+                       WEBCODEX_BENCH_BASE_REVISION="a" * 40)
+            args = argparse.Namespace(state_dir=root, bin_dir=root, model_config=model, public_url=None)
+            for value in (None, 0, 1, "false", [], {}):
+                write_private(model, {"host": "chatgpt_web", "mcp_apps_enabled": value})
+                with self.subTest(value=value), patch.dict(os.environ, env), patch.object(host, "HostSample") as sample:
+                    with self.assertRaisesRegex(ValueError, "mcp_apps_enabled must be a boolean"):
+                        host.drive(args)
+                    sample.assert_not_called()
+                    self.assertFalse((root / "active.lock").exists())
+                model.unlink()
+
+    def test_mcp_apps_default_and_disabled_environment(self):
+        def initialize(sample, *args):
+            sample.env = {"PATH": os.environ.get("PATH", ""), "WEBCODEX_MCP_APPS_ENABLED": "inherited"}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary) / "private")
+            for option, expected in (({}, "true"), ({"mcp_apps_enabled": False}, "false")):
+                directory = private_directory(root / expected)
+                with patch.object(host.InteractiveSmoke, "__init__", initialize), patch.object(host, "connection",
+                        return_value={"port": 20000, "bootstrap": "test"}):
+                    sample = host.HostSample(root, root, directory, root, root, **option)
+                self.assertEqual(sample.env["WEBCODEX_MCP_APPS_ENABLED"], expected)
+
+    def test_drive_passes_apps_setting_and_records_explicit_ready_value(self):
+        for configuration, expected in (({}, True), ({"mcp_apps_enabled": False}, False)):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                root = private_directory(Path(temporary) / "private")
+                model = root / "model.json"; write_private(model, {"host": "chatgpt_web", **configuration})
+                args = argparse.Namespace(state_dir=root, bin_dir=root, model_config=model, public_url=None)
+                env = {"WEBCODEX_BENCH_" + key: "test" for key in ("WORKSPACE", "CASE_ID", "BASE_REVISION",
+                    "CASE_FINGERPRINT", "PROMPT", "DRIVER_RESULT", "FIXTURE_COORDINATION", "TEMPORAL_TRACE_ROOT")}
+                env.update(WEBCODEX_BENCH_CASE_ID="knowledge_identifier", WEBCODEX_BENCH_TARGET=evidence.TARGET,
+                    WEBCODEX_BENCH_BASE_REVISION="a" * 40, WEBCODEX_BENCH_DRIVER_RESULT=str(root / "receipt.json"))
+                sample = Mock(url="http://127.0.0.1:20000", project="project", client_id="runner")
+                def prepare():
+                    directory = next((root / "samples").iterdir())
+                    write_private(directory / "submission.json", {"workflow_session_id": "wc_sess_test", "answer": None})
+                sample.prepare.side_effect = prepare
+                with patch.dict(os.environ, env), patch.object(host, "runtime_identity", return_value={}), \
+                        patch.object(host, "HostSample", return_value=sample) as constructor, \
+                        patch.object(host, "archive_capture"):
+                    self.assertEqual(host.drive(args), 0)
+                self.assertIs(constructor.call_args.kwargs["mcp_apps_enabled"], expected)
+                ready = read_private(next((root / "samples").iterdir()) / "ready.json")
+                self.assertIs(ready["mcp_apps_enabled"], expected)
+                self.assertEqual(ready["model_config_digest"], host.collection_identity("a" * 40, model)["model_config_digest"])
+
     def test_failed_prepare_closes_owned_processes_and_releases_lock(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = private_directory(Path(temporary) / "private")

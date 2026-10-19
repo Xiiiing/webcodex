@@ -102,7 +102,8 @@ def host_handoff_smoke(bin_dir, source_revision, manifest):
         for name in ("worktrees", "receipts", "annotations"):
             (root / name).mkdir()
         config = state / "model.json"
-        write_private(config, {"host": "chatgpt_web", "test_only": "scripted handoff, no model"})
+        write_private(config, {"host": "chatgpt_web", "test_only": "scripted handoff, no model",
+            "mcp_apps_enabled": False})
         # Restore an existing account rather than silently enrolling the Runner
         # under the default owner. Its PAT must actually see the new Project.
         seed_root, seed_capture = root / "seed", root / "seed-capture"
@@ -135,12 +136,23 @@ def host_handoff_smoke(bin_dir, source_revision, manifest):
                 ready = read_private(ready_path)
                 prompt = (ready_path.parent / "prompt.txt").read_bytes()
                 if (ready.get("host_protocol") != "knowledge-host-v3"
+                        or ready.get("mcp_apps_enabled") is not False
                         or ready.get("prompt_sha256") != hashlib.sha256(prompt).hexdigest()):
                     raise AssertionError("operator prompt identity mismatch")
                 adapter = RecordedSample.__new__(RecordedSample)
                 adapter.url, adapter.owner = ready["loopback_url"], read_private(state / "connection.json")["owner"]
                 adapter.rpc_id, adapter.calls = 0, []
                 adapter.opener = build_opener(ProxyHandler({}))
+                adapter.rpc_id += 1
+                listed = adapter.post("/mcp", {"jsonrpc": "2.0", "id": adapter.rpc_id,
+                    "method": "tools/list", "params": {}}, adapter.owner)
+                tools = listed.get("result", {}).get("tools")
+                if not isinstance(tools, list) or not {"work_on_project", "plugin_tool"} <= {tool.get("name") for tool in tools}:
+                    raise AssertionError("Apps-disabled canonical tool surface missing")
+                for tool in tools:
+                    meta = tool.get("_meta", {})
+                    if tool.get("name") == "read_workbench_state" or "ui" in meta or "openai/outputTemplate" in meta:
+                        raise AssertionError("Apps-disabled surface exposed an App or presentation metadata")
                 fixture = KnowledgeFixture(next((root / "worktrees").iterdir()), case["id"])
                 started = adapter.call("work_on_project", {"client_id": ready["runner"], "path": str(fixture.root),
                     "instruction": "Scripted operator handoff test, no model"}, direct=True)
@@ -170,10 +182,11 @@ def host_handoff_smoke(bin_dir, source_revision, manifest):
         matrix = {"experiment": "tool_selection", "cases": [{"case_id": case["id"], "samples": [result]}]}
         if not benchmark._strict_passed(matrix, [case["id"]], 1, manifest):
             raise AssertionError("scripted Host handoff failed strict acceptance")
-        return {"passed": True, "imported_owner_preserved": True, "model_samples": 0}
+        return {"passed": True, "imported_owner_preserved": True, "apps_disabled_surface_verified": True,
+            "model_samples": 0}
 
 
-def run(bin_dir, source_revision):
+def run(bin_dir, source_revision, *, mcp_apps_enabled=True):
     builds = runtime_identity(bin_dir, source_revision)
     manifest = report.load_case_manifest(report.DEFAULT_CASE_MANIFEST)
     results = []
@@ -187,7 +200,8 @@ def run(bin_dir, source_revision):
             trace.prepare_capture(capture, case_id, source_revision, report._case_fingerprint(case), fixture_root=fixture.root)
             state, sample_root = root / "state", root / "sample"
             state.mkdir(mode=0o700); sample_root.mkdir(mode=0o700)
-            sample = RecordedSample(bin_dir, state, sample_root, fixture.root, capture)
+            sample = RecordedSample(bin_dir, state, sample_root, fixture.root, capture,
+                mcp_apps_enabled=mcp_apps_enabled)
             sample.calls = []
             advance = None
             try:
@@ -231,7 +245,7 @@ def run(bin_dir, source_revision):
                 raise AssertionError("scripted knowledge verifier failed: " + json.dumps(proof))
             results.append({"case_id": case_id, "checks": proof["checks"], "passed": True})
     return {"kind": "scripted_knowledge_mcp_ws_verifier", "model_samples": 0,
-            "runtime_identity": builds, "cases": results,
+            "runtime_identity": builds, "mcp_apps_enabled": mcp_apps_enabled, "cases": results,
             "host_handoff": host_handoff_smoke(bin_dir, source_revision, manifest)}
 
 
@@ -239,9 +253,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--disable-mcp-apps", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
-    print(json.dumps(run(args.bin_dir, args.source_revision), indent=2))
+    print(json.dumps(run(args.bin_dir, args.source_revision, mcp_apps_enabled=not args.disable_mcp_apps), indent=2))
 
 
 if __name__ == "__main__":

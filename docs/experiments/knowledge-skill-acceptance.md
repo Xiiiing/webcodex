@@ -97,6 +97,13 @@ The driver hashes this private record and checks binary versions/source hashes.
 The result preserves only this digest and bounded build metadata. Neither an
 operator declaration nor its digest independently attests a remote model.
 Strict acceptance requires identical pinned configuration/build identities.
+The optional boolean `mcp_apps_enabled` pins the Server's existing presentation
+setting (default `true`). For text/resource acceptance, `false` suppresses App
+tools and widget metadata; it does not change knowledge/Skill APIs, permissions
+or evidence gates. Record this as a different tool-exposure configuration, not
+a comparable retry. Close older test widgets before collecting: their polling
+can otherwise enter the same Server capture without a Workflow Session/Window.
+Such unattributed calls still block strict acceptance; no UI exception is added.
 
 ```sh
 python3 scripts/agent_loop_benchmark.py \

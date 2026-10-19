@@ -64,14 +64,24 @@ def read_private(path):
     return value
 
 
-def collection_identity(base_revision, model_config):
-    if re.fullmatch(r"[0-9a-f]{40}", base_revision) is None:
-        raise ValueError("collection source revision must be exact")
+def model_configuration(model_config):
     model = read_private(model_config)
     if model.get("host") != "chatgpt_web":
         raise ValueError("model configuration must identify ChatGPT Web")
-    digest = hashlib.sha256(json.dumps(model, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return {"base_revision": base_revision, "model_config_digest": digest}
+    if type(model.get("mcp_apps_enabled", True)) is not bool:
+        raise ValueError("mcp_apps_enabled must be a boolean")
+    return model
+
+
+def model_config_digest(model):
+    return hashlib.sha256(json.dumps(model, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def collection_identity(base_revision, model_config):
+    if re.fullmatch(r"[0-9a-f]{40}", base_revision) is None:
+        raise ValueError("collection source revision must be exact")
+    model = model_configuration(model_config)
+    return {"base_revision": base_revision, "model_config_digest": model_config_digest(model)}
 
 
 def stopped_collection(state, identity):
@@ -162,14 +172,17 @@ def runtime_identity(bin_dir, source_revision, *, require_clean=False):
 
 
 class HostSample(InteractiveSmoke):
-    def __init__(self, bin_dir, state, sample_root, workspace, capture_root, public_url=None):
+    def __init__(self, bin_dir, state, sample_root, workspace, capture_root, public_url=None, *, mcp_apps_enabled=True):
+        if type(mcp_apps_enabled) is not bool:
+            raise ValueError("mcp_apps_enabled must be a boolean")
         super().__init__(Path(bin_dir), sample_root)
         self.state, self.workspace, self.capture_root = state, Path(workspace), Path(capture_root)
         self.env = {key: value for key, value in self.env.items() if key in {
             "PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "TMP", "TEMP", "LANG",
             "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "GIT_CONFIG_GLOBAL",
             "GIT_CONFIG_NOSYSTEM", "RUST_LOG"}}
-        self.env.update(HOME=str(sample_root / "home"), XDG_CACHE_HOME=str(sample_root / "cache"))
+        self.env.update(HOME=str(sample_root / "home"), XDG_CACHE_HOME=str(sample_root / "cache"),
+                        WEBCODEX_MCP_APPS_ENABLED="true" if mcp_apps_enabled else "false")
         (sample_root / "home").mkdir()
         self.connection = connection(state)
         self.username = self.connection.get("username", "knowledge-owner")
@@ -244,9 +257,11 @@ def drive(args):
             required[key] = os.environ["WEBCODEX_BENCH_" + key]
         if required["CASE_ID"] not in CASE_IDS or os.environ.get("WEBCODEX_BENCH_TARGET") != "knowledge_skill_disposable_fixture":
             raise ValueError("knowledge driver requires an admitted knowledge fixture")
+        model = model_configuration(args.model_config)
+        mcp_apps_enabled = model.get("mcp_apps_enabled", True)
         builds = runtime_identity(args.bin_dir, required["BASE_REVISION"], require_clean=True)
-        identity = collection_identity(required["BASE_REVISION"], args.model_config)
-        config_digest = identity["model_config_digest"]
+        config_digest = model_config_digest(model)
+        identity = {"base_revision": required["BASE_REVISION"], "model_config_digest": config_digest}
         stop = stopped_collection(state, identity)
         if stop is not None:
             # Only subsequent drivers observe this request. Never interrupt an
@@ -258,7 +273,7 @@ def drive(args):
         parent = private_directory(state / "samples")
         sample_root = private_directory(parent / sample_id)
         sample = HostSample(args.bin_dir, state, sample_root, required["WORKSPACE"],
-                            required["TEMPORAL_TRACE_ROOT"], args.public_url)
+                            required["TEMPORAL_TRACE_ROOT"], args.public_url, mcp_apps_enabled=mcp_apps_enabled)
         sample.prepare()
         prompt = (f'This is sample {sample_id}, case {required["CASE_ID"]}. Start a fresh ChatGPT Web conversation. '
             f'Work only in the existing checkout at {required["WORKSPACE"]}, on Runner {sample.client_id}; '
@@ -286,7 +301,7 @@ def drive(args):
             "coordination": required["FIXTURE_COORDINATION"], "audit_db": str(state / "data/webcodex.db"),
             "case_fingerprint": required["CASE_FINGERPRINT"], "base_revision": required["BASE_REVISION"],
             "model_config_digest": config_digest, "runtime_identity": builds,
-            "host_protocol": "knowledge-host-v3",
+            "host_protocol": "knowledge-host-v3", "mcp_apps_enabled": mcp_apps_enabled,
             "prompt_sha256": hashlib.sha256((prompt + "\n").encode("utf-8")).hexdigest()})
         deadline = time.monotonic() + 29 * 60
         submitted = sample_root / "submission.json"
