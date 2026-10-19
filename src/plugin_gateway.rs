@@ -610,7 +610,7 @@ async fn describe(
     if args.binding.is_some() || args.arguments.is_some() {
         return Err(GatewayError::local(
             "invalid_arguments",
-            "action=describe accepts only runner, plugin, and tool",
+            "action=describe requires runner, plugin, and tool, plus project when projectBound; not binding or arguments",
         ));
     }
     let runner_id = required_runner(args.runner.as_deref())?;
@@ -643,7 +643,7 @@ async fn describe(
             return Err(GatewayError::local(
                 "plugin_project_required",
                 "This Plugin tool requires project on describe; cwd binding is not a sandbox",
-            ))
+            ).recovery("Repeat plugin_tool action=describe for the same runner, plugin, and tool with the intended explicit project. Use its returned binding for that Project; call accepts only binding and arguments. Re-describing does not authorize replay of an uncertain effect."))
         }
         None => None,
     };
@@ -1249,7 +1249,7 @@ fn describe_required_error() -> GatewayError {
         "this Plugin binding is unavailable to the current credential or is no longer retained",
     )
     .recovery(
-        "Call plugin_tool with action=describe for the intended runner, plugin, and tool, then call with the returned binding. WebCodex did not retarget or replay the call.",
+        "Call plugin_tool with action=describe for the intended runner, plugin, and tool. For projectBound tools, include the intended explicit project and use its binding only for that Project. Reconcile any earlier unknown outcome before retrying an effect. WebCodex did not retarget or replay the call.",
     )
 }
 
