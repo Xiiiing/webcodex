@@ -44,7 +44,11 @@ Plugin/Skill adoption. The four directed cases fail their resource-path check
 when only ordinary files were read. Bootstrap-only or a driver-declared pass
 cannot prove a sample. Final JSON must contain exactly `facts` (the requested
 `key=value` strings) and `sources` (relative path and inclusive line range).
-Report malformed or wrong answers as factual failures, without inventing calls.
+Report malformed or wrong answers as answer-contract failures, without inventing calls.
+The Host prompt explicitly asks for the canonical Session ID separately before
+the final JSON. Earlier saved prompts asking for the ID "with your final JSON"
+are ambiguous about that separation; retain their original answers and rubric
+verdicts, and report this prompt confound alongside factual correctness.
 
 The update cases pause after the first complete resource read. The coordinator
 independently verifies that read in the exact Workflow Session before changing

@@ -237,7 +237,9 @@ def drive(args):
         prompt = (f'This is sample {sample_id}, case {required["CASE_ID"]}. Start a fresh ChatGPT Web conversation. '
             f'Work only in the existing checkout at {required["WORKSPACE"]}, on Runner {sample.client_id}; '
             'bootstrap that exact path and retain the returned canonical Workflow Session identity. '
-            'Record relevant tool calls to that exact Session. Report the canonical Session ID with your final JSON.\n\n'
+            'Record relevant tool calls to that exact Session. Report the canonical Session ID separately, before the final JSON. '
+            'The final JSON must have exactly the keys facts and sources; facts must be a list of key=value strings. '
+            'Keep Session metadata outside that JSON.\n\n'
             + required["PROMPT"])
         prompt_path = sample_root / "prompt.txt"
         with prompt_path.open("x", encoding="utf-8") as handle:
