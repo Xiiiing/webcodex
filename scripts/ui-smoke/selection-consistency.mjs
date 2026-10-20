@@ -65,6 +65,7 @@ async function inspectSelection(page, selector, variant, name) {
     return { content: contentBounds, variant: group.dataset.selectionMotionVariant, count: group.querySelectorAll('[data-selection-motion-plate]').length,
       plate: rect(plate), selected: rect(selected), background: getComputedStyle(plate).backgroundColor,
       fill: resolve('--ui-selection-fill'), color: resolve('--ui-selection-color'), ink: resolve('--ui-selection-ink'),
+      mode: document.documentElement.dataset.selectionColor, soft: resolve('--ui-accent-soft'), onSoft: resolve('--ui-on-accent-soft'), accent: resolve('--ui-accent'),
       selectedColor: getComputedStyle(selected).color, mirrorColor: group.querySelector('[data-selection-motion-label]') ? getComputedStyle(group.querySelector('[data-selection-motion-label]')).color : null, label: selected.textContent.trim() };
   });
   const aligned = variant === 'filled'
@@ -72,6 +73,8 @@ async function inspectSelection(page, selector, variant, name) {
     : near(state.plate.x, state.content.x) && near(state.plate.width, state.content.width) && state.plate.height <= 3 && near(state.plate.bottom, state.selected.bottom);
   check(`${name} ${variant} selection geometry/color`, state,
     state.variant === variant && state.count === 1 && aligned && state.background === (variant === 'filled' ? state.fill : state.color) && (variant === 'filled' ? state.mirrorColor === state.ink : state.selectedColor === state.color));
+  if (variant === 'filled' && state.mode === 'accent') check(`${name} pale accent navigation`, state,
+    state.background === state.soft && state.mirrorColor === state.onSoft && state.background !== state.accent);
   return state;
 }
 async function stationaryVisuals(page, selector, name) {
@@ -170,6 +173,17 @@ async function runtime(context, width, theme, mode) {
   await options.waitFor();
   const dropdown = await bounds(options);
   check(`${name} Kind Mantine popup`, dropdown, dropdown.width > 0 && dropdown.x >= -1 && dropdown.right <= width + 1);
+  await kind.press('ArrowDown');
+  await kind.press('ArrowDown');
+  const highlighted = page.locator('[role="option"][data-combobox-selected]');
+  const highlightColor = await highlighted.evaluate(node => {
+    const probe = document.createElement('span'); document.body.append(probe);
+    probe.style.color = 'var(--ui-selection-fill)'; const fill = getComputedStyle(probe).color;
+    probe.style.color = 'var(--ui-selection-ink)'; const ink = getComputedStyle(probe).color; probe.remove();
+    return { background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color, fill, ink, checked: node.hasAttribute('data-checked') };
+  });
+  check(`${name} keyboard-highlighted option palette`, highlightColor,
+    !highlightColor.checked && highlightColor.background === highlightColor.fill && highlightColor.color === highlightColor.ink);
   await screenshot(page, `${name}-kind-select`);
   await page.getByRole('option', { name: 'Question', exact: true }).click();
   assert.equal(await kind.inputValue(), 'Question');

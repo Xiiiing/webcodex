@@ -24,11 +24,24 @@ async function settle(page) {
   await page.evaluate(() => { for (const a of document.getAnimations()) if (a.effect?.target?.matches('[data-selection-motion-overlay]')) a.finish(); });
   await frames(page);
 }
-async function exercise(page, selector, name) {
+async function exercise(page, selector, name, expectedVariant) {
   const group = page.locator(selector).first();
   await group.waitFor();
   await group.locator('[data-selection-motion-plate]').waitFor({ state: 'attached' });
   await settle(page);
+  if (expectedVariant) {
+    const state = await group.evaluate(group => {
+      const plate = group.querySelector('[data-selection-motion-plate]');
+      const probe = document.createElement('span'); group.append(probe);
+      probe.style.color = 'var(--ui-accent-soft)'; const soft = getComputedStyle(probe).color;
+      probe.style.color = 'var(--ui-on-accent-soft)'; const ink = getComputedStyle(probe).color; probe.remove();
+      return { variant: group.dataset.selectionMotionVariant, fill: getComputedStyle(plate).backgroundColor, soft, ink,
+        actualInk: getComputedStyle(group.querySelector('[data-selection-motion-label]') || group.querySelector('[data-selection-motion-selected]')).color };
+    });
+    assert.equal(state.variant, expectedVariant, `${name} navigation/content classification`);
+    if (expectedVariant === 'filled') { assert.equal(state.fill, state.soft, `${name} pale selection`); assert.equal(state.actualInk, state.ink, `${name} accent ink`); }
+    report.checks.push({name:`${name} selection treatment`,...state});
+  }
   const result = await group.evaluate(async (group) => {
     const raf = () => new Promise(resolve => requestAnimationFrame(resolve));
     const plate = group.querySelector('[data-selection-motion-plate]');
@@ -115,8 +128,9 @@ async function resize(page, selector, name) {
         rects.push(...[...selected.querySelectorAll('svg,img')].map(node=>node.getBoundingClientRect()));const visible=rects.filter(r=>r.width>0);
         expected={x:Math.min(...visible.map(r=>r.left)),y:b.bottom-3,width:Math.max(...visible.map(r=>r.right))-Math.min(...visible.map(r=>r.left)),height:3};
       }
-      return { plate:{x:a.x,y:a.y,width:a.width,height:a.height},target:expected, aligned:['x','y','width','height'].every(key=>Math.abs(a[key]-expected[key])<1.1), rows:new Set([...group.querySelectorAll('[data-selection-motion-item]')].map(item=>Math.round(item.getBoundingClientRect().y))).size };
+      return { variant:group.dataset.selectionMotionVariant, plate:{x:a.x,y:a.y,width:a.width,height:a.height},target:expected, aligned:['x','y','width','height'].every(key=>Math.abs(a[key]-expected[key])<1.1), rows:new Set([...group.querySelectorAll('[data-selection-motion-item]')].map(item=>Math.round(item.getBoundingClientRect().y))).size };
     });
+    assert.equal(result.variant, 'filled', `${name} remains navigation at ${width}px`);
     if(!result.aligned)(report.failures??=[]).push({name:`${name} resize ${width}`, ...result}); report.checks.push({name:`${name} resize`,width,...result}); await shot(page,`${name}-${width}`);
   }
   await page.setViewportSize({width:1400,height:1000}); await frames(page,3);
@@ -150,8 +164,9 @@ try {
   await desktop.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);
   for(const [destination,selector] of [['activity','.workspace-tabs'],['settings','.settings-navigation'],['extensions','.extensions-navigation']]) {
     await desktop.locator(`[data-webcodex-action="navigate-${destination}"]`).click();
-    await exercise(desktop,selector,`desktop-${destination}`);
+    await exercise(desktop,selector,`desktop-${destination}`,destination === 'activity' ? 'underline' : 'filled');
     if(destination==='settings'){await midpoint(desktop,selector,'desktop-settings');await resize(desktop,selector,'desktop-settings');await accessibility(desktop,selector,'desktop-settings');}
+    if(destination==='extensions') await resize(desktop,selector,'desktop-extensions');
     await shot(desktop,`desktop-${destination}`);
   }
   report.desktopFixtureWarnings=await desktop.locator('.app-error').allTextContents();

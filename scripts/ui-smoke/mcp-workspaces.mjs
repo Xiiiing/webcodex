@@ -296,6 +296,15 @@ try {
             throw error;
           });
           aligned(await primaryPlate.boundingBox(), await frame.locator('#goalsNav').boundingBox(), 'Goals filled plate');
+          const palette = await primary.evaluate(group => {
+            const probe = document.createElement('span'); group.append(probe);
+            probe.style.color = 'var(--ui-accent-soft)'; const soft = getComputedStyle(probe).color;
+            probe.style.color = 'var(--ui-on-accent-soft)'; const ink = getComputedStyle(probe).color; probe.remove();
+            return { soft, ink, fill: getComputedStyle(group.querySelector('[data-selection-motion-plate]')).backgroundColor,
+              actualInk: getComputedStyle(group.querySelector('[data-selection-motion-label]')).color };
+          });
+          assert.equal(palette.fill, palette.soft, 'Home/Goals uses a pale accent background');
+          assert.equal(palette.actualInk, palette.ink, 'Home/Goals uses readable accent ink');
           await page.screenshot({path:new URL(`workbench-primary-filled-${width}.png`,output).pathname});
           await frame.locator('#homeNav').click();
           await frame.waitForFunction(() => document.querySelector('.primary-navigation').getAnimations({subtree:true}).length === 0);

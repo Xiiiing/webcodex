@@ -1,6 +1,6 @@
 :root {
-  --ui-selection-fill: var(--ui-accent, #2563eb);
-  --ui-selection-ink: var(--ui-on-accent, #fff);
+  --ui-selection-fill: var(--ui-accent-soft, #e5ecff);
+  --ui-selection-ink: var(--ui-on-accent-soft, #1d4ed8);
   --ui-selection-color: var(--ui-accent, #2563eb);
 }
 :root[data-selection-color="monochrome"] {

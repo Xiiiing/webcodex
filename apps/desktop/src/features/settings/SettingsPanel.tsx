@@ -67,7 +67,7 @@ function SettingsView({
   const p = useProduct();
   const c = useConfigurationData();
   const selectionRef = useRef<HTMLDivElement | null>(null);
-  useFlowingSelection(selectionRef, section, { variant: "underline" });
+  useFlowingSelection(selectionRef, section, { variant: "filled" });
   const [runnerSettings, setRunnerSettings] = useState<RunnerSettings | null>(null);
   const [loadingRunnerSettings, setLoadingRunnerSettings] = useState(true);
   const [runnerSettingsError, setRunnerSettingsError] = useState<DesktopError | null>(null);

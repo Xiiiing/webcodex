@@ -727,11 +727,12 @@ input[type="checkbox"].desktop-switch:hover:not(:disabled):not(:checked) { backg
 .sidebar nav button.active, .sidebar nav button.active:hover {
   background: var(--ui-selection-fill); color: var(--ui-selection-ink);
 }
-.workspace-tabs > button[aria-selected="true"],
-.settings-navigation > button[aria-selected="true"], .extensions-navigation > button[aria-selected="true"] {
+.workspace-tabs > button[aria-selected="true"] {
   background: transparent; color: var(--ui-selection-color); border-radius: 0;
 }
-.mantine-Select-option[data-checked] { background: var(--ui-selection-fill); color: var(--ui-selection-ink); }
+.settings-navigation > button[aria-selected="true"], .extensions-navigation > button[aria-selected="true"] {
+  background: var(--ui-selection-fill); color: var(--ui-selection-ink);
+}
 /* The focus ring follows the rounded outer control, including password shells. */
 .ui-mantine-input, input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="color"]):not([type="date"]):not(.mantine-Input-input), textarea:not(.mantine-Input-input) { border-radius: var(--ui-radius-md); }
 .ui-mantine-input:focus, .ui-mantine-input:focus-within { border-color: var(--ui-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent) 16%, transparent); outline: 0; }

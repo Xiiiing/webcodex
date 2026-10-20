@@ -1,21 +1,20 @@
 {
   "date": "2026-10-20",
   "issue": "https://github.com/yyjeqhc/webcodex/issues/1211",
-  "implementation_commit": "5f1cec48e66511505ec6a2a4fe2a32fc7ea4fd98",
   "base_commit": "f73e99cc1532bdf88dba12191f1835372dbb2377",
-  "product_content_sha256": "af568b40adb104f394bef74ef72adc1ec61311f0ba63893182d57ef8fa6d6a45",
+  "product_content_sha256": "0976623805ae6cc3d0d01cd989cc179979c663f4f59af8594d2c428fced1d52c",
   "product_content_algorithm": "SHA-256 of JSON (sorted keys; default Python JSON separators) mapping each relative file path to its SHA-256 under frontend/src, frontend/dist, apps/desktop/src and src/mcp*_app.html",
   "asset_sha256": {
-    "apps/desktop/dist/assets/index-Bx2qDC4e.css": "df795fcae05fef2b32c81bf78721491ad58983bbddcf70cab984fd25c464c9e1",
-    "apps/desktop/dist/assets/index-waaM-wog.js": "de1166d8a63df63b0ad7da3d6813a9539d8b20caa5d9822913894eb0b2c5f1c0",
-    "apps/desktop/dist/index.html": "b7bbf9baa638cc2cf495f24a4201eb613ec8507b7618cca9378958bbe801dc65",
-    "frontend/dist/admin.css": "6f10940718f8083cdb581fa1ec2ad137d40bd6693828b7c5c26bf1a483773cfa",
+    "apps/desktop/dist/assets/index-Boqig4K8.js": "8b6b9138229d05f8c376ff70b330ef1d6ad68191517a34fd281920341aaea8c9",
+    "apps/desktop/dist/assets/index-DQ1u7IlE.css": "bbd232c868f215dad3455d7784395095d0c08a58ae10a5788ad2e3483808e707",
+    "apps/desktop/dist/index.html": "45c5b16b119a3f81726c550fad233334abe023f6506770fa74ee1e74b01f595f",
+    "frontend/dist/admin.css": "5d3e5499fa8094835e1b8bcc4ef7c9e36cc6db063b0ee06726d923325ba0e4a4",
     "frontend/dist/admin.js": "a944bb9deb61fab7d94d83cf747252c9c61b8552edcfd43f6deed450406ea316",
     "frontend/dist/app.js": "33e0d9fe5a42fa65ec30d264e17f2558a43060de90e354d4f001f2a5627037fb",
-    "frontend/dist/styles.css": "6941dad3e4e1c3c26fe2c07d4fc515a155638e8faf94f5a248c0dbe4b21a2b60",
-    "src/mcp_spreadsheet_app.html": "12c75b574d4a3749d06502aeda9621b80335dd2ee5c3e06d33dd56b2d63d9e42",
-    "src/mcp_work_result_app.html": "301091af9866cbad2205bd39ff70c82f75a822ee718858fc40f5d4e79b8998a7",
-    "src/mcp_workbench_app.html": "7e1f3825a75635e569a70678b7bdd433ea754d193e4c7f10ca4917d8295617ea"
+    "frontend/dist/styles.css": "a24db62621bf4f062ff49eef8ca97078e588344327adc5a291e319ceaac2a753",
+    "src/mcp_spreadsheet_app.html": "37deb570e26aef8fe0fc853b6171b8b288313869aff9179f65862d6d68f884fa",
+    "src/mcp_work_result_app.html": "a52260f156c448822a07a4a28e7f2e9a9c082573f62dc56e825c35cd2c11fcc4",
+    "src/mcp_workbench_app.html": "a4b305f17b96755a86c33081510ec07f7e56a39282022896c30979d9bd5f6635"
   },
   "checks": {
     "frontend_typecheck": "passed",
@@ -33,9 +32,9 @@
     "rust_formatting": "passed",
     "desktop_form_css_contract": "passed",
     "markdown_links": "passed",
-    "motion_browser_light_checks": 23,
-    "motion_browser_dark_checks": 23,
-    "runtime_admin_browser_checks": 164,
+    "motion_browser_light_checks": 30,
+    "motion_browser_dark_checks": 30,
+    "runtime_admin_browser_checks": 192,
     "runtime_admin_browser_screenshots": 72,
     "mcp_browser_cases": 48
   },
@@ -76,9 +75,9 @@
       "schema_version": 1,
       "binary": "webcodex-desktop",
       "version": "0.5.0",
-      "git_commit": "f73e99cc1532",
+      "git_commit": "7f847d00524f",
       "git_dirty": true,
-      "built_at": "1792474079",
+      "built_at": "1792483953",
       "target": "x86_64-unknown-linux-gnu",
       "architecture": "x86_64",
       "desktop_runtime_contract": {
@@ -88,15 +87,16 @@
       "agent_protocol_generation": null,
       "environment_data_format": 1
     },
-    "desktop_executable_sha256": "ac3231bdf662ce351467207deb3b8faf85494376268a1d0db0671bbfaa238ae2",
+    "desktop_executable_sha256": "749e71086b61b25fa03feaa16c3cc8cf7ce87f0746d9ec5472e4eb47e9f46b7e",
     "interactions": [
-      "open Settings and selection popup",
+      "open Settings with pale filled navigation categories",
+      "open selected-color popup with pale accent selection",
       "ArrowDown/Enter selects monochrome",
       "select dark theme",
       "ArrowUp/Escape cancels without changing monochrome",
-      "resize1180 to800"
+      "resize1180 to800 with filled category grid"
     ],
-    "provenance_limit": "Native binaries carry the base commit plus dirty state. Desktop UI assets match this implementation. The later Runtime-only mobile CSS correction was validated in the final production browser build."
+    "provenance_limit": "Native binaries carry the preceding PR head plus dirty correction state. Desktop UI assets match the recorded corrected candidate."
   },
   "unverified": [
     "real ChatGPT Host card rendering",
@@ -104,5 +104,13 @@
     "installer/release acceptance",
     "post-submission CI"
   ],
-  "deployment": "No persistent stable/test deployment or Tunnel changed."
+  "deployment": "No persistent stable/test deployment or Tunnel changed.",
+  "source_parent_commit": "7f847d00524fe8bfd52fe320b6f712a3ef5b240c",
+  "source_state": "Uncommitted presentation correction on source_parent_commit; product content digest and assets identify the validated candidate.",
+  "correction_regressions": [
+    "Pale accent background and readable accent ink; previous candidate fails",
+    "Desktop Settings/Extensions remain filled navigation across vertical and responsive grid layouts; previous candidate fails",
+    "Committed and keyboard-highlighted Mantine options use local selection palette",
+    "Horizontal content rows retain underline selection"
+  ]
 }

@@ -9,15 +9,18 @@ Implements [#1211](https://github.com/yyjeqhc/webcodex/issues/1211). The earlier
 [#1198](https://github.com/yyjeqhc/webcodex/issues/1198) are completed historical
 UI work; this is the new cross-surface selection and controls scope.
 
-Selected controls now use the chosen accent by default. Web appearance menus,
+Selected controls now use a pale accent background and readable accent text/icons by default. Web appearance menus,
 Desktop General settings and card appearance settings offer accent or monochrome.
 Monochrome reverses with light/dark appearance and retains the saved accent.
 Runtime/Admin share local storage on their origin; Desktop and MCP iframe
 origins/Host storage partitions retain their own choices. Blocked storage keeps a
 usable in-memory choice. No server preference API or authority state is added.
 
-Main navigation and compact mutually exclusive choices use a filled plate.
-Content tabs use a rounded 3px underline matching their text and icons. Both use
+Navigation and compact mutually exclusive choices use a rounded filled plate.
+Vertical Settings/Extensions categories remain filled navigation, including their
+responsive grid. Only horizontal content-tab rows use a rounded 3px underline
+matching their text and icons. Horizontal placement alone does not turn primary
+navigation such as Home/Goals into content tabs. Both use
 the shared 260ms controller, at most 3% stretch and stationary labels. Reversals
 continue from visible geometry. Paint-time card reflow corrects the destination
 without cancelling active motion; responsive changes recalibrate the containing
@@ -35,7 +38,9 @@ their focus ring around the rounded outer shell.
 1. Runtime Goals/Activity now occupies a compact full-width header. Both panels
    begin on the same row; Window/Collaboration uses an underline.
 
-   ![Aligned Runtime panels and underline tabs](runtime-activity-dark.png)
+   ![Pale blue Runtime navigation and horizontal underline tabs](runtime-activity-light.png)
+
+   ![Aligned Runtime panels in dark appearance](runtime-activity-dark.png)
 
 2. Collaboration uses a themed popup and rounded composer focus.
 
@@ -88,6 +93,8 @@ ArrowDown/Enter, switched to dark appearance, cancelled a different highlighted
 choice with Escape and resized the window from 1180 to 800px. These images are
 native window captures, not browser fixtures:
 
+![Native Desktop pale category navigation](desktop-native-navigation.png)
+
 ![Native Desktop selection popup](desktop-native-appearance.png)
 
 ![Native Desktop dark monochrome](desktop-native-dark-monochrome.png)
@@ -103,9 +110,12 @@ existing MCP controller suites pass 582. Focused Rust checks pass 5 registry,
 15 Work Result and 1 resource capability test. Formatting and generated-resource
 consistency checks pass.
 
-The production-bundle motion harness passes 23 checks in each light/dark theme.
-The Runtime/Admin matrix passes 164 checks and covers 1440/390px, light/dark and accent/monochrome,
-including top/scroll/anchor, focus, popup and animation behavior. MCP browser
+The production-bundle motion harness passes 30 checks in each light/dark theme.
+The Runtime/Admin matrix passes 192 checks and covers 1440/390px, light/dark and accent/monochrome,
+including top/scroll/anchor, focus, popup, pale selection, keyboard-highlighted
+option colors and animation behavior. Vertical category navigation is also checked
+at desktop and responsive-grid widths; the previous saturated/underline candidate
+fails these new assertions. MCP browser
 coverage passes 48 cases at 320/390/800/1440px, including Host theme changes,
 controls, motion, uncertain submissions and teardown.
 
@@ -113,9 +123,8 @@ Browser screenshots use public synthetic data with loopback fixtures and the
 actual shipped bundles/HTML. They establish browser rendering, not ChatGPT Host
 acceptance. **Real ChatGPT card rendering remains unverified.** Native validation
 covers Linux source preview, not an installed package, Windows/macOS, or a release.
-Native binaries identify the base commit plus dirty worktree; the recorded
-Desktop asset hashes identify the native candidate that was built and captured. The
-subsequent Runtime-only mobile CSS correction was checked in the final browser build.
+Native binaries identify the preceding PR head plus dirty worktree; recorded
+Desktop asset hashes identify the corrected native candidate that was built and captured.
 
 No persistent stable/test deployment was updated. Host resource refresh and
 deployment remain separate operations. CI is not included in these local results.
