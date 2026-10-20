@@ -306,7 +306,10 @@ html[data-resolved-theme="dark"] .conversation-list { background: var(--ui-surfa
   .mobile-preferences { display: block; position: fixed; z-index: 70; top: 65px; right: 12px; width: 164px; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-lg); background: var(--ui-surface-elevated); box-shadow: var(--ui-shadow-floating); }
   .mobile-preferences .runtime-preference-buttons { flex-direction: row; gap: 8px; }
   .mobile-lock-action { display: flex; justify-content: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ui-border-subtle); }
-  .app-content { min-height: 0; padding: 16px; overflow: auto; scrollbar-gutter: stable; scroll-padding-block: 16px; }
+  .app-content { min-height: 0; padding: 16px; overflow: auto; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; scroll-padding-block: 16px; }
+  .app-content > .page { height: auto; min-height: 100%; overflow: visible; scrollbar-gutter: auto; padding-block: 0 16px; border-radius: 0; }
+  .agents-sidebar, .agent-list, .agents-main { max-height: none; overflow: visible; }
+  .app-content .project-browser-list { overflow: visible; }
   .work-layout, .goal-work-layout { display: block; height: auto; overflow: visible; }
   .work-list-panel, .goal-list-panel { max-height: 40vh; min-height: 190px; margin-bottom: var(--web-section-gap); }
   .session-main, .goal-main { min-height: 55vh; }
@@ -331,8 +334,8 @@ html[data-resolved-theme="dark"] .conversation-list { background: var(--ui-surfa
   .runtime-metrics > div { padding: 14px 10px; }
   .runtime-metrics > div:first-child { padding-left: 10px; }
   .runtime-section { padding: 16px; }
-  .mobile-navigation-dock { display: block; padding: 8px 16px max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--ui-border); background: var(--ui-background); overflow-y: auto; scrollbar-gutter: stable; }
-  .mobile-primary-nav { position: relative; inset: auto; height: 57px; padding: 0; border: 1px solid var(--ui-border-subtle); border-radius: var(--ui-radius-lg); box-shadow: var(--ui-shadow-surface); }
+  .mobile-navigation-dock { display: block; padding: 4px 16px max(4px, env(safe-area-inset-bottom)); border-top: 1px solid var(--ui-border-subtle); background: var(--ui-content); overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; }
+  .mobile-primary-nav { position: relative; inset: auto; height: 57px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .mobile-primary-nav button { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: var(--ui-font-caption); }
   .mobile-primary-nav button.active { background: var(--ui-accent-soft); color: var(--ui-on-accent-soft); border-radius: var(--ui-radius-md); font-weight: 700; }
 }

@@ -13,8 +13,30 @@ const report = { checks: [], screenshots: [], errors: [], fixture: true, nativeH
 const check = (name, data, passed) => { report.checks.push({ name, data, passed }); assert(passed, `${name}: ${JSON.stringify(data)}`); };
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function capture(page, name) {
+  await page.waitForFunction(() => document.getAnimations().filter(a => a.effect?.target?.matches('[data-selection-motion-overlay]')).every(a => a.playState !== 'running' && !a.pending));
   await page.screenshot({ path: new URL(name + '.png', output).pathname });
   report.screenshots.push(name + '.png');
+}
+async function wholePageScroll(page, name) {
+  const geometry = await page.evaluate(() => {
+    const main = document.querySelector('.app-content'), view = main.querySelector(':scope > .page');
+    const wrappers = [...view.querySelectorAll('.project-browser-list,.agents-sidebar,.agent-list,.agents-main')];
+    const properties = n => ({ className: n.className, overflow: getComputedStyle(n).overflowY,
+      gutter: getComputedStyle(n).scrollbarGutter, top: n.scrollTop, height: n.clientHeight, scrollHeight: n.scrollHeight });
+    return { main: properties(main), view: properties(view), wrappers: wrappers.map(properties),
+      scrollbarWidth: main.offsetWidth - main.clientWidth, horizontalOverflow: main.scrollWidth > main.clientWidth + 1 };
+  });
+  check(name + ' one whole-page scroll owner', geometry, geometry.main.overflow === 'auto'
+    && geometry.main.scrollHeight > geometry.main.height && geometry.view.overflow === 'visible'
+    && geometry.view.gutter === 'auto' && geometry.view.top === 0
+    && geometry.wrappers.every(n => n.overflow === 'visible' && n.top === 0)
+    && geometry.scrollbarWidth <= 12 && !geometry.horizontalOverflow);
+  await page.locator('.app-content').evaluate(n => { n.scrollTop = 0; });
+  await page.mouse.move(100, 180);
+  await page.mouse.wheel(0, 180);
+  await page.waitForFunction(() => document.querySelector('.app-content').scrollTop > 0);
+  check(name + ' wheel scrolls only the page owner', {}, await page.evaluate(() =>
+    document.querySelector('.app-content').scrollTop > 0 && document.querySelector('.app-content > .page').scrollTop === 0 && scrollY === 0));
 }
 async function separation(page, name) {
   const geometry = await page.evaluate(() => {
@@ -51,6 +73,10 @@ try {
     page.on('pageerror', error => report.errors.push(error.message));
     await context.addInitScript(theme => localStorage.setItem('webcodex.runtime.appearance.v1', theme), theme);
     await page.route('**/api/runtime-console/window-collaboration', route => route.fulfill({ json: { available: true, can_send: true, messages: [], truncated: false } }));
+    await page.route('**/api/runtime-console/communication/agents', route => route.fulfill({ json: {
+      agents: Array.from({ length: 16 }, (_, i) => ({ agent_id: `public-layout-agent-${i}`, handle: `layout-${i}`,
+        display_name: `Public layout Agent ${i + 1}`, profile_revision: 1, queued_delivery_count: 0 })), returned: 16, total: 16,
+    } }));
     await page.route('**/api/runtime-console/window', async route => {
       const response = await route.fetch(), detail = await response.json();
       detail.active_requests = []; detail.active_count = 0; detail.linked_sessions = []; detail.sessions_returned = 0;
@@ -90,12 +116,55 @@ try {
       await page.locator('.mobile-primary-nav').getByRole('button', { name: view, exact: true }).click();
       await frames(page);
       await separation(page, name + ' ' + view);
+      if (view === 'Projects') {
+        await page.locator('.project-session-row').first().waitFor();
+        await wholePageScroll(page, name + ' Projects');
+        await page.locator('.app-content').evaluate(n => { n.scrollTop = n.scrollHeight; }); await frames(page);
+        await reachable(page, page.locator('.project-session-row').last(), name + ' final Project Session reachable');
+        await capture(page, name + '-projects-end');
+      }
+      if (view === 'Runtime') {
+        await page.locator('.runtime-metrics').waitFor();
+        await wholePageScroll(page, name + ' Runtime Overview');
+        await page.locator('.app-content').evaluate(n => { n.scrollTop = 0; }); await frames(page);
+        await capture(page, name + '-overview-top');
+        await page.locator('.app-content').evaluate(n => { n.scrollTop = n.scrollHeight; }); await frames(page);
+        const diagnostics = page.locator('.runtime-diagnostics > summary');
+        await reachable(page, diagnostics, name + ' final Overview disclosure reachable');
+        await diagnostics.click();
+        await page.locator('.app-content').evaluate(n => { n.scrollTop = n.scrollHeight; }); await frames(page);
+        await reachable(page, page.locator('.runtime-diagnostic-row code').last(), name + ' expanded final revision reachable');
+        await capture(page, name + '-overview-end');
+        await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+        await page.locator('.agent-row').last().waitFor();
+        await page.locator('.agent-create-disclosure > summary').click();
+        await page.locator('.agent-create-disclosure button').scrollIntoViewIfNeeded(); await frames(page);
+        await reachable(page, page.locator('.agent-create-disclosure button'), name + ' Agent create action reachable');
+        await page.getByRole('tab', { name: 'Profile', exact: true }).click();
+        await wholePageScroll(page, name + ' Agents');
+        await page.locator('.edit-agent-card button').scrollIntoViewIfNeeded(); await frames(page);
+        await reachable(page, page.locator('.edit-agent-card button'), name + ' Agent profile action reachable');
+        await capture(page, name + '-agent-profile');
+      }
     }
+    const footer = await page.locator('.mobile-navigation-dock').evaluate(dock => {
+      const nav = dock.querySelector('nav'), bar = document.querySelector('.mobile-app-bar');
+      return { background: getComputedStyle(dock).backgroundColor, barBackground: getComputedStyle(bar).backgroundColor,
+        overflow: getComputedStyle(dock).overflowY, padding: parseFloat(getComputedStyle(dock).paddingTop),
+        navBackground: getComputedStyle(nav).backgroundColor, shadow: getComputedStyle(nav).boxShadow, border: getComputedStyle(nav).borderTopWidth };
+    });
+    check(name + ' flat footer surface without heavy frame', footer, footer.background === footer.barBackground
+      && footer.overflow === 'hidden' && footer.padding <= 4 && footer.navBackground === 'rgba(0, 0, 0, 0)' && footer.shadow === 'none' && parseFloat(footer.border) === 0);
     // A viewport shrink (including keyboard-sized height) must move the dock with it.
     await page.setViewportSize({ width, height: 400 }); await frames(page);
     await separation(page, name + ' short viewport');
     await page.setViewportSize({ width: 1440, height: 900 }); await frames(page);
     check(name + ' desktop dock hidden after resize', {}, !await page.locator('.mobile-navigation-dock').isVisible() && await page.locator('.app-nav').isVisible());
+    await page.locator('.app-nav > nav').getByTitle('Runtime', { exact: true }).click();
+    await page.locator('.runtime-metrics').waitFor();
+    check(name + ' desktop keeps its page scroll owner', {}, await page.evaluate(() =>
+      getComputedStyle(document.querySelector('.runtime-page')).overflowY === 'auto'
+      && getComputedStyle(document.querySelector('.app-content')).overflowY === 'hidden'));
     await context.close();
   }
   assert.deepEqual(report.errors, []);

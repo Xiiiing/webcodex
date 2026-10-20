@@ -32598,7 +32598,7 @@ function mD() {
         className: "mobile-navigation-dock",
         children: /* @__PURE__ */ (0, s.jsxs)("nav", {
           ref: L,
-          className: "mobile-primary-nav ui-glass",
+          className: "mobile-primary-nav",
           "aria-label": ke("Workspace views", C),
           children: [
             /* @__PURE__ */ (0, s.jsxs)("button", {

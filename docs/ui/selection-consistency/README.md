@@ -105,9 +105,8 @@ native window captures, not browser fixtures:
 
 The follow-up defects in [#1215](https://github.com/yyjeqhc/webcodex/issues/1215)
 are corrected in the same open UI PR. On narrow screens the header, main scroll
-region and bottom navigation occupy separate viewport rows. A bordered opaque
-footer separates navigation from content, with matching gutters even when classic
-scrollbars occupy space. Its safe-area padding participates in layout instead of
+region and bottom navigation occupy separate viewport rows. A subtle divider and an opaque footer matching the header separate navigation
+from content, with matching thin gutters even when classic scrollbars occupy space. Its safe-area padding participates in layout instead of
 covering content. The collapsed Window details entry no longer includes an opaque
 key; expanded details retain the full exact Window ID and copy action. No Window
 name is inferred from a Session title.
@@ -129,6 +128,29 @@ key. Native phone safe-area and virtual-keyboard behavior are not claimed.
 Only Runtime code changes in this follow-up. Its typecheck, 260 component tests,
 production build/generated checks and 192 Runtime/Admin browser checks passed
 again. Earlier unchanged Desktop/MCP/Rust evidence above is retained, not rerun.
+
+## One mobile page scrollbar and a lighter footer
+
+The regression in [#1216](https://github.com/yyjeqhc/webcodex/issues/1216)
+was reproduced at `65f67ebb`: both `.app-content` and its fixed-height `.page`
+scrolled, reserving two wide gutters on Overview/Projects. Narrow page surfaces
+now grow within the main scroll owner; Agent/sidebar wrappers follow the same
+rule while activity and message panes retain their explicit scrolling regions.
+The single whole-page scrollbar is thin and themed. The footer matches the header
+surface with a subtle divider, less padding, and no extra navigation frame or
+whole-strip hover background. Its aligned thin gutter never scrolls.
+
+The expanded regression passes **208 checks / 56 captures** across the same
+four narrow sizes and both themes. It checks actual owner ranges and wheel
+routing on Overview, Projects and a 16-Agent fixture; final Project Sessions,
+expanded build diagnostics and Agent create/profile actions; the footer surface;
+and restored desktop page scroll ownership after resizing. The original activity,
+composer, identity/copy and motion checks remain. This closes the gap in the earlier
+104-check shell/Window validation, which did not inspect child page scrolling.
+
+![625px dark Overview with one thin scrollbar and flat footer](runtime-mobile-overview.png)
+
+![390px Project content reachable above the footer](runtime-mobile-projects.png)
 
 ## Validation and limits
 
