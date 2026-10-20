@@ -101,6 +101,35 @@ native window captures, not browser fixtures:
 
 ![Native Desktop at 800px](desktop-native-narrow.png)
 
+## Mobile content boundary and Window details
+
+The follow-up defects in [#1215](https://github.com/yyjeqhc/webcodex/issues/1215)
+are corrected in the same open UI PR. On narrow screens the header, main scroll
+region and bottom navigation occupy separate viewport rows. A bordered opaque
+footer separates navigation from content, with matching gutters even when classic
+scrollbars occupy space. Its safe-area padding participates in layout instead of
+covering content. The collapsed Window details entry no longer includes an opaque
+key; expanded details retain the full exact Window ID and copy action. No Window
+name is inferred from a Session title.
+
+The old `4ad77748` production bundles reproduce intersecting content/navigation
+bounds at 625px and the abbreviated identity in the summary. The new production
+regression passes 104 checks with 24 captures over 625×825, 390×844, 320×568 and
+700×600 in both themes, including a 400px viewport shrink and desktop resize.
+It scrolls owning containers to their actual end and hit-tests the final activity
+and composer actions, verifies navigation switching, and copies the exact Window
+key. Native phone safe-area and virtual-keyboard behavior are not claimed.
+
+![625px activity ending above the separated navigation](runtime-mobile-625.png)
+
+![Full Window identity remains inside expanded details](runtime-window-details.png)
+
+![320px dark collaboration action above navigation](runtime-mobile-composer.png)
+
+Only Runtime code changes in this follow-up. Its typecheck, 260 component tests,
+production build/generated checks and 192 Runtime/Admin browser checks passed
+again. Earlier unchanged Desktop/MCP/Rust evidence above is retained, not rerun.
+
 ## Validation and limits
 
 See the compact [validation record](validation.json) for counts and bundle
@@ -126,8 +155,9 @@ covers Linux source preview, not an installed package, Windows/macOS, or a relea
 Native binaries identify the preceding PR head plus dirty worktree; recorded
 Desktop asset hashes identify the corrected native candidate that was built and captured.
 
-No persistent stable/test deployment was updated. Host resource refresh and
-deployment remain separate operations. CI is not included in these local results.
+Persistent test activation is a separately authorized operator action with local
+deployment records. No stable environment or Tunnel change is included in this
+source submission. CI is not included in these local results.
 
 ## Reproduce browser checks
 
@@ -146,6 +176,7 @@ node --test src/mcp_tests/*.test.mjs
 node scripts/ui-smoke/flowing-selection.mjs
 WEBCODEX_MOTION_THEME=dark node scripts/ui-smoke/flowing-selection.mjs
 node scripts/ui-smoke/selection-consistency.mjs
+node scripts/ui-smoke/mobile-runtime-layout.mjs
 node scripts/ui-smoke/mcp-workspaces.mjs
 ```
 

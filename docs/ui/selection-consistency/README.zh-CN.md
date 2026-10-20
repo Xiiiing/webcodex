@@ -67,6 +67,20 @@ React 普通下拉框统一使用 Mantine Select。原生 HTML 卡片使用共�
 
 ![原生 Desktop 800px](desktop-native-narrow.png)
 
+## 移动端内容边界与窗口详情
+
+后续缺陷 [#1215](https://github.com/yyjeqhc/webcodex/issues/1215) 在同一个尚未合并的 UI PR 中修正。窄屏顶部栏、主滚动区与底部导航分别占据独立的视口行；底栏以不透明背景和边线分隔内容，经典滚动条占位时左右间距仍一致。底部安全区内边距参与布局，不会覆盖内容。折叠的窗口详情入口不再展示难读的短 ID；展开后保留完整 Window ID 和准确复制操作，不会把 Session 标题当成窗口名称。
+
+旧 `4ad77748` 生产构建在 625px 下可复现内容与导航边界相交、摘要展示短 ID。新增生产构建回归通过 104 项检查，保存 24 张截图，覆盖明暗主题下的 625×825、390×844、320×568、700×600，以及缩小至 400px 高度和恢复桌面宽度。验证实际滚动容器到底后的活动末项与发送操作是否可见且可点击，检查导航切换与完整 ID 复制；不声称原生手机安全区或软键盘实机验收。
+
+![625px 活动末项与独立底部导航](runtime-mobile-625.png)
+
+![完整窗口身份保留在展开详情中](runtime-window-details.png)
+
+![320px 深色协作操作位于导航上方](runtime-mobile-composer.png)
+
+本次后续只改动 Runtime。重新通过类型检查、260 项组件测试、生产构建与生成一致性检查、192 项 Runtime/Admin 浏览器检查。此前未改动的 Desktop/MCP/Rust 证据沿用，不声称重新执行。
+
 ## 验证与限制
 
 [验证记录](validation.json)包含检查数量和构建资源摘要。类型检查、前端/Desktop 生产构建通过。组件测试通过：前端 260 项、Desktop 753 项；前端 Node 测试 105 + 23 项、现有 MCP 控制器测试 582 项通过。Rust 定向验证通过：注册表 5 项、Work Result 15 项、资源能力 1 项。格式与生成资源一致性检查通过。
@@ -75,7 +89,7 @@ React 普通下拉框统一使用 Mantine Select。原生 HTML 卡片使用共�
 
 浏览器截图来自真实产品构建/HTML 和本地合成数据 fixture。它们只证明浏览器渲染，**ChatGPT 真实宿主卡片渲染仍未验证**。原生验证覆盖 Linux 源码预览，不代表安装包、Windows/macOS 或发布版本验收。原生二进制标记为前一个 PR 提交加未提交工作区；记录的 Desktop 资源摘要标识实际构建和截图的修正候选。
 
-未更新持续运行的稳定版或测试版。部署和宿主资源刷新是后续独立操作；本地结果不包含 CI。
+持续测试版激活是用户另行授权的操作，使用本地部署记录；本次源码提交不包含稳定环境或 Tunnel 变更。本地结果不包含 CI。
 
 ## 复现浏览器验证
 
@@ -94,6 +108,7 @@ node --test src/mcp_tests/*.test.mjs
 node scripts/ui-smoke/flowing-selection.mjs
 WEBCODEX_MOTION_THEME=dark node scripts/ui-smoke/flowing-selection.mjs
 node scripts/ui-smoke/selection-consistency.mjs
+node scripts/ui-smoke/mobile-runtime-layout.mjs
 node scripts/ui-smoke/mcp-workspaces.mjs
 ```
 

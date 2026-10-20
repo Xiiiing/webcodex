@@ -155,6 +155,10 @@ it("shows active Window work without any Workflow Session and keeps observe call
   fireEvent.click(projectPicker);
   expect(await screen.findByRole("heading", { name: "webcodex-activity-fix" })).toBeTruthy();
   const header = screen.getByRole("heading", { name: "webcodex-activity-fix" }).closest("header");
+  const details = header!.querySelector("details")!;
+  expect(details.querySelector("summary")?.textContent).toBe("Window details");
+  expect(details.open).toBe(false);
+  fireEvent.click(details.querySelector("summary")!);
   expect(header?.textContent).toContain("WebCodex");
   expect(header?.textContent).toContain("apply_text_edits");
   expect(header?.textContent).toContain("Runner ID");

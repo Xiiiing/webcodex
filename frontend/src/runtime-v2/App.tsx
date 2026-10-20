@@ -394,11 +394,13 @@ export function App() {
         onOpenRecord={openSessionRecord} onUnauthorized={handleUnauthorized}
       />}
 
-      <nav ref={mobileNavigationRef} className="mobile-primary-nav ui-glass" aria-label={translate("Workspace views", language)}>
-        <button className={view === "work" ? "active" : ""} type="button" onClick={openWork} aria-current={view === "work" ? "page" : undefined}><BriefcaseBusiness size={18} /><span>{translate("Work", language)}</span></button>
-        <button className={view === "projects" ? "active" : ""} type="button" onClick={() => setView("projects")} aria-current={view === "projects" ? "page" : undefined}><FolderKanban size={18} /><span>{translate("Projects", language)}</span></button>
-        <button className={view === "runtime" ? "active" : ""} type="button" onClick={() => setView("runtime")} aria-current={view === "runtime" ? "page" : undefined}><Server size={18} /><span>{translate("Runtime", language)}</span></button>
-      </nav>
+      <div className="mobile-navigation-dock">
+        <nav ref={mobileNavigationRef} className="mobile-primary-nav ui-glass" aria-label={translate("Workspace views", language)}>
+          <button className={view === "work" ? "active" : ""} type="button" onClick={openWork} aria-current={view === "work" ? "page" : undefined}><BriefcaseBusiness size={18} /><span>{translate("Work", language)}</span></button>
+          <button className={view === "projects" ? "active" : ""} type="button" onClick={() => setView("projects")} aria-current={view === "projects" ? "page" : undefined}><FolderKanban size={18} /><span>{translate("Projects", language)}</span></button>
+          <button className={view === "runtime" ? "active" : ""} type="button" onClick={() => setView("runtime")} aria-current={view === "runtime" ? "page" : undefined}><Server size={18} /><span>{translate("Runtime", language)}</span></button>
+        </nav>
+      </div>
     </div>
   );
 }

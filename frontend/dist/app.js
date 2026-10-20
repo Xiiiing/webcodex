@@ -2365,7 +2365,7 @@ Error generating stack: ` + o.message + `
   function x0(e, t) {
     zn[Ln++] = ga, zn[Ln++] = ya, zn[Ln++] = Ci, ga = t.id, ya = t.overflow, Ci = e;
   }
-  var Ot = null, rt = null, Pe = !1, Ni = null, Pn = !1, uf = Error(c(519));
+  var Ot = null, ot = null, Pe = !1, Ni = null, Pn = !1, uf = Error(c(519));
   function Ai(e) {
     throw Ts(On(Error(c(418, 1 < arguments.length && arguments[1] !== void 0 && arguments[1] ? "text" : "HTML", "")), e)), uf;
   }
@@ -2425,17 +2425,17 @@ Error generating stack: ` + o.message + `
     if (e !== Ot) return !1;
     if (!Pe) return sc(e), Pe = !0, !1;
     var t = e.tag, i;
-    if ((i = t !== 3 && t !== 27) && ((i = t === 5) && (i = e.type, i = !(i !== "form" && i !== "button") || Hm(e.type, e.memoizedProps)), i = !i), i && rt && Ai(e), sc(e), t === 13) {
+    if ((i = t !== 3 && t !== 27) && ((i = t === 5) && (i = e.type, i = !(i !== "form" && i !== "button") || Hm(e.type, e.memoizedProps)), i = !i), i && ot && Ai(e), sc(e), t === 13) {
       if (e = e.memoizedState, e = e !== null ? e.dehydrated : null, !e) throw Error(c(317));
-      rt = rb(e);
+      ot = rb(e);
     } else if (t === 31) {
       if (e = e.memoizedState, e = e !== null ? e.dehydrated : null, !e) throw Error(c(317));
-      rt = rb(e);
-    } else t === 27 ? (t = rt, Wi(e.type) ? (e = Km, Km = null, rt = e) : rt = t) : rt = Ot ? In(e.stateNode.nextSibling) : null;
+      ot = rb(e);
+    } else t === 27 ? (t = ot, Wi(e.type) ? (e = Km, Km = null, ot = e) : ot = t) : ot = Ot ? In(e.stateNode.nextSibling) : null;
     return !0;
   }
   function go() {
-    rt = Ot = null, Pe = !1;
+    ot = Ot = null, Pe = !1;
   }
   function df() {
     var e = Ni;
@@ -3466,9 +3466,9 @@ Error generating stack: ` + o.message + `
         e: {
           var o = De;
           if (Pe) {
-            if (rt) {
+            if (ot) {
               t: {
-                for (var u = rt, m = Pn; u.nodeType !== 8; ) {
+                for (var u = ot, m = Pn; u.nodeType !== 8; ) {
                   if (!m) {
                     u = null;
                     break t;
@@ -3481,7 +3481,7 @@ Error generating stack: ` + o.message + `
                 m = u.data, u = m === "F!" || m === "F" ? u : null;
               }
               if (u) {
-                rt = In(u.nextSibling), o = u.data === "F!";
+                ot = In(u.nextSibling), o = u.data === "F!";
                 break e;
               }
             }
@@ -4226,7 +4226,7 @@ Error generating stack: ` + o.message + `
           baseLanes: 0,
           cachePool: null
         }, $s(null, e);
-        if (_f(t), (e = rt) ? (e = ob(e, Pn), e = e !== null && e.data === "&" ? e : null, e !== null && (t.memoizedState = {
+        if (_f(t), (e = ot) ? (e = ob(e, Pn), e = e !== null && e.data === "&" ? e : null, e !== null && (t.memoizedState = {
           dehydrated: e,
           treeContext: Ci !== null ? {
             id: ga,
@@ -4234,7 +4234,7 @@ Error generating stack: ` + o.message + `
           } : null,
           retryLane: 536870912,
           hydrationErrors: null
-        }, i = g0(e), i.return = t, t.child = i, Ot = t, rt = null)) : e = null, e === null) throw Ai(t);
+        }, i = g0(e), i.return = t, t.child = i, Ot = t, ot = null)) : e = null, e === null) throw Ai(t);
         return t.lanes = 536870912, null;
       }
       return Rc(t, o);
@@ -4251,7 +4251,7 @@ Error generating stack: ` + o.message + `
           Kc();
         }
         t = Tg(e, t, i);
-      } else e = m.treeContext, rt = In(S.nextSibling), Ot = t, Pe = !0, Ni = null, Pn = !1, e !== null && x0(t, e), t = Rc(t, o), t.flags |= 134221824;
+      } else e = m.treeContext, ot = In(S.nextSibling), Ot = t, Pe = !0, Ni = null, Pn = !1, e !== null && x0(t, e), t = Rc(t, o), t.flags |= 134221824;
       return t;
     }
     return e = $a(e.child, {
@@ -4316,7 +4316,7 @@ Error generating stack: ` + o.message + `
     var o = t.pendingProps, u = !1, m = (t.flags & 128) !== 0, S;
     if ((S = m) || (S = e !== null && e.memoizedState === null ? !1 : ($t.current & 2) !== 0), S && (u = !0, t.flags &= -129), S = (t.flags & 32) !== 0, t.flags &= -33, e === null) {
       if (Pe) {
-        if (u ? Mi(t) : Di(), (e = rt) ? (e = ob(e, Pn), e = e !== null && e.data !== "&" ? e : null, e !== null && (t.memoizedState = {
+        if (u ? Mi(t) : Di(), (e = ot) ? (e = ob(e, Pn), e = e !== null && e.data !== "&" ? e : null, e !== null && (t.memoizedState = {
           dehydrated: e,
           treeContext: Ci !== null ? {
             id: ga,
@@ -4324,7 +4324,7 @@ Error generating stack: ` + o.message + `
           } : null,
           retryLane: 536870912,
           hydrationErrors: null
-        }, i = g0(e), i.return = t, t.child = i, Ot = t, rt = null)) : e = null, e === null) throw Ai(t);
+        }, i = g0(e), i.return = t, t.child = i, Ot = t, ot = null)) : e = null, e === null) throw Ai(t);
         return Ym(e) ? t.lanes = 32 : t.lanes = 536870912, null;
       }
       return m = o.children, o = o.fallback, u ? (Di(), u = t.mode, m = Ec({
@@ -4382,7 +4382,7 @@ Error generating stack: ` + o.message + `
       if (o = it, o !== null && (u = co(o, E), u !== 0 && u !== S.retryLane)) throw S.retryLane = u, po(e, u), pn(o, e, u), Gf;
       return Vm(m) || Kc(), kc(e, t, E);
     }
-    return Vm(m) ? (t.flags |= 192, t.child = e.child, null) : (e = S.treeContext, rt = In(m.nextSibling), Ot = t, Pe = !0, Ni = null, Pn = !1, e !== null && x0(t, e), t = Ff(t, u.children), t.flags |= 134221824, t);
+    return Vm(m) ? (t.flags |= 192, t.child = e.child, null) : (e = S.treeContext, ot = In(m.nextSibling), Ot = t, Pe = !0, Ni = null, Pn = !1, e !== null && x0(t, e), t = Ff(t, u.children), t.flags |= 134221824, t);
   }
   function Lg(e, t, i) {
     e.lanes |= t;
@@ -4573,7 +4573,7 @@ Error generating stack: ` + o.message + `
             u = On(Error(c(424)), t), Ts(u), t = Og(e, t, o, i);
             break e;
           } else
-            for (e = t.stateNode.containerInfo, e.nodeType === 9 ? e = e.body : e = e.nodeName === "HTML" ? e.ownerDocument.body : e, rt = In(e.firstChild), Ot = t, Pe = !0, Ni = null, Pn = !0, i = M0(t, null, o, i), t.child = i; i; ) i.flags = i.flags & -3 | 134221824, i = i.sibling;
+            for (e = t.stateNode.containerInfo, e.nodeType === 9 ? e = e.body : e = e.nodeName === "HTML" ? e.ownerDocument.body : e, ot = In(e.firstChild), Ot = t, Pe = !0, Ni = null, Pn = !0, i = M0(t, null, o, i), t.child = i; i; ) i.flags = i.flags & -3 | 134221824, i = i.sibling;
           else {
             if (go(), o === u) {
               t = Xa(e, t, i);
@@ -4587,11 +4587,11 @@ Error generating stack: ` + o.message + `
       case 26:
         return _r(e, t), e === null ? (i = fb(t.type, null, t.pendingProps, null)) ? t.memoizedState = i : Pe || (t.stateNode = Uy(t.type, t.pendingProps, Fe.current, t)) : t.memoizedState = fb(t.type, e.memoizedProps, t.pendingProps, e.memoizedState), null;
       case 27:
-        return Ge(t), e === null && Pe && (o = t.stateNode = lb(t.type, t.pendingProps, Fe.current), Ot = t, Pn = !0, u = rt, Wi(t.type) ? (Km = u, rt = In(o.firstChild)) : rt = u), Et(e, t, t.pendingProps.children, i), _r(e, t), e === null && (t.flags |= 4194304), t.child;
+        return Ge(t), e === null && Pe && (o = t.stateNode = lb(t.type, t.pendingProps, Fe.current), Ot = t, Pn = !0, u = ot, Wi(t.type) ? (Km = u, ot = In(o.firstChild)) : ot = u), Et(e, t, t.pendingProps.children, i), _r(e, t), e === null && (t.flags |= 4194304), t.child;
       case 5:
-        return e === null && Pe && ((u = o = rt) && (o = b2(o, t.type, t.pendingProps, Pn), o !== null ? (t.stateNode = o, Ot = t, rt = In(o.firstChild), Pn = !1, u = !0) : u = !1), u || Ai(t)), Ge(t), u = t.type, m = t.pendingProps, S = e !== null ? e.memoizedProps : null, o = m.children, Hm(u, m) ? o = null : S !== null && Hm(u, S) && (t.flags |= 32), t.memoizedState !== null && (u = Af(e, t, mC, null, null, i), qr._currentValue = u), _r(e, t), Et(e, t, o, i), t.child;
+        return e === null && Pe && ((u = o = ot) && (o = b2(o, t.type, t.pendingProps, Pn), o !== null ? (t.stateNode = o, Ot = t, ot = In(o.firstChild), Pn = !1, u = !0) : u = !1), u || Ai(t)), Ge(t), u = t.type, m = t.pendingProps, S = e !== null ? e.memoizedProps : null, o = m.children, Hm(u, m) ? o = null : S !== null && Hm(u, S) && (t.flags |= 32), t.memoizedState !== null && (u = Af(e, t, mC, null, null, i), qr._currentValue = u), _r(e, t), Et(e, t, o, i), t.child;
       case 6:
-        return e === null && Pe && ((e = i = rt) && (i = x2(i, t.pendingProps, Pn), i !== null ? (t.stateNode = i, Ot = t, rt = null, e = !0) : e = !1), e || Ai(t)), null;
+        return e === null && Pe && ((e = i = ot) && (i = x2(i, t.pendingProps, Pn), i !== null ? (t.stateNode = i, Ot = t, ot = null, e = !0) : e = !1), e || Ai(t)), null;
       case 13:
         return zg(e, t, i);
       case 4:
@@ -4670,7 +4670,7 @@ Error generating stack: ` + o.message + `
         i === null ? e.tail = null : i.sibling = null;
     }
   }
-  function st(e) {
+  function rt(e) {
     var t = e.alternate !== null && e.alternate.child === e.child, i = 0, o = 0;
     if (t) for (var u = e.child; u !== null; ) i |= u.lanes | u.childLanes, o |= u.subtreeFlags & 1206910976, o |= u.flags & 1206910976, u.return = e, u = u.sibling;
     else for (u = e.child; u !== null; ) i |= u.lanes | u.childLanes, o |= u.subtreeFlags, o |= u.flags, u.return = e, u = u.sibling;
@@ -4688,30 +4688,30 @@ Error generating stack: ` + o.message + `
       case 12:
       case 9:
       case 14:
-        return st(t), null;
+        return rt(t), null;
       case 1:
-        return st(t), null;
+        return rt(t), null;
       case 3:
-        return i = t.stateNode, o = null, e !== null && (o = e.memoizedState.cache), t.memoizedState.cache !== o && (t.flags |= 2048), Va(jt), Ht(), i.pendingContext && (i.context = i.pendingContext, i.pendingContext = null), (e === null || e.child === null) && (gr(t) ? Fa(t) : e === null || e.memoizedState.isDehydrated && (t.flags & 256) === 0 || (t.flags |= 1024, df())), st(t), null;
+        return i = t.stateNode, o = null, e !== null && (o = e.memoizedState.cache), t.memoizedState.cache !== o && (t.flags |= 2048), Va(jt), Ht(), i.pendingContext && (i.context = i.pendingContext, i.pendingContext = null), (e === null || e.child === null) && (gr(t) ? Fa(t) : e === null || e.memoizedState.isDehydrated && (t.flags & 256) === 0 || (t.flags |= 1024, df())), rt(t), null;
       case 26:
         var u = t.type, m = t.memoizedState;
-        return e === null ? (Fa(t), m !== null ? (st(t), Ig(t, m)) : (st(t), em(t, u, null, o, i))) : m ? m !== e.memoizedState ? (Fa(t), st(t), Ig(t, m)) : (st(t), t.flags &= -16777217) : (e = e.memoizedProps, e !== o && Fa(t), st(t), em(t, u, e, o, i)), null;
+        return e === null ? (Fa(t), m !== null ? (rt(t), Ig(t, m)) : (rt(t), em(t, u, null, o, i))) : m ? m !== e.memoizedState ? (Fa(t), rt(t), Ig(t, m)) : (rt(t), t.flags &= -16777217) : (e = e.memoizedProps, e !== o && Fa(t), rt(t), em(t, u, e, o, i)), null;
       case 27:
         if (Xn(t), i = Fe.current, u = t.type, e !== null && t.stateNode != null) e.memoizedProps !== o && Fa(t);
         else {
           if (!o) {
             if (t.stateNode === null) throw Error(c(166));
-            return st(t), t.subtreeFlags &= -33554433, null;
+            return rt(t), t.subtreeFlags &= -33554433, null;
           }
           e = lt.current, gr(t) ? w0(t, e) : (e = lb(u, o, i), t.stateNode = e, Fa(t));
         }
-        return st(t), t.subtreeFlags &= -33554433, null;
+        return rt(t), t.subtreeFlags &= -33554433, null;
       case 5:
         if (Xn(t), u = t.type, e !== null && t.stateNode != null) e.memoizedProps !== o && Fa(t);
         else {
           if (!o) {
             if (t.stateNode === null) throw Error(c(166));
-            return st(t), t.subtreeFlags &= -33554433, null;
+            return rt(t), t.subtreeFlags &= -33554433, null;
           }
           if (m = lt.current, gr(t)) w0(t, m);
           else {
@@ -4772,7 +4772,7 @@ Error generating stack: ` + o.message + `
             o && Fa(t);
           }
         }
-        return st(t), t.subtreeFlags &= -33554433, em(t, t.type, e === null ? null : e.memoizedProps, t.pendingProps, i), null;
+        return rt(t), t.subtreeFlags &= -33554433, em(t, t.type, e === null ? null : e.memoizedProps, t.pendingProps, i), null;
       case 6:
         if (e && t.stateNode != null) e.memoizedProps !== o && Fa(t);
         else {
@@ -4786,7 +4786,7 @@ Error generating stack: ` + o.message + `
             e[Rt] = t, e = !!(e.nodeValue === i || o !== null && o.suppressHydrationWarning === !0 || Iy(e.nodeValue, i)), e || Ai(t, !0);
           } else e = tl(e).createTextNode(o), e[Rt] = t, t.stateNode = e;
         }
-        return st(t), null;
+        return rt(t), null;
       case 31:
         if (i = t.memoizedState, e === null || e.memoizedState !== null) {
           if (o = gr(t), i !== null) {
@@ -4795,13 +4795,13 @@ Error generating stack: ` + o.message + `
               if (e = t.memoizedState, e = e !== null ? e.dehydrated : null, !e) throw Error(c(557));
               e[Rt] = t;
             } else go(), (t.flags & 128) === 0 && (t.memoizedState = null), t.flags |= 4;
-            st(t), e = !1;
+            rt(t), e = !1;
           } else i = df(), e !== null && e.memoizedState !== null && (e.memoizedState.hydrationErrors = i), e = !0;
           if (!e)
             return t.flags & 256 ? (_n(t), t) : (_n(t), null);
           if ((t.flags & 128) !== 0) throw Error(c(558));
         }
-        return st(t), null;
+        return rt(t), null;
       case 13:
         if (o = t.memoizedState, e === null || e.memoizedState !== null && e.memoizedState.dehydrated !== null) {
           if (u = gr(t), o !== null && o.dehydrated !== null) {
@@ -4810,18 +4810,18 @@ Error generating stack: ` + o.message + `
               if (u = t.memoizedState, u = u !== null ? u.dehydrated : null, !u) throw Error(c(317));
               u[Rt] = t;
             } else go(), (t.flags & 128) === 0 && (t.memoizedState = null), t.flags |= 4;
-            st(t), u = !1;
+            rt(t), u = !1;
           } else u = df(), e !== null && e.memoizedState !== null && (e.memoizedState.hydrationErrors = u), u = !0;
           if (!u)
             return t.flags & 256 ? (_n(t), t) : (_n(t), null);
         }
-        return _n(t), (t.flags & 128) !== 0 ? (t.lanes = i, t) : (i = o !== null, e = e !== null && e.memoizedState !== null, i && (o = t.child, u = null, o.alternate !== null && o.alternate.memoizedState !== null && o.alternate.memoizedState.cachePool !== null && (u = o.alternate.memoizedState.cachePool.pool), m = null, o.memoizedState !== null && o.memoizedState.cachePool !== null && (m = o.memoizedState.cachePool.pool), m !== u && (o.flags |= 2048)), i !== e && i && (t.child.flags |= 8192), Mc(t, t.updateQueue), st(t), null);
+        return _n(t), (t.flags & 128) !== 0 ? (t.lanes = i, t) : (i = o !== null, e = e !== null && e.memoizedState !== null, i && (o = t.child, u = null, o.alternate !== null && o.alternate.memoizedState !== null && o.alternate.memoizedState.cachePool !== null && (u = o.alternate.memoizedState.cachePool.pool), m = null, o.memoizedState !== null && o.memoizedState.cachePool !== null && (m = o.memoizedState.cachePool.pool), m !== u && (o.flags |= 2048)), i !== e && i && (t.child.flags |= 8192), Mc(t, t.updateQueue), rt(t), null);
       case 4:
-        return Ht(), e === null && Ly(t.stateNode.containerInfo), t.flags |= 67108864, st(t), null;
+        return Ht(), e === null && Ly(t.stateNode.containerInfo), t.flags |= 67108864, rt(t), null;
       case 10:
-        return Va(t.type), st(t), null;
+        return Va(t.type), rt(t), null;
       case 19:
-        if (Cf(t), o = t.memoizedState, o === null) return st(t), null;
+        if (Cf(t), o = t.memoizedState, o === null) return rt(t), null;
         if (u = (t.flags & 128) !== 0, m = o.rendering, m === null) if (u) Us(o, !1);
         else {
           if (yt !== 0 || e !== null && (e.flags & 128) !== 0) for (e = t.child; e !== null; ) {
@@ -4835,7 +4835,7 @@ Error generating stack: ` + o.message + `
         }
         else {
           if (!u) if (e = gc(m), e !== null) {
-            if (t.flags |= 128, u = !0, e = e.updateQueue, t.updateQueue = e, Mc(t, e), Us(o, !0), o.tail === null && o.tailMode !== "collapsed" && o.tailMode !== "visible" && !m.alternate && !Pe) return st(t), null;
+            if (t.flags |= 128, u = !0, e = e.updateQueue, t.updateQueue = e, Mc(t, e), Us(o, !0), o.tail === null && o.tailMode !== "collapsed" && o.tailMode !== "visible" && !m.alternate && !Pe) return rt(t), null;
           } else 2 * It() - o.renderingStartTime > Uc && i !== 536870912 && (t.flags |= 128, u = !0, Us(o, !1), t.lanes = 4194304);
           o.isBackwards ? (m.sibling = t.child, t.child = m) : (e = o.last, e !== null ? e.sibling = m : t.child = m, o.last = m);
         }
@@ -4853,16 +4853,16 @@ Error generating stack: ` + o.message + `
           }
           return o.rendering = e, o.tail = e.sibling, o.renderingStartTime = It(), e.sibling = null, m = $t.current, m = u ? m & 1 | 2 : m & 1, o.tailMode === "visible" || o.tailMode === "collapsed" || !i || Pe ? Hs(t, m) : (i = m, Me(qt, t), Me($t, i), Xt === null && (Xt = t)), Pe && Ua(t, o.treeForkCount), e;
         }
-        return st(t), null;
+        return rt(t), null;
       case 22:
       case 23:
-        return _n(t), jf(), o = t.memoizedState !== null, e !== null ? e.memoizedState !== null !== o && (t.flags |= 8192) : o && (t.flags |= 8192), o ? (i & 536870912) !== 0 && (t.flags & 128) === 0 && (st(t), t.subtreeFlags & 6 && (t.flags |= 8192)) : st(t), i = t.updateQueue, i !== null && Mc(t, i.retryQueue), i = null, e !== null && e.memoizedState !== null && e.memoizedState.cachePool !== null && (i = e.memoizedState.cachePool.pool), o = null, t.memoizedState !== null && t.memoizedState.cachePool !== null && (o = t.memoizedState.cachePool.pool), o !== i && (t.flags |= 2048), e !== null && we(So), null;
+        return _n(t), jf(), o = t.memoizedState !== null, e !== null ? e.memoizedState !== null !== o && (t.flags |= 8192) : o && (t.flags |= 8192), o ? (i & 536870912) !== 0 && (t.flags & 128) === 0 && (rt(t), t.subtreeFlags & 6 && (t.flags |= 8192)) : rt(t), i = t.updateQueue, i !== null && Mc(t, i.retryQueue), i = null, e !== null && e.memoizedState !== null && e.memoizedState.cachePool !== null && (i = e.memoizedState.cachePool.pool), o = null, t.memoizedState !== null && t.memoizedState.cachePool !== null && (o = t.memoizedState.cachePool.pool), o !== i && (t.flags |= 2048), e !== null && we(So), null;
       case 24:
-        return i = null, e !== null && (i = e.memoizedState.cache), t.memoizedState.cache !== i && (t.flags |= 2048), Va(jt), st(t), null;
+        return i = null, e !== null && (i = e.memoizedState.cache), t.memoizedState.cache !== i && (t.flags |= 2048), Va(jt), rt(t), null;
       case 25:
         return null;
       case 30:
-        return t.flags |= 33554432, st(t), null;
+        return t.flags |= 33554432, rt(t), null;
     }
     throw Error(c(156, t.tag));
   }
@@ -6530,7 +6530,7 @@ Error generating stack: ` + o.message + `
       case 5:
         kf(t);
         var o = t;
-        o === Ot && (Pe ? (sc(o), o.tag === 5 && o.stateNode != null && (rt = o.stateNode)) : (sc(o), Pe = !0));
+        o === Ot && (Pe ? (sc(o), o.tag === 5 && o.stateNode != null && (ot = o.stateNode)) : (sc(o), Pe = !0));
       default:
         Wg(i, t), t = Be = v0(t, Qa), t = Hg(i, t, Qa);
     }
@@ -25377,7 +25377,7 @@ var li = Ce((n) => {
 });
 li.classes = Kn.classes;
 li.displayName = "@mantine/core/TextInput";
-function ot(n, a = 10, r = 5) {
+function st(n, a = 10, r = 5) {
   return !n || n.length <= a + r + 1 ? n : `${n.slice(0, a)}…${n.slice(-r)}`;
 }
 function ln(n, a = Date.now()) {
@@ -25476,7 +25476,7 @@ function L4({ client: n, location: a, language: r, onClose: l, onOpenWindow: c, 
           title: _.client_window_key,
           children: [
             "Window ",
-            ot(_.client_window_key),
+            st(_.client_window_key),
             " · ",
             nt(_.last_linked_at_ms)
           ]
@@ -27091,7 +27091,7 @@ function oM({ client: n, language: a, runners: r, onOpenSession: l, onOpenWindow
                           children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: B.last_activity_name || f("Observed Window") }), /* @__PURE__ */ (0, s.jsxs)("small", { children: [
                             O ? Qi(O) : f("Workspace not observed"),
                             " · Window ",
-                            ot(B.client_window_key)
+                            st(B.client_window_key)
                           ] })]
                         }),
                         /* @__PURE__ */ (0, s.jsx)("span", {
@@ -28193,7 +28193,7 @@ function wM({ client: n, language: a, onUnauthorized: r, selectedAgentId: l, onS
                   children: [(f.conversationDetail?.messages || []).map((G) => /* @__PURE__ */ (0, s.jsxs)("article", {
                     className: "conversation-message-v2",
                     children: [
-                      /* @__PURE__ */ (0, s.jsxs)("header", { children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: G.author?.participant_kind === "agent" ? G.author.display_name || G.author.handle || ot(G.author.agent_id || "") : d("Human") }), /* @__PURE__ */ (0, s.jsxs)("span", { children: [
+                      /* @__PURE__ */ (0, s.jsxs)("header", { children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: G.author?.participant_kind === "agent" ? G.author.display_name || G.author.handle || st(G.author.agent_id || "") : d("Human") }), /* @__PURE__ */ (0, s.jsxs)("span", { children: [
                         "#",
                         G.seq,
                         " · ",
@@ -28203,7 +28203,7 @@ function wM({ client: n, language: a, onUnauthorized: r, selectedAgentId: l, onS
                       !!G.deliveries?.length && /* @__PURE__ */ (0, s.jsxs)("small", { children: [
                         d("Deliveries"),
                         ": ",
-                        G.deliveries.map((fe) => (f.agents.find((ue) => ue.agent_id === fe.recipient_agent_id)?.display_name || ot(fe.recipient_agent_id || "")) + " " + (fe.state || "")).join(" · ")
+                        G.deliveries.map((fe) => (f.agents.find((ue) => ue.agent_id === fe.recipient_agent_id)?.display_name || st(fe.recipient_agent_id || "")) + " " + (fe.state || "")).join(" · ")
                       ] })
                     ]
                   }, G.message_id)), f.conversationDetail && !f.conversationDetail.messages?.length && /* @__PURE__ */ (0, s.jsx)("div", {
@@ -28977,7 +28977,7 @@ function AM({ location: n, session: a, language: r }) {
             }),
             d.reply_to && /* @__PURE__ */ (0, s.jsxs)("div", {
               className: "message-reply-context",
-              children: [/* @__PURE__ */ (0, s.jsx)("span", { children: l("Reply to") }), /* @__PURE__ */ (0, s.jsx)("span", { children: c.get(d.reply_to)?.message.slice(0, 120) || ot(d.reply_to) })]
+              children: [/* @__PURE__ */ (0, s.jsx)("span", { children: l("Reply to") }), /* @__PURE__ */ (0, s.jsx)("span", { children: c.get(d.reply_to)?.message.slice(0, 120) || st(d.reply_to) })]
             }),
             /* @__PURE__ */ (0, s.jsx)("p", { children: d.message }),
             d.first_ack_observed_at && /* @__PURE__ */ (0, s.jsxs)("div", {
@@ -29158,7 +29158,7 @@ function RM({ item: n, location: a, session: r, language: l, onOpenWindow: c }) 
                   }),
                   /* @__PURE__ */ (0, s.jsx)("code", {
                     title: a.sessionId,
-                    children: ot(a.sessionId)
+                    children: st(a.sessionId)
                   }),
                   /* @__PURE__ */ (0, s.jsxs)("span", {
                     title: nt(n.updatedAt),
@@ -29179,7 +29179,7 @@ function RM({ item: n, location: a, session: r, language: l, onOpenWindow: c }) 
                       " ",
                       d("Window"),
                       " ",
-                      ot(b.client_window_key),
+                      st(b.client_window_key),
                       " · ",
                       ln(b.last_seen_at_ms)
                     ]
@@ -29675,7 +29675,7 @@ function LM({ detail: n, language: a, controller: r, onOpenSession: l, onOpenAge
         children: [
           /* @__PURE__ */ (0, s.jsx)("span", { children: f("Goal") }),
           /* @__PURE__ */ (0, s.jsx)("span", { children: "/" }),
-          /* @__PURE__ */ (0, s.jsx)("span", { children: ot(h.goal_id) })
+          /* @__PURE__ */ (0, s.jsx)("span", { children: st(h.goal_id) })
         ]
       }), /* @__PURE__ */ (0, s.jsx)("h2", { children: h.title })]
     }), /* @__PURE__ */ (0, s.jsxs)("div", {
@@ -29776,13 +29776,13 @@ function LM({ detail: n, language: a, controller: r, onOpenSession: l, onOpenAge
                     "@",
                     r.handle,
                     " · ",
-                    ot(r.agent_id)
+                    st(r.agent_id)
                   ] })] }), /* @__PURE__ */ (0, s.jsx)(qn, { size: 14 })]
                 }) : h.controller_agent_id ? /* @__PURE__ */ (0, s.jsxs)("button", {
                   className: "goal-link-card",
                   type: "button",
                   onClick: () => c(h.controller_agent_id),
-                  children: [/* @__PURE__ */ (0, s.jsxs)("span", { children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: ot(h.controller_agent_id) }), /* @__PURE__ */ (0, s.jsx)("small", { children: f("Controller identity") })] }), /* @__PURE__ */ (0, s.jsx)(qn, { size: 14 })]
+                  children: [/* @__PURE__ */ (0, s.jsxs)("span", { children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: st(h.controller_agent_id) }), /* @__PURE__ */ (0, s.jsx)("small", { children: f("Controller identity") })] }), /* @__PURE__ */ (0, s.jsx)(qn, { size: 14 })]
                 }) : /* @__PURE__ */ (0, s.jsx)("div", {
                   className: "empty-inline compact",
                   children: f("No controller configured")
@@ -29871,7 +29871,7 @@ function LM({ detail: n, language: a, controller: r, onOpenSession: l, onOpenAge
                 /* @__PURE__ */ (0, s.jsxs)("span", { children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: g.title }), /* @__PURE__ */ (0, s.jsxs)("small", { children: [
                   os(g.project_name || void 0, g.project_id),
                   " · ",
-                  ot(g.session_id)
+                  st(g.session_id)
                 ] })] }),
                 /* @__PURE__ */ (0, s.jsx)("span", {
                   className: "goal-resource-state",
@@ -29929,7 +29929,7 @@ function LM({ detail: n, language: a, controller: r, onOpenSession: l, onOpenAge
                   className: "goal-resource-icon " + (g.active_count ? "active" : ""),
                   children: /* @__PURE__ */ (0, s.jsx)(gn, { size: 15 })
                 }),
-                /* @__PURE__ */ (0, s.jsxs)("span", { children: [/* @__PURE__ */ (0, s.jsxs)("strong", { children: ["Window ", ot(g.client_window_key)] }), /* @__PURE__ */ (0, s.jsxs)("small", { children: [
+                /* @__PURE__ */ (0, s.jsxs)("span", { children: [/* @__PURE__ */ (0, s.jsxs)("strong", { children: ["Window ", st(g.client_window_key)] }), /* @__PURE__ */ (0, s.jsxs)("small", { children: [
                   g.source,
                   " · ",
                   g.session_ids.length,
@@ -29969,7 +29969,7 @@ function PM({ task: n, language: a, onOpenAgent: r }) {
         children: /* @__PURE__ */ (0, s.jsx)(Tu, { size: 15 })
       }),
       /* @__PURE__ */ (0, s.jsxs)("span", { children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: n.summary.title }), /* @__PURE__ */ (0, s.jsxs)("small", { children: [
-        ot(n.summary.task_id),
+        st(n.summary.task_id),
         " · ",
         n.summary.execution_kind || l("No execution binding")
       ] })] }),
@@ -30010,7 +30010,7 @@ function BM({ wait: n, language: a }) {
     children: [/* @__PURE__ */ (0, s.jsxs)("summary", { children: [
       /* @__PURE__ */ (0, s.jsx)(Cw, { size: 15 }),
       /* @__PURE__ */ (0, s.jsxs)("span", { children: [/* @__PURE__ */ (0, s.jsx)("strong", { children: DM(n) }), /* @__PURE__ */ (0, s.jsxs)("small", { children: [
-        ot(n.wait_id),
+        st(n.wait_id),
         " · ",
         r(n.state)
       ] })] }),
@@ -30032,7 +30032,7 @@ function BM({ wait: n, language: a }) {
           className: "goal-wait-source",
           children: [
             /* @__PURE__ */ (0, s.jsx)("span", { children: c ? /* @__PURE__ */ (0, s.jsx)(rs, { size: 13 }) : /* @__PURE__ */ (0, s.jsx)(ai, { size: 13 }) }),
-            /* @__PURE__ */ (0, s.jsx)("code", { children: ot(l.task_id) }),
+            /* @__PURE__ */ (0, s.jsx)("code", { children: st(l.task_id) }),
             /* @__PURE__ */ (0, s.jsx)("small", { children: r(c ? c.terminal_task_state : "Waiting") })
           ]
         }, l.task_id);
@@ -30650,7 +30650,7 @@ function QM({ client: n, windowKey: a, selectedSessionId: r, language: l, onUnau
             children: [
               f("Context"),
               " · ",
-              ot(r)
+              st(r)
             ]
           })
         ]
@@ -30757,7 +30757,7 @@ function QM({ client: n, windowKey: a, selectedSessionId: r, language: l, onUnau
                       children: [
                         f("Session"),
                         " · ",
-                        ot(z.context_session_id)
+                        st(z.context_session_id)
                       ]
                     })
                   ] })
@@ -30849,7 +30849,7 @@ function QM({ client: n, windowKey: a, selectedSessionId: r, language: l, onUnau
                 children: [
                   f("Current Session"),
                   " · ",
-                  ot(r)
+                  st(r)
                 ]
               }),
               /* @__PURE__ */ (0, s.jsx)("textarea", {
@@ -31154,11 +31154,11 @@ function aD({ client: n, detail: a, projects: r, language: l, selectedSessionId:
                   },
                   ...N && !w.some((k) => k.workflow_session_id === N) ? [{
                     value: N,
-                    label: `${h("Session")} · ${ot(N, 14, 6)}`
+                    label: `${h("Session")} · ${st(N, 14, 6)}`
                   }] : [],
                   ...w.map((k, I) => ({
                     value: k.workflow_session_id,
-                    label: (k.title || h("Work Session") + " " + (I + 1)) + " · " + ot(k.workflow_session_id, 14, 6)
+                    label: (k.title || h("Work Session") + " " + (I + 1)) + " · " + st(k.workflow_session_id, 14, 6)
                   }))
                 ]
               })]
@@ -31264,7 +31264,7 @@ function aD({ client: n, detail: a, projects: r, language: l, selectedSessionId:
                         onClick: (ce) => {
                           ce.stopPropagation(), O && d?.(K ? "" : ie);
                         },
-                        children: [/* @__PURE__ */ (0, s.jsx)("span", { className: "window-session-color-dot" }), ot(ie, 14, 6)]
+                        children: [/* @__PURE__ */ (0, s.jsx)("span", { className: "window-session-color-dot" }), st(ie, 14, 6)]
                       }, ie);
                     }),
                     k.asyncJobId && /* @__PURE__ */ (0, s.jsxs)("span", {
@@ -31274,7 +31274,7 @@ function aD({ client: n, detail: a, projects: r, language: l, selectedSessionId:
                         /* @__PURE__ */ (0, s.jsx)("span", { className: "window-job-dot" }),
                         te,
                         " · ",
-                        ot(k.asyncJobId, 14, 6),
+                        st(k.asyncJobId, 14, 6),
                         oe && /* @__PURE__ */ (0, s.jsxs)("small", { children: [" · ", oe] })
                       ]
                     }),
@@ -31285,7 +31285,7 @@ function aD({ client: n, detail: a, projects: r, language: l, selectedSessionId:
                         /* @__PURE__ */ (0, s.jsx)("span", { className: "window-job-dot" }),
                         h("Observing"),
                         " · ",
-                        ot(ie, 14, 6)
+                        st(ie, 14, 6)
                       ]
                     }, ie))
                   ]
@@ -31439,7 +31439,7 @@ function iD({ client: n, language: a, onSelectWindow: r }) {
                 children: [
                   l("Open Window"),
                   " · ",
-                  ot(A.window_key, 10, 4)
+                  st(A.window_key, 10, 4)
                 ]
               }) : /* @__PURE__ */ (0, s.jsx)("span", { children: l("Window identity unavailable") }),
               /* @__PURE__ */ (0, s.jsx)(b_, {
@@ -31618,7 +31618,7 @@ function sD({ client: n, language: a, projects: r, onUnauthorized: l, onOpenSess
               children: [
                 J?.client_id || p("Runner unavailable"),
                 " · ",
-                ot(F.client_window_key, 6, 4)
+                st(F.client_window_key, 6, 4)
               ]
             })
           ]
@@ -31714,7 +31714,7 @@ function sD({ client: n, language: a, projects: r, onUnauthorized: l, onOpenSess
                     children: [
                       p("Window"),
                       " · ",
-                      ot(y.selectedKey, 6, 4)
+                      st(y.selectedKey, 6, 4)
                     ]
                   }), /* @__PURE__ */ (0, s.jsx)("small", {
                     role: "status",
@@ -31796,11 +31796,7 @@ function sD({ client: n, language: a, projects: r, onUnauthorized: l, onOpenSess
             /* @__PURE__ */ (0, s.jsxs)("details", {
               className: "window-header-details",
               children: [
-                /* @__PURE__ */ (0, s.jsxs)("summary", { children: [
-                  p("Window details"),
-                  " · ",
-                  ot(y.selectedKey, 8, 6)
-                ] }),
+                /* @__PURE__ */ (0, s.jsx)("summary", { children: p("Window details") }),
                 /* @__PURE__ */ (0, s.jsxs)("dl", {
                   className: "window-header-facts",
                   "aria-label": p("Window details"),
@@ -32598,33 +32594,36 @@ function mD() {
         onOpenRecord: K,
         onUnauthorized: q
       }, b.projectId + ":" + b.sessionId),
-      /* @__PURE__ */ (0, s.jsxs)("nav", {
-        ref: L,
-        className: "mobile-primary-nav ui-glass",
-        "aria-label": ke("Workspace views", C),
-        children: [
-          /* @__PURE__ */ (0, s.jsxs)("button", {
-            className: l === "work" ? "active" : "",
-            type: "button",
-            onClick: ce,
-            "aria-current": l === "work" ? "page" : void 0,
-            children: [/* @__PURE__ */ (0, s.jsx)(Mb, { size: 18 }), /* @__PURE__ */ (0, s.jsx)("span", { children: ke("Work", C) })]
-          }),
-          /* @__PURE__ */ (0, s.jsxs)("button", {
-            className: l === "projects" ? "active" : "",
-            type: "button",
-            onClick: () => B("projects"),
-            "aria-current": l === "projects" ? "page" : void 0,
-            children: [/* @__PURE__ */ (0, s.jsx)(Db, { size: 18 }), /* @__PURE__ */ (0, s.jsx)("span", { children: ke("Projects", C) })]
-          }),
-          /* @__PURE__ */ (0, s.jsxs)("button", {
-            className: l === "runtime" ? "active" : "",
-            type: "button",
-            onClick: () => B("runtime"),
-            "aria-current": l === "runtime" ? "page" : void 0,
-            children: [/* @__PURE__ */ (0, s.jsx)(Fr, { size: 18 }), /* @__PURE__ */ (0, s.jsx)("span", { children: ke("Runtime", C) })]
-          })
-        ]
+      /* @__PURE__ */ (0, s.jsx)("div", {
+        className: "mobile-navigation-dock",
+        children: /* @__PURE__ */ (0, s.jsxs)("nav", {
+          ref: L,
+          className: "mobile-primary-nav ui-glass",
+          "aria-label": ke("Workspace views", C),
+          children: [
+            /* @__PURE__ */ (0, s.jsxs)("button", {
+              className: l === "work" ? "active" : "",
+              type: "button",
+              onClick: ce,
+              "aria-current": l === "work" ? "page" : void 0,
+              children: [/* @__PURE__ */ (0, s.jsx)(Mb, { size: 18 }), /* @__PURE__ */ (0, s.jsx)("span", { children: ke("Work", C) })]
+            }),
+            /* @__PURE__ */ (0, s.jsxs)("button", {
+              className: l === "projects" ? "active" : "",
+              type: "button",
+              onClick: () => B("projects"),
+              "aria-current": l === "projects" ? "page" : void 0,
+              children: [/* @__PURE__ */ (0, s.jsx)(Db, { size: 18 }), /* @__PURE__ */ (0, s.jsx)("span", { children: ke("Projects", C) })]
+            }),
+            /* @__PURE__ */ (0, s.jsxs)("button", {
+              className: l === "runtime" ? "active" : "",
+              type: "button",
+              onClick: () => B("runtime"),
+              "aria-current": l === "runtime" ? "page" : void 0,
+              children: [/* @__PURE__ */ (0, s.jsx)(Fr, { size: 18 }), /* @__PURE__ */ (0, s.jsx)("span", { children: ke("Runtime", C) })]
+            })
+          ]
+        })
       })
     ]
   }) : /* @__PURE__ */ (0, s.jsxs)(s.Fragment, { children: [

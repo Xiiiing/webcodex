@@ -35,7 +35,7 @@ summary:focus-visible, a:focus-visible { outline: 2px solid var(--ui-accent); ou
 .profile .runtime-lock-button { margin-left: auto; }
 .profile { margin-top: 12px; padding: 12px 0 0; border: 0; }
 .profile-avatar { display: none; border-radius: var(--ui-radius-sm); background: var(--ui-surface-secondary); color: var(--muted); }
-.mobile-app-bar, .mobile-preferences { display: none; }
+.mobile-app-bar, .mobile-preferences, .mobile-navigation-dock { display: none; }
 
 /* One surface per region; rows carry their hierarchy through spacing. */
 .work-layout, .goal-work-layout { grid-template-columns: 278px minmax(0, 1fr) 272px; gap: 16px; background: transparent; }
@@ -295,8 +295,9 @@ html[data-resolved-theme="dark"] .conversation-list { background: var(--ui-surfa
   .project-filter-bar .runner-picker { grid-column: 1; width: 100%; }
   .filter-bar { height: auto; grid-template-columns: 18px minmax(0, 1fr); padding-block: 7px; }
   .filter-bar .runner-picker { grid-column: 1 / -1; width: 100%; }
-  body { overflow: auto; padding-bottom: 72px; }
-  .app-shell { display: block; min-height: 100dvh; height: auto; padding: 0; }
+  body { overflow: auto; padding-bottom: 0; }
+  /* Header, scrollable content and navigation own separate viewport rows. */
+  .app-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 58px minmax(0, 1fr) auto; gap: 0; min-height: 0; height: 100dvh; padding: 0; overflow: hidden; }
   .app-nav { display: none; }
   .mobile-app-bar { position: sticky; top: 0; z-index: 55; display: flex; height: 58px; align-items: center; justify-content: space-between; padding: 0 16px; border-inline: 0; border-top: 0; box-shadow: var(--ui-glass-highlight), 0 3px 18px rgb(20 36 55 / 7%); }
   .mobile-brand { display: flex; gap: 9px; align-items: center; font-size: var(--ui-font-body); }
@@ -305,7 +306,7 @@ html[data-resolved-theme="dark"] .conversation-list { background: var(--ui-surfa
   .mobile-preferences { display: block; position: fixed; z-index: 70; top: 65px; right: 12px; width: 164px; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-lg); background: var(--ui-surface-elevated); box-shadow: var(--ui-shadow-floating); }
   .mobile-preferences .runtime-preference-buttons { flex-direction: row; gap: 8px; }
   .mobile-lock-action { display: flex; justify-content: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ui-border-subtle); }
-  .app-content { min-height: calc(100dvh - 130px); padding: 16px 16px 76px; overflow: visible; }
+  .app-content { min-height: 0; padding: 16px; overflow: auto; scrollbar-gutter: stable; scroll-padding-block: 16px; }
   .work-layout, .goal-work-layout { display: block; height: auto; overflow: visible; }
   .work-list-panel, .goal-list-panel { max-height: 40vh; min-height: 190px; margin-bottom: var(--web-section-gap); }
   .session-main, .goal-main { min-height: 55vh; }
@@ -330,7 +331,8 @@ html[data-resolved-theme="dark"] .conversation-list { background: var(--ui-surfa
   .runtime-metrics > div { padding: 14px 10px; }
   .runtime-metrics > div:first-child { padding-left: 10px; }
   .runtime-section { padding: 16px; }
-  .mobile-primary-nav { left: 9px; right: 9px; bottom: max(8px, env(safe-area-inset-bottom)); height: 57px; border-radius: var(--ui-radius-lg); box-shadow: var(--ui-glass-highlight), 0 0 0 1px var(--ui-glass-edge), var(--ui-shadow-floating); }
+  .mobile-navigation-dock { display: block; padding: 8px 16px max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--ui-border); background: var(--ui-background); overflow-y: auto; scrollbar-gutter: stable; }
+  .mobile-primary-nav { position: relative; inset: auto; height: 57px; padding: 0; border: 1px solid var(--ui-border-subtle); border-radius: var(--ui-radius-lg); box-shadow: var(--ui-shadow-surface); }
   .mobile-primary-nav button { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: var(--ui-font-caption); }
   .mobile-primary-nav button.active { background: var(--ui-accent-soft); color: var(--ui-on-accent-soft); border-radius: var(--ui-radius-md); font-weight: 700; }
 }
