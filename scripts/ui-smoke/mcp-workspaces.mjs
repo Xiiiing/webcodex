@@ -159,11 +159,17 @@ async function readableControls(frame) {
 
 // Geometry comes from actual browser text ranges, independently of the motion
 // controller. Underlines follow label content and leave the labels stationary.
-async function underlineBox(selected) {
+async function underlineGeometry(selected) {
   return selected.evaluate(node => {
     const range = document.createRange(); range.selectNodeContents(node);
     const text = range.getBoundingClientRect(), button = node.getBoundingClientRect();
-    return { x: Math.max(button.left, text.left), y: button.bottom - 3, width: Math.max(0, Math.min(button.right, text.right) - Math.max(button.left, text.left)), height: 3 };
+    const plate = node.closest('[data-selection-motion]').querySelector('[data-selection-motion-plate]').getBoundingClientRect();
+    // Read both in the same layout: async card content and scroll anchoring can
+    // move the whole tab row between separate browser calls.
+    return {
+      expected: { x: Math.max(button.left, text.left), y: button.bottom - 3, width: Math.max(0, Math.min(button.right, text.right) - Math.max(button.left, text.left)), height: 3 },
+      actual: { x: plate.x, y: plate.y, width: plate.width, height: plate.height },
+    };
   });
 }
 function aligned(actual, expected, message) {
@@ -230,10 +236,13 @@ try {
           assert.ok(moving, 'Workbench must animate a persistent selection plate');
           assert.equal(moving.duration,260);
           const middle=await motion.boundingBox();
-          const end=await underlineBox(frame.locator('#tabFiles'));
+          const { expected: end } = await underlineGeometry(frame.locator('#tabFiles'));
           assert.ok(Math.abs(middle.x-start.x)>1&&Math.abs(middle.x-end.x)>0.2,'Plate must pass through an intermediate position');
+          // Keep viewport movement between samples deterministic on a narrow card.
+          if (width === 390) await frame.evaluate(() => scrollBy(0, -25));
           await motion.evaluate(element=>{for(const animation of element.parentElement.getAnimations({subtree:true})){animation.finish();}});
-          aligned(await motion.boundingBox(),end,'Project underline ends at the label');
+          const settled = await underlineGeometry(frame.locator('#tabFiles'));
+          aligned(settled.actual, settled.expected, 'Project underline ends at the label');
           assert.equal(await frame.locator('#projectTabs').getAttribute('data-selection-motion-variant'),'underline');
           assert.equal(await frame.locator('#projectTabs [data-selection-motion-label]').count(),0,'Underline uses the original stationary labels');
           await frame.locator('#openDirectory').click();
@@ -556,8 +565,8 @@ try {
           assert.equal(await plate.evaluate(node => node === window.motionFixturePlate), true, 'Selection plate remains persistent');
           const selected = frame.locator('#viewTabs [role=tab][aria-selected=true]');
           assert.equal(await selected.getAttribute('id'), 'tabCollaboration');
-          const expected = await underlineBox(selected);
-          aligned(await plate.boundingBox(), expected, 'Final content-width underline after rapid switching');
+          const { expected, actual } = await underlineGeometry(selected);
+          aligned(actual, expected, 'Final content-width underline after rapid switching');
           assert.ok(expected.width <= (await selected.boundingBox()).width + .1, 'Content underline stays within its tab at narrow widths');
           assert.equal(await frame.locator('#viewTabs [role=tab][tabindex="0"]').count(), 1);
           assert.ok(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Motion layout overflows');
