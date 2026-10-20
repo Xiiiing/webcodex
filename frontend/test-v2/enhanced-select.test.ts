@@ -50,6 +50,31 @@ describe("MCP single-select chrome", () => {
     expect(document.querySelectorAll('[role="combobox"]')).toHaveLength(1);
     expect(document.querySelector('[role="combobox"]')?.textContent).toBe("Replacement");
   });
+  it("does not commit a stale popup option after the native inventory changes before paint", () => {
+    const { select, trigger, list } = fixture('<select aria-label="Executor"><option value="">Choose an executor</option><option value="old">Original Runner</option></select>');
+    const change = vi.fn(); select.addEventListener("change", change);
+    fireEvent.click(trigger);
+    const staleOption = list().querySelectorAll('[role="option"]')[1];
+    select.replaceChildren(new Option("Choose an executor", ""), new Option("Replacement Runner", "new"));
+    fireEvent.click(staleOption);
+    expect(select.value).toBe("");
+    expect(change).not.toHaveBeenCalled();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(trigger);
+    fireEvent.click(list().querySelectorAll('[role="option"]')[1]);
+    expect(select.value).toBe("new");
+    expect(change).toHaveBeenCalledTimes(1);
+  });
+  it("cancels the active popup when refreshed routes reuse the same option values and labels", () => {
+    const { select, trigger } = fixture('<select aria-label="Executor"><option value="">Choose an executor</option><option value="0">Runner</option></select>');
+    const change = vi.fn(); select.addEventListener("change", change);
+    fireEvent.click(trigger); fireEvent.keyDown(trigger, { key: "End" });
+    select.replaceChildren(new Option("Choose an executor", ""), new Option("Runner", "0"));
+    controller!.update();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(select.value).toBe("");
+    expect(change).not.toHaveBeenCalled();
+  });
   it("positions the popup within the viewport and repositions while scrolling", () => {
     const { trigger, list } = fixture();
     vi.mocked(trigger.getBoundingClientRect).mockReturnValue({ x: 960, y: 720, top: 720, left: 960, bottom: 756, right: 1120, width: 160, height: 36, toJSON() {} });

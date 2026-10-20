@@ -87,7 +87,10 @@ export function enhanceSelects(root: HTMLElement): SelectController {
       }
     }
     function choose(index: number) {
-      if (!enabled(index) || select.disabled) return;
+      // Host updates can replace routes between paint and this click/keypress.
+      // Reconcile synchronously so an old menu index cannot select a new target.
+      update();
+      if (!open || !enabled(index) || select.disabled) return;
       const changed = select.selectedIndex !== index;
       select.selectedIndex = index;
       close();
@@ -144,7 +147,9 @@ export function enhanceSelects(root: HTMLElement): SelectController {
       }
     }
     function update() {
-      options = Array.from(select.options);
+      const nextOptions = Array.from(select.options);
+      const replaced = options.length !== nextOptions.length || options.some((option, index) => option !== nextOptions[index]);
+      options = nextOptions;
       const name = accessibleName();
       if (trigger.getAttribute("aria-label") !== name) trigger.setAttribute("aria-label", name);
       list.setAttribute("aria-label", name);
@@ -158,6 +163,9 @@ export function enhanceSelects(root: HTMLElement): SelectController {
       const text = options[select.selectedIndex]?.text || "";
       if (label.textContent !== text) label.textContent = text;
       const next = JSON.stringify(options.map((option, i) => [option.text, option.value, enabled(i), option.parentElement?.getAttribute("label")]));
+      // Route values may be reused indices and labels need not be unique.
+      // Native option identity also invalidates an already-open selection.
+      if (open && (replaced || signature !== next)) close();
       if (signature !== next) {
         signature = next;
         list.replaceChildren();
