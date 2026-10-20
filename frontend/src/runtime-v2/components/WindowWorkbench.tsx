@@ -126,7 +126,7 @@ export function WindowWorkbench({
   const [search, setSearch] = useState("");
   const [centerTab, setCenterTab] = useState<"window" | "collaboration">("window");
   const selectionRef = useRef<HTMLDivElement | null>(null);
-  useFlowingSelection(selectionRef, centerTab);
+  useFlowingSelection(selectionRef, centerTab, { variant: "underline" });
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const historicalFamilies = useMemo(() => buildProjectFamilies(projects, projectIndex, windows.historicalWindows), [projects, projectIndex, windows.historicalWindows]);
   const familyById = useMemo(() => new Map(historicalFamilies.map(family => [family.id, family])), [historicalFamilies]);

@@ -1,3 +1,5 @@
+@import "./selectionPreference.css";
+
 /* Shared visual contract for Runtime, Desktop, and Admin. Product styles consume
    these semantic values; the content layer remains opaque and calm. */
 :root {
