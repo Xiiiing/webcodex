@@ -1,0 +1,108 @@
+{
+  "date": "2026-10-20",
+  "issue": "https://github.com/yyjeqhc/webcodex/issues/1211",
+  "implementation_commit": "5f1cec48e66511505ec6a2a4fe2a32fc7ea4fd98",
+  "base_commit": "f73e99cc1532bdf88dba12191f1835372dbb2377",
+  "product_content_sha256": "af568b40adb104f394bef74ef72adc1ec61311f0ba63893182d57ef8fa6d6a45",
+  "product_content_algorithm": "SHA-256 of JSON (sorted keys; default Python JSON separators) mapping each relative file path to its SHA-256 under frontend/src, frontend/dist, apps/desktop/src and src/mcp*_app.html",
+  "asset_sha256": {
+    "apps/desktop/dist/assets/index-Bx2qDC4e.css": "df795fcae05fef2b32c81bf78721491ad58983bbddcf70cab984fd25c464c9e1",
+    "apps/desktop/dist/assets/index-waaM-wog.js": "de1166d8a63df63b0ad7da3d6813a9539d8b20caa5d9822913894eb0b2c5f1c0",
+    "apps/desktop/dist/index.html": "b7bbf9baa638cc2cf495f24a4201eb613ec8507b7618cca9378958bbe801dc65",
+    "frontend/dist/admin.css": "6f10940718f8083cdb581fa1ec2ad137d40bd6693828b7c5c26bf1a483773cfa",
+    "frontend/dist/admin.js": "a944bb9deb61fab7d94d83cf747252c9c61b8552edcfd43f6deed450406ea316",
+    "frontend/dist/app.js": "33e0d9fe5a42fa65ec30d264e17f2558a43060de90e354d4f001f2a5627037fb",
+    "frontend/dist/styles.css": "6941dad3e4e1c3c26fe2c07d4fc515a155638e8faf94f5a248c0dbe4b21a2b60",
+    "src/mcp_spreadsheet_app.html": "12c75b574d4a3749d06502aeda9621b80335dd2ee5c3e06d33dd56b2d63d9e42",
+    "src/mcp_work_result_app.html": "301091af9866cbad2205bd39ff70c82f75a822ee718858fc40f5d4e79b8998a7",
+    "src/mcp_workbench_app.html": "7e1f3825a75635e569a70678b7bdd433ea754d193e4c7f10ca4917d8295617ea"
+  },
+  "checks": {
+    "frontend_typecheck": "passed",
+    "desktop_typecheck": "passed",
+    "frontend_component_tests": 260,
+    "desktop_component_tests": 753,
+    "frontend_node_tests": 105,
+    "docx_node_tests": 23,
+    "mcp_node_tests": 582,
+    "shipped_card_appearance_tests": 4,
+    "rust_registry_tests": 5,
+    "rust_work_result_tests": 15,
+    "rust_resource_capability_tests": 1,
+    "generated_asset_consistency": "passed",
+    "rust_formatting": "passed",
+    "desktop_form_css_contract": "passed",
+    "markdown_links": "passed",
+    "motion_browser_light_checks": 23,
+    "motion_browser_dark_checks": 23,
+    "runtime_admin_browser_checks": 164,
+    "runtime_admin_browser_screenshots": 72,
+    "mcp_browser_cases": 48
+  },
+  "browser_matrix": {
+    "runtime_admin_widths": [
+      390,
+      1440
+    ],
+    "mcp_widths": [
+      320,
+      390,
+      800,
+      1440
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "selection_modes": [
+      "accent",
+      "monochrome"
+    ],
+    "fixtures": "public synthetic data; actual production bundles and shipped HTML; not a real MCP Host"
+  },
+  "native_linux": {
+    "renderer": "WebKitGTK / Tauri native source preview",
+    "widths": [
+      1180,
+      800
+    ],
+    "isolated_temporary_server_runner": true,
+    "listener_ownership_verified": true,
+    "viewer_only": true,
+    "tunnel": null,
+    "all_owned_processes_cleaned": true,
+    "remaining_owned_process_count": 0,
+    "build_info": {
+      "schema_version": 1,
+      "binary": "webcodex-desktop",
+      "version": "0.5.0",
+      "git_commit": "f73e99cc1532",
+      "git_dirty": true,
+      "built_at": "1792474079",
+      "target": "x86_64-unknown-linux-gnu",
+      "architecture": "x86_64",
+      "desktop_runtime_contract": {
+        "min_generation": 1,
+        "max_generation": 1
+      },
+      "agent_protocol_generation": null,
+      "environment_data_format": 1
+    },
+    "desktop_executable_sha256": "ac3231bdf662ce351467207deb3b8faf85494376268a1d0db0671bbfaa238ae2",
+    "interactions": [
+      "open Settings and selection popup",
+      "ArrowDown/Enter selects monochrome",
+      "select dark theme",
+      "ArrowUp/Escape cancels without changing monochrome",
+      "resize1180 to800"
+    ],
+    "provenance_limit": "Native binaries carry the base commit plus dirty state. Desktop UI assets match this implementation. The later Runtime-only mobile CSS correction was validated in the final production browser build."
+  },
+  "unverified": [
+    "real ChatGPT Host card rendering",
+    "Windows/macOS native WebViews",
+    "installer/release acceptance",
+    "post-submission CI"
+  ],
+  "deployment": "No persistent stable/test deployment or Tunnel changed."
+}
