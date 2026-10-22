@@ -1,8 +1,10 @@
 //! Bounded selection metadata for already-observed Skills and Plugins.
 //! Discovery and authorization stay in their domain owners; startup composition
 //! consumes these values without owning those services or reloading catalogs.
+use super::surface::discovery::TaskRelevance;
 use crate::json_measurement::serialized_json_len;
 use serde::Serialize;
+use std::cmp::Reverse;
 
 pub(crate) const STARTUP_EXTENSION_CATALOG_HARD_MAX_BYTES: usize = 6 * 1024;
 pub(crate) const STARTUP_SKILL_CATALOG_MAX_BYTES: usize = 2_900;
@@ -112,6 +114,18 @@ impl<Entry: Serialize> StartupCatalog<Entry> {
 }
 
 impl StartupSkillsCatalog {
+    pub(crate) fn available_for_task(
+        catalog_revision: String,
+        discovery_truncated: bool,
+        mut entries: Vec<StartupSkillEntry>,
+        relevance: &TaskRelevance,
+    ) -> Self {
+        entries.sort_by_cached_key(|entry| {
+            Reverse(relevance.score(&[&entry.name], &entry.description))
+        });
+        Self::available(catalog_revision, discovery_truncated, entries)
+    }
+
     pub(crate) fn unavailable(reason_code: &'static str) -> Self {
         Self::unavailable_with_hint(
             reason_code,
@@ -136,6 +150,26 @@ impl StartupSkillsCatalog {
 }
 
 impl StartupPluginsCatalog {
+    pub(crate) fn available_for_task(
+        catalog_revision: String,
+        total_count: usize,
+        mut entries: Vec<StartupPluginEntry>,
+        relevance: &TaskRelevance,
+    ) -> Self {
+        entries.sort_by_cached_key(|entry| {
+            Reverse(relevance.score(
+                &[
+                    &entry.plugin,
+                    &entry.name,
+                    &entry.tool,
+                    entry.title.as_deref().unwrap_or_default(),
+                ],
+                entry.description.as_deref().unwrap_or_default(),
+            ))
+        });
+        Self::available(catalog_revision, total_count, entries)
+    }
+
     pub(crate) fn unavailable(reason_code: &'static str) -> Self {
         Self::unavailable_with_hint(
             reason_code,

@@ -865,6 +865,7 @@ impl ToolRuntime {
         &self,
         project: &ResolvedProject,
         auth: Option<&AuthContext>,
+        relevance: &super::surface::discovery::TaskRelevance,
     ) -> StartupSkillsCatalog {
         let catalog = match self.discover_skills(project, auth).await {
             Ok(catalog) => catalog,
@@ -882,10 +883,11 @@ impl ToolRuntime {
                 name_conflict: skill.descriptor.name_conflict,
             })
             .collect();
-        StartupSkillsCatalog::available(
+        StartupSkillsCatalog::available_for_task(
             catalog.catalog_revision,
             catalog.discovery_truncated,
             entries,
+            relevance,
         )
     }
 

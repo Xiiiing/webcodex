@@ -2,6 +2,69 @@
 //! This is selection metadata only: no aliases, schema expansion, or authority.
 use webcodex_tool_contracts::registry::ToolDescriptor;
 
+const TASK_QUERY_MAX_CHARS: usize = 2048;
+const TASK_QUERY_MAX_ASCII_TERMS: usize = 64;
+const TASK_MAX_CHINESE_HITS: usize = 64;
+
+/// Bounded lexical evidence for ordering already-admitted startup catalog rows.
+/// Names take precedence over descriptions at the caller; neither grants authority.
+pub(crate) struct TaskRelevance {
+    query: String,
+    ascii_terms: Vec<String>,
+}
+
+impl TaskRelevance {
+    pub(crate) fn new(instruction: &str) -> Self {
+        let query = instruction
+            .chars()
+            .take(TASK_QUERY_MAX_CHARS)
+            .collect::<String>()
+            .to_lowercase();
+        let ascii_terms = terms(&query)
+            .into_iter()
+            .take(TASK_QUERY_MAX_ASCII_TERMS)
+            .map(str::to_owned)
+            .collect();
+        Self { query, ascii_terms }
+    }
+
+    /// Count unique matched terms in each field, independent of repetitions.
+    /// The tuple's ordinary ordering makes a name hit dominate description hits.
+    pub(crate) fn score(&self, names: &[&str], description: &str) -> (usize, usize) {
+        (self.hits(names), self.hits(&[description]))
+    }
+
+    fn hits(&self, texts: &[&str]) -> usize {
+        let lowercase = texts
+            .iter()
+            .map(|text| text.to_lowercase())
+            .collect::<Vec<_>>();
+        let metadata_terms = lowercase
+            .iter()
+            .flat_map(|text| terms_for_name(text))
+            .collect::<std::collections::BTreeSet<_>>();
+        let ascii_hits = self
+            .ascii_terms
+            .iter()
+            .filter(|term| metadata_terms.contains(term.as_str()))
+            .count();
+        // Metadata supplies lexical phrase boundaries. Do not score arbitrary
+        // single Han characters or synthesize every substring of a sentence.
+        let chinese_hits = lowercase
+            .iter()
+            .flat_map(|text| text.split(|ch| !is_han(ch)))
+            .filter(|phrase| phrase.chars().count() >= 2 && self.query.contains(*phrase))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            .min(TASK_MAX_CHINESE_HITS);
+        ascii_hits + chinese_hits
+    }
+}
+
+fn is_han(ch: char) -> bool {
+    matches!(ch, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}' | '\u{20000}'..='\u{323af}')
+}
+
 /// Query work is bounded by the manifest's 200-character input limit and the
 /// static catalog. Score once per descriptor, then break ties by canonical name.
 pub(crate) fn rank<'a>(specs: &mut Vec<&'a ToolDescriptor>, query: &str) {
@@ -134,4 +197,49 @@ fn terms(text: &str) -> Vec<&str> {
     terms.sort_unstable();
     terms.dedup();
     terms
+}
+
+#[cfg(test)]
+mod task_relevance_tests {
+    use super::{TaskRelevance, TASK_QUERY_MAX_CHARS};
+
+    #[test]
+    fn matches_unique_normalized_ascii_terms_in_each_field() {
+        let relevance = TaskRelevance::new("Please FIND project_files files");
+        assert_eq!(
+            relevance.score(&["PROJECT_FILES", "files"], "Find files; find files."),
+            (2, 2)
+        );
+        assert_eq!(relevance.score(&["please"], "unrelated"), (0, 0));
+    }
+
+    #[test]
+    fn matches_complete_chinese_metadata_phrases_without_single_characters() {
+        let relevance = TaskRelevance::new("请搜索知识库中的文档");
+        assert_eq!(
+            relevance.score(&["知识库", "知识库"], "搜索、文档、搜索"),
+            (1, 2)
+        );
+        assert_eq!(relevance.score(&["库"], "知识管理"), (0, 0));
+    }
+
+    #[test]
+    fn bounds_instruction_characters_and_unique_ascii_terms() {
+        let beyond_limit = format!("{} files", "中".repeat(TASK_QUERY_MAX_CHARS));
+        assert_eq!(
+            TaskRelevance::new(&beyond_limit).score(&["files"], ""),
+            (0, 0)
+        );
+
+        let query = (0..100)
+            .map(|index| format!("term{index:03}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let relevance = TaskRelevance::new(&query);
+        assert_eq!(relevance.score(&[&query], ""), (64, 0));
+        assert_eq!(
+            TaskRelevance::new("").score(&["files", "知识库"], ""),
+            (0, 0)
+        );
+    }
 }
