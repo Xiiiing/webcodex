@@ -123,6 +123,11 @@ impl StartupSkillsCatalog {
         entries.sort_by_cached_key(|entry| {
             Reverse(relevance.score(&[&entry.name], &entry.description))
         });
+        // Ranking consumes the complete, already-bounded Skill metadata. Only
+        // the startup display projection is clipped; explicit catalogs stay intact.
+        for entry in &mut entries {
+            entry.description = task_extension_description(&entry.description, relevance);
+        }
         Self::available(catalog_revision, discovery_truncated, entries)
     }
 
@@ -214,4 +219,32 @@ pub(crate) fn bounded_extension_description(value: &str) -> String {
         end -= 1;
     }
     value[..end].to_string()
+}
+
+/// Retain the old display prefix unless it hides all description evidence.
+/// Excerpts contain only original text; omission marks count toward the budget.
+fn task_extension_description(value: &str, relevance: &TaskRelevance) -> String {
+    let prefix = bounded_extension_description(value);
+    if value.len() <= STARTUP_EXTENSION_DESCRIPTION_MAX_BYTES || relevance.score(&[], &prefix).1 > 0
+    {
+        return prefix;
+    }
+    let Some(start) = relevance.first_description_hit(value) else {
+        return prefix;
+    };
+    const OMISSION: &str = "…";
+    let leading = if start > 0 { OMISSION } else { "" };
+    let mut end = value
+        .len()
+        .min(start + STARTUP_EXTENSION_DESCRIPTION_MAX_BYTES - leading.len());
+    let trailing = if end < value.len() {
+        end -= OMISSION.len();
+        OMISSION
+    } else {
+        ""
+    };
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{leading}{}{trailing}", &value[start..end])
 }

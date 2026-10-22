@@ -512,6 +512,86 @@ async fn work_on_project_ranks_skills_for_the_current_instruction_before_truncat
 }
 
 #[tokio::test]
+async fn work_on_project_ranks_full_skill_descriptions_without_changing_explicit_catalogs() {
+    let root = tempfile::tempdir().unwrap();
+    init_git_repo(root.path());
+    for index in 0..20 {
+        write_project_skill(
+            root.path(),
+            &format!("{index:02}"),
+            &format!("neutral-{index:02}"),
+            &"Neutral metadata. ".repeat(35),
+            "PRIVATE_BODY",
+        );
+    }
+    let description = format!(
+        "{} Quartz audit. 发票审计。",
+        "Neutral metadata. ".repeat(35)
+    );
+    write_project_skill(
+        root.path(),
+        "zz-guidance",
+        "late-guidance",
+        &description,
+        "PRIVATE_RELEVANT_BODY",
+    );
+    let runtime = ToolRuntime::new_for_tests();
+    let project =
+        register_runner_project_at_path(&runtime, "full-description", "demo", root.path()).await;
+    let auth = bootstrap_auth_context();
+    let mut revision = None;
+    for instruction in ["Perform QUARTZ audits", "请完成发票审计"] {
+        let (result, requests) = dispatch_recording_startup_requests(
+            &runtime,
+            "full-description",
+            work_on_project_call_with_extensions(&project, instruction, true),
+            Some(&auth),
+            "full-description-window",
+        )
+        .await;
+        assert!(result.success, "{:?}", result.error);
+        let catalog = &result.output["extensions"]["skills"];
+        assert_eq!(catalog["entries"][0]["name"], "late-guidance");
+        let excerpt = catalog["entries"][0]["description"].as_str().unwrap();
+        assert!(excerpt.contains(if instruction.is_ascii() {
+            "Quartz audit"
+        } else {
+            "发票审计"
+        }));
+        assert!(excerpt.starts_with('…') && excerpt.len() <= 512);
+        assert_eq!(catalog["entries"][1]["name"], "neutral-00");
+        assert_eq!(catalog["total_count"], 21);
+        assert_eq!(catalog["truncated"], true);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|kind| kind.as_str() == "file_skill_list_packages")
+                .count(),
+            1
+        );
+        assert!(!result.output.to_string().contains("PRIVATE_RELEVANT_BODY"));
+        if let Some(ref previous) = revision {
+            assert_eq!(&catalog["catalog_revision"], previous);
+        }
+        revision = Some(catalog["catalog_revision"].clone());
+    }
+    let (explicit, _) = dispatch_recording_startup_requests(
+        &runtime,
+        "full-description",
+        ToolCall::from_tool_name("list_skills", json!({"project": project, "limit": 64})).unwrap(),
+        Some(&auth),
+        "full-description-window",
+    )
+    .await;
+    assert!(explicit.success, "{:?}", explicit.error);
+    assert_eq!(explicit.output["catalog_revision"], revision.unwrap());
+    let entries = explicit.output["skills"].as_array().unwrap();
+    assert_eq!(entries[0]["name"], "neutral-00");
+    assert_eq!(entries.last().unwrap()["name"], "late-guidance");
+    assert_eq!(entries.last().unwrap()["description"], description);
+}
+
+#[tokio::test]
 async fn work_on_project_extension_catalog_includes_runner_local_configured_skill() {
     let root = tempfile::tempdir().unwrap();
     init_git_repo(root.path());

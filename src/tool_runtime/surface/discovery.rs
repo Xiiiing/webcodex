@@ -34,6 +34,49 @@ impl TaskRelevance {
         (self.hits(names), self.hits(&[description]))
     }
 
+    /// Locate lexical evidence in the original UTF-8 text, not its lowercase
+    /// copy: Unicode case conversion can change byte offsets. Skill metadata
+    /// remains bounded by its discovery contract, and query terms stay capped.
+    pub(crate) fn first_description_hit(&self, text: &str) -> Option<usize> {
+        let lowercase = text.to_lowercase();
+        let mut offset = 0;
+        let mut first = None;
+        for chunk in lowercase.split_inclusive(|ch: char| !ch.is_ascii_alphanumeric()) {
+            let word = chunk.trim_end_matches(|ch: char| !ch.is_ascii_alphanumeric());
+            if !word.is_empty()
+                && self
+                    .ascii_terms
+                    .binary_search_by(|term| term.as_str().cmp(singular(word)))
+                    .is_ok()
+            {
+                first = Some(offset);
+                break;
+            }
+            offset += chunk.len();
+        }
+        offset = 0;
+        for chunk in lowercase.split_inclusive(|ch| !is_han(ch)) {
+            if first.is_some_and(|start| offset >= start) {
+                break;
+            }
+            let phrase = chunk.trim_end_matches(|ch| !is_han(ch));
+            if phrase.chars().count() >= 2 && self.query.contains(phrase) {
+                first = Some(offset);
+                break;
+            }
+            offset += chunk.len();
+        }
+        let first = first?;
+        let mut normalized_offset = 0;
+        for (source_offset, ch) in text.char_indices() {
+            normalized_offset += ch.to_lowercase().map(char::len_utf8).sum::<usize>();
+            if first < normalized_offset {
+                return Some(source_offset);
+            }
+        }
+        None
+    }
+
     fn hits(&self, texts: &[&str]) -> usize {
         let lowercase = texts
             .iter()

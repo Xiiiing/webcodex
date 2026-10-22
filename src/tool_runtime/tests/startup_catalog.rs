@@ -313,3 +313,86 @@ fn startup_catalog_task_relevance_matches_complete_chinese_metadata_phrases() {
         ["tool-2", "tool-1", "tool-0"]
     );
 }
+
+#[test]
+fn startup_catalog_long_skill_metadata_ranks_before_display_clipping() {
+    for (query, keyword) in [
+        ("QUARTZ audits", "Quartz audit"),
+        ("请完成发票审计", "发票审计"),
+    ] {
+        let description = format!(
+            "{} {keyword}. {}",
+            "Neutral metadata. ".repeat(35),
+            "后续说明。".repeat(15)
+        );
+        assert!(description.chars().count() <= 1024);
+        assert!(!bounded_extension_description(&description).contains(keyword));
+        let mut entries: Vec<_> = (0..20)
+            .map(|i| skill(i, &"Neutral metadata. ".repeat(30)))
+            .collect();
+        entries[19].description = description.clone();
+        let actual = StartupSkillsCatalog::available_for_task(
+            "revision".to_string(),
+            true,
+            entries,
+            &TaskRelevance::new(query),
+        );
+        assert_eq!(actual.entries[0].name, "skill-19");
+        let excerpt = &actual.entries[0].description;
+        assert!(excerpt.contains(keyword), "{excerpt}");
+        assert!(excerpt.starts_with('…'));
+        assert!(excerpt.len() <= 512);
+        assert!(description.contains(excerpt.trim_matches('…')));
+        assert_eq!(actual.entries[1].name, "skill-0");
+        assert_eq!(actual.total_count, 20);
+        assert_eq!(actual.catalog_revision.as_deref(), Some("revision"));
+        assert!(actual.truncated);
+        assert!(serde_json::to_vec(&actual).unwrap().len() <= STARTUP_SKILL_CATALOG_MAX_BYTES);
+    }
+}
+
+#[test]
+fn startup_catalog_skill_excerpts_preserve_prefixes_and_original_utf8_text() {
+    let cases = [
+        ("unmatched".to_string(), "quartz"),
+        (format!("{} quartz", "x".repeat(512)), "missing"),
+        (format!("quartz {} quartz", "中".repeat(190)), "quartz"),
+        (format!("{} quartz", "中".repeat(171)), "quartz"),
+        (
+            format!("{} 发票审计、收据", "😀".repeat(128)),
+            "请完成发票审计",
+        ),
+        (
+            format!("{} quartz {} audit", "x".repeat(510), "中".repeat(10)),
+            "quartz audit",
+        ),
+        (format!("{} KUARTZ", "中".repeat(180)), "quartz"),
+        // Unicode lowercase expansion before a match must not shift source offsets.
+        (
+            format!("{} QUARTZ {}", "İ".repeat(260), "后".repeat(180)),
+            "quartz",
+        ),
+    ];
+    for (description, query) in cases {
+        let relevance = TaskRelevance::new(query);
+        let prefix = bounded_extension_description(&description);
+        let actual = StartupSkillsCatalog::available_for_task(
+            "revision".to_string(),
+            false,
+            vec![skill(0, &description)],
+            &relevance,
+        );
+        let excerpt = &actual.entries[0].description;
+        assert!(excerpt.len() <= 512);
+        if relevance.score(&[], &prefix).1 > 0 || relevance.score(&[], &description).1 == 0 {
+            assert_eq!(excerpt, &prefix);
+        } else {
+            assert!(excerpt.starts_with('…'));
+            assert!(description.contains(excerpt.trim_matches('…')));
+            if query == "quartz audit" {
+                assert!(excerpt.starts_with("…quartz"));
+            }
+            assert!(relevance.score(&[], excerpt).1 > 0, "{excerpt}");
+        }
+    }
+}

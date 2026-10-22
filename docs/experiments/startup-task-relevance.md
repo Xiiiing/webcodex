@@ -15,6 +15,23 @@ retains ties and unmatched candidates; the full catalog and its source revision
 are unchanged. Explicit discovery remains available through the existing hints.
 No resource body, Plugin binding or execution is added by ranking.
 
+Skill relevance uses the complete description from already-discovered metadata
+(up to the existing 1,024-character metadata limit), before the 512-byte startup
+display clipping and catalog budget. If the original display prefix has no
+lexical hit but later description text matches, startup instead displays an
+original-text excerpt beginning at the earliest matching term or Chinese phrase.
+The excerpt preserves UTF-8 boundaries and includes omission marks within its
+512-byte limit. Prefixes with a hit and descriptions without a hit keep the
+original prefix. Explicit Skill catalogs retain full metadata, ordering and
+revision; no extra discovery or body reads occur. Plugin descriptions already
+arrive bounded to 512 bytes through the Runner contract, which is unchanged.
+
+The long-description completion has English and Chinese regressions, including
+late metadata hits, source offsets after Unicode lowercase expansion, UTF-8
+boundaries, original-prefix preservation and explicit-catalog consistency. The
+historical checks and model task below predate this completion; they do not
+establish new runtime or model acceptance for long descriptions.
+
 Matching reuses the manifest ranker's ASCII splitting, English singularization
 and stopwords. Complete multi-character Chinese phrases from metadata may match
 the instruction; there is no translation or semantic retrieval. Query work uses
@@ -28,7 +45,19 @@ one Session, scope refusal, disabled discovery, no extra Plugin binding, counts,
 truncation, hints and aggregate startup bounds. Unmatched and equal-score order,
 Chinese phrases, normalization and query limits have focused coverage.
 
-Checks on implementation commit `332277688f5d05a3ca482056ccc8102015933a6d`:
+Long-description completion checks (2026-10-22):
+
+- Before the fix, the new end-to-end regression returned `neutral-00` first
+  instead of `late-guidance`; after the fix both English and Chinese tasks passed,
+  with explicit catalog metadata, order and revision preserved.
+- `work_on_project`: 80 passed; `startup_catalog`: 9 passed;
+  `task_relevance`: 6 passed. Filter sets overlap. The latter two ran directly
+  against the final libtest binary built for the first suite.
+- Changed Rust files passed formatting; diff whitespace and Markdown links passed.
+  The root libtest used the same command-line resource overrides recorded below.
+  These checks establish local deterministic behavior, not new model acceptance.
+
+Historical checks on implementation commit `332277688f5d05a3ca482056ccc8102015933a6d`:
 
 - `work_on_project`: 79 tests passed; `discovery`: 77 passed;
   `startup_brief`: 31 passed; `startup_catalog`: 7 passed. Filter sets overlap.
