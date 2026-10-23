@@ -33,6 +33,9 @@ fn node_project_build_admission_accepts_runner_selected_package_manager() {
                 ..Default::default()
             };
             let request = ProjectBuildRequest {
+                profile: None,
+                targets: None,
+                artifact_policy: None,
                 project_id: "demo".into(),
                 cwd: None,
                 adapter,
@@ -207,6 +210,9 @@ edition = "2021"
             ..Default::default()
         };
         let request = ProjectBuildRequest {
+            profile: None,
+            targets: None,
+            artifact_policy: None,
             dependency_resolution_policy: None,
             project_id: "demo".into(),
             cwd: member_cwd.then(|| "member".into()),
@@ -349,6 +355,9 @@ fn go_project_build_overrides_ambient_gowork_at_spawn() {
         ..Default::default()
     };
     let request = ProjectBuildRequest {
+        profile: None,
+        targets: None,
+        artifact_policy: None,
         dependency_resolution_policy: None,
         project_id: "demo".into(),
         cwd: None,
@@ -442,6 +451,9 @@ fn enqueue_python_build_fixture(
         ..Default::default()
     };
     let request = ProjectBuildRequest {
+        profile: None,
+        targets: None,
+        artifact_policy: None,
         dependency_resolution_policy: None,
         project_id: "demo".into(),
         cwd: None,
@@ -722,6 +734,9 @@ fn node_project_build_real_declared_script_and_no_adapter_installation() {
         ..Default::default()
     };
     let request = ProjectBuildRequest {
+        profile: None,
+        targets: None,
+        artifact_policy: None,
         dependency_resolution_policy: None,
         project_id: "demo".into(),
         cwd: None,

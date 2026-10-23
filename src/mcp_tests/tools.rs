@@ -2691,6 +2691,43 @@ async fn mcp_tools_list_stateless_serialized_size_budget() {
         marginal_cost
     }
 
+    // Charge only the three new Rust build inputs and this tool's added
+    // guidance. Keep every pre-existing surface ceiling unchanged; the explicit
+    // per-tool caps prevent this from becoming an unbounded general allowance.
+    fn project_build_rust_options_marginal_allowance(model_tools: &[Value]) -> usize {
+        let Some(tool) = model_tools
+            .iter()
+            .find(|tool| tool["name"] == "project_build")
+        else {
+            return 0;
+        };
+        let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+        let mut schema_cost = 0;
+        for field in ["profile", "targets", "artifact_policy"] {
+            let value = properties
+                .get(field)
+                .expect("Rust build input must remain discoverable");
+            schema_cost += serde_json::to_vec(field).unwrap().len()
+                + 1
+                + serde_json::to_vec(value).unwrap().len()
+                + 1;
+        }
+        assert!(
+            schema_cost <= 1280,
+            "Rust build options schema cost {schema_cost} exceeds 1280 bytes"
+        );
+        let description = tool["description"].as_str().unwrap();
+        for field in ["profile", "targets", "artifact_policy=observe"] {
+            assert!(description.contains(field));
+        }
+        let guidance_cost = description.len().saturating_sub(415);
+        assert!(
+            guidance_cost <= 256,
+            "Rust build options guidance cost {guidance_cost} exceeds 256 bytes"
+        );
+        schema_cost + guidance_cost
+    }
+
     // The explicit Node lint action adds a closed schema variant and provenance.
     // Reserve a narrow 512-byte increment; retain the existing base ceilings.
     const NODE_LINT_SCHEMA_ALLOWANCE_BYTES: usize = 512;
@@ -2760,6 +2797,11 @@ async fn mcp_tools_list_stateless_serialized_size_budget() {
                     + if app_enabled { 4_000 } else { 0 }
                     + experimental_code_mode_byte_budget
                     + project_format_marginal_byte_budget
+                    + if compact {
+                        project_build_rust_options_marginal_allowance(model_tools)
+                    } else {
+                        0
+                    }
                     + project_build_offline_marginal_byte_budget;
                 // Raw transport includes private App bridge descriptors and Host
                 // presentation metadata. Keep a coarse overhead ceiling so transport

@@ -362,6 +362,23 @@ fn run_process_with_output(
             });
         }
     }
+    // A multi-phase build must spend one shared budget, including environment
+    // preparation. Whole seconds round down rather than extend that deadline.
+    let timeout_secs = if let Some(deadline) = deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
+        if remaining == 0 {
+            return ShellCommandResult::timed_out(CommandResult {
+                exit_code: None,
+                stdout: None,
+                stderr: None,
+                duration_ms: Some(start.elapsed().as_millis() as u64),
+                error: Some("execution deadline expired during preparation".into()),
+            });
+        }
+        timeout_secs.min(remaining)
+    } else {
+        timeout_secs
+    };
     super::execution::execute_configured_command_with_output(
         policy,
         cmd,
@@ -373,5 +390,45 @@ fn run_process_with_output(
         "failed to spawn structured process",
         on_started,
         exact_utf8,
+    )
+}
+
+/// Private multi-phase build path; ordinary process requests keep their policy.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_rust_build_phase(
+    generation: u64,
+    policy: &RunnerPolicy,
+    shell: &ShellConfig,
+    registry: &Path,
+    cache: &PreparedShellProfileCache,
+    cwd: &str,
+    args: &[String],
+    deadline: Instant,
+    stop: &AtomicBool,
+    on_started: Option<&dyn Fn()>,
+    fence: &dyn Fn() -> Result<(), String>,
+) -> ShellCommandResult {
+    run_process_with_output(
+        generation,
+        policy,
+        shell,
+        registry,
+        cache,
+        Some(cwd),
+        "cargo",
+        args,
+        None,
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_secs()
+            .max(1),
+        Some(stop),
+        &[("RUSTUP_AUTO_INSTALL", "0")],
+        &[],
+        on_started,
+        Some(fence),
+        false,
+        Some(deadline),
+        false,
     )
 }
