@@ -1203,10 +1203,43 @@ fn rust_clippy_scope_policy_identity_and_evidence_are_distinct() {
             "clippy::correctness"
         ]
     );
-    assert!(lint
+    let offline = lint
         .clone()
         .with_dependency_resolution_policy(Some(ProjectDependencyResolutionPolicy::Offline))
-        .is_err());
+        .unwrap();
+    assert_ne!(plain, offline.validation_target_id(Some(".")));
+    let offline_step = offline.build_readonly_plan().unwrap().structured_step;
+    assert_eq!(
+        offline_step.args,
+        [
+            "clippy",
+            "--offline",
+            "--all-targets",
+            "--",
+            "-D",
+            "clippy::correctness"
+        ]
+    );
+    assert!(offline_step.is_canonical());
+    let both = locked
+        .with_dependency_resolution_policy(Some(ProjectDependencyResolutionPolicy::Offline))
+        .unwrap();
+    assert_ne!(
+        offline.validation_target_id(Some(".")),
+        both.validation_target_id(Some("."))
+    );
+    assert_eq!(
+        both.build_readonly_plan().unwrap().structured_step.args,
+        [
+            "clippy",
+            "--locked",
+            "--offline",
+            "--all-targets",
+            "--",
+            "-D",
+            "clippy::correctness"
+        ]
+    );
     assert!(lint.clone().with_test_filter(Some("a")).is_err());
     for backend in ["go", "python", "node"] {
         assert!(project_validation_operation(backend, SemanticCheck::Lint, None, false).is_err());
@@ -1243,6 +1276,7 @@ fn rust_clippy_scope_policy_identity_and_evidence_are_distinct() {
         vec!["clippy", "--all-targets", "--", "-D", "warnings"],
         vec![
             "clippy",
+            "--offline",
             "--offline",
             "--all-targets",
             "--",

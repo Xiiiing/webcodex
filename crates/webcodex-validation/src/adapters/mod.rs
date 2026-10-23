@@ -191,7 +191,8 @@ impl ReadOnlyValidationOperation {
             return Ok(self);
         };
         match &mut self {
-            Self::Cargo(CargoReadOnlyValidationOperation::Check(options)) => {
+            Self::Cargo(CargoReadOnlyValidationOperation::Check(options))
+            | Self::Cargo(CargoReadOnlyValidationOperation::Clippy(options)) => {
                 options.dependency_resolution_policy = Some(policy)
             }
             Self::Cargo(CargoReadOnlyValidationOperation::Test(options)) => {
@@ -204,7 +205,8 @@ impl ReadOnlyValidationOperation {
 
     fn dependency_resolution_policy(&self) -> Option<ProjectDependencyResolutionPolicy> {
         match self {
-            Self::Cargo(CargoReadOnlyValidationOperation::Check(options)) => {
+            Self::Cargo(CargoReadOnlyValidationOperation::Check(options))
+            | Self::Cargo(CargoReadOnlyValidationOperation::Clippy(options)) => {
                 options.dependency_resolution_policy
             }
             Self::Cargo(CargoReadOnlyValidationOperation::Test(options)) => {
