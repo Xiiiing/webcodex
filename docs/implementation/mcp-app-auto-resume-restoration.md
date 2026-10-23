@@ -7,7 +7,7 @@ Gateway tools. This procedure is the dogfood/publication gate for future changes
 to continuation behavior or Host integration. It does not itself establish Host
 readiness or authorize deployment.
 
-The Agent View uses `ui://webcodex/agent-continuation/v22`. A valid ref-only
+The Agent View uses `ui://webcodex/agent-continuation/v24`. A valid ref-only
 presentation input waits for the initial Server result to resolve the exact
 identity; the ref itself never grants identity or authority. This fixes the
 previous initialization teardown when the Host delivered ref-only tool input
@@ -110,8 +110,8 @@ Host limitations tracked in [#1051](https://github.com/yyjeqhc/webcodex/issues/1
 Use the same actual Host/browser, account, disposable connection, visibility
 pattern and readiness policy for both builds. Record their exact commit and
 build identities. Baseline Goal Plan uses a 60s hidden target; candidate uses
-30s (resource `ui://webcodex/goal-plan/v10`, App 9.0.0) and Agent resource
-`ui://webcodex/agent-continuation/v22` (App 22.0.0). The 300s inactivity threshold,
+30s (resource `ui://webcodex/goal-plan/v10`, App 10.0.0) and Agent resource
+`ui://webcodex/agent-continuation/v24` (App 24.0.0). The 300s inactivity threshold,
 75s observation lease, 10s RPC timeout and Agent 15s hidden heartbeat are unchanged.
 Changing binaries or restarting a deployment needs separate authorization; this
 procedure grants none. Keep policy `unknown` until real unattended behavior is
@@ -168,6 +168,83 @@ latency; three trials do not establish broad Host reliability. A faster callback
 with the same modal behavior is a narrower result than unattended continuation.
 Do not claim improvement, zero-click readiness or gate completion from local
 fake-clock tests. The required real-Host matrix remains a publication gate.
+
+### Safe single-trial prompt and capture
+
+The operator first verifies the existing test role, loaded resources and an
+explicitly authorized controller setup in the real ChatGPT Web conversation.
+Health, a connected Tunnel, an attached Endpoint or a readiness flag alone is
+not acceptance evidence. If Host safety blocks Endpoint rotation or card
+presentation, record that exact blocked step and stop the trial. Do not retry
+it, substitute a gateway call, change the policy, or use another connection to
+bypass the block. A blocked setup is not one of the six completed trials.
+
+After the operator has supplied an existing test Project and exact authorized
+controller identity, use this prompt, filling every bracketed selector explicitly:
+
+```text
+Run one harmless Goal-continuation measurement: [baseline/candidate]-[1/2/3].
+Use only the selected existing test connection [connection] and disposable
+Project [exact project selector]. The operator has verified build [identity],
+Goal resource [identity] and Agent resource [identity], with readiness policy
+unknown. Use only this exact authorized controller [Agent/Endpoint/generation].
+
+Establish the exact Workflow Session with work_on_project. Prepare one new Goal
+explicitly correlated to that Session and controller, with two steps: establish
+this read-only observation, then verify a fresh resumed turn and close the Goal.
+Completion means recovering this exact Goal/Session after inactivity, checking
+one named existing harmless file [path], and recording the observed result.
+Present the exact Goal Plan and Agent Continuation cards through their normal
+Direct presentation tools, only while the ordinary Host permits those actions.
+If safety blocks an action, stop and report the blocked step; do not retry it,
+route around it, or change connections/permissions. If the supplied identity,
+build or normal tool guidance cannot be verified, stop without guessing.
+
+Complete the first Goal step and leave the second pending. Make one bounded
+read of [path] with the exact Session recording correlation, then end this turn
+normally with the trial label and exact Goal/Session references. Do not sleep,
+wait in this turn, poll from the model, queue a scheduled task, send another
+message or simulate resumption. The operator will hide the chat for the trial.
+
+Only if the existing continuation path starts a genuinely new model turn,
+follow its exact Wake/bootstrap/consume instructions, recover this Goal and
+Session handoff, perform the bounded read, and checkpoint/complete this Goal.
+Report that measured result once. Never resend unknown delivery or repeat an
+uncertain effect. Do not edit source files, commit, publish, message anyone,
+change settings, rotate credentials or operate services during this trial.
+```
+
+Before ending the setup turn, enable both local timing rings and the authorized
+Server's existing metadata trace. Capture the final meaningful completion from
+Server evidence as the quiet-start anchor; the assistant final timestamp is a
+separate observation. Agree on one fixed visibility pattern and an observation
+end limit for all six trials (for example 420s after quiet start, extending it
+only to finish a dispatch already observed). Device sleep and user actions are
+confounders and must be attributed. Do not click a confirmation during the
+unattended measurement window. If a modal appears, first record its UTC time
+and redacted image reference; any later deliberate confirmation starts a
+separately labeled user-confirmed segment.
+
+Capture before the 64-record rings roll over. Preserve only bounded projections:
+local poll/RPC/Host timing records, metadata eligibility reasons and lease
+margins, exact Event/Wake/Attempt linkage, and exact-consume/first meaningful
+work timestamps. Keep a private local mapping of exact identities if needed;
+public evidence uses consistent redacted labels. Use the existing protected
+trace destination and a private evidence directory outside the repository.
+Neither complete logs nor chat transcripts should be uploaded. Crop/redact
+screenshots to exclude identities, automatic messages and private content;
+never copy consume tokens, binding/claim fences or credentials. Correlate local
+monotonic clocks through App call ids and Server request timestamps rather than
+subtracting unrelated clock origins. Record unavailable fields explicitly.
+
+When resumed, verify at least one further Goal/Agent polling interval without
+a second Host dispatch for the same event. If no fresh turn occurs, end at the
+agreed limit and record missing consume and work timestamps; do not invent
+zero-click latency or count a manually prompted turn as automatic recovery.
+The six trials, lifecycle evidence and original Agent/Job matrix remain separate
+required gates. A narrower fix may reuse an existing matrix result only when
+its exact unchanged runtime source/Host behavior and applicability are recorded;
+new cadence or local timing evidence alone cannot waive a missing gate.
 
 Copy this report template into the task's evidence when actual trials are run:
 

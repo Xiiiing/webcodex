@@ -97,6 +97,25 @@ calls carry `goal_id` plus an optional adapter-stripped diagnostic `app_call_id`
 selector or claimed coverage is trusted. There is no Goal Plan `ui/message` path.
 Terminal state stops polling.
 
+For the hidden-cadence change, reuse the existing lifecycle tests at their
+own boundaries; faster browser polling must not change their authority rules:
+
+| Boundary | Deterministic regression evidence |
+| --- | --- |
+| Browser callback delayed beyond 75s | `hidden callback after lease expiry sends one sync without catch-up bursts`; `goal_workflow_delayed_hidden_card_requires_new_observation_without_new_epoch` covers 75,001ms and 180,000ms gaps and exact fresh observation before one Wake |
+| Agent heartbeat/Endpoint expiry | `input-only background carrier keeps bounded heartbeat cadence`; `agent_listing_projects_only_current_production_continuation_readiness` rejects an expired Endpoint even with a retained local binding |
+| Unload/remount | Goal teardown tests; `mcp_app_restart_refresh_recovers_only_same_client_window_without_attachment_shortcut`; old View/binding cannot retarget |
+| Server restart | `mcp_app_restart_recovery_preserves_prepared_delivery_unknown_without_redispatch`; exact same-Window restart recovery tests |
+| Terminal Goal or Session | `goal_workflow_absent_controller_and_terminal_goals_do_not_create_attention`; `goal_workflow_requires_current_unambiguous_active_session_not_historical_window_link` |
+| Controller replacement | `goal_continuity_does_not_retarget_an_existing_stall_wake_after_controller_replacement`; App identity-epoch and replacement tests |
+| New meaningful work and incomplete coverage | `goal_workflow_new_meaningful_work_is_required_for_a_new_inactivity_epoch`; `goal_workflow_partial_window_coverage_never_commits_attention` |
+| Duplicate/unknown dispatch | Accepted/error/timeout/teardown App tests; `goal_workflow_same_durable_agent_is_worker_and_controller_and_stall_uses_existing_host_fences`; exact-consume and no-redispatch regressions |
+
+These are automated local fixtures, not real ChatGPT observations. The separate
+[Host comparison and capture procedure](../implementation/mcp-app-auto-resume-restoration.md#goal-hidden-cadence-baseline-and-candidate-comparison)
+requires three 300s trials per build, actual modal/fresh-turn observation and
+exact Wake consume before the named real-Host gate can pass.
+
 Representative focused commands:
 
 ```sh

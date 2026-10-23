@@ -49,7 +49,7 @@ resource tests still verify content, metadata, admission and native delivery.
 | Results | `ui://webcodex/changes/v4` |
 | Work Result | `ui://webcodex/work-result/v14` |
 | Goal Plan | `ui://webcodex/goal-plan/v10` |
-| Agent continuation | `ui://webcodex/agent-continuation/v22` |
+| Agent continuation | `ui://webcodex/agent-continuation/v24` |
 | Job terminal continuation | `ui://webcodex/job-terminal-continuation/v2` |
 
 Tool renames change the callable names inside several App templates. Keeping the
