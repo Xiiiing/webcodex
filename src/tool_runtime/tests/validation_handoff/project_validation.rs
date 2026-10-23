@@ -1201,6 +1201,55 @@ async fn rust_clippy_pending_observes_same_job_and_exit_status_controls_outcome(
             });
             let (request, job_id) =
                 reply_plan(&runtime, "rust", ProjectValidationAction::Lint).await;
+            // Exercise the real Server emission contract across the JSON transport
+            // boundary; a typed planning mock alone cannot prove wire decoding.
+            let wire: crate::runner_protocol::RunnerRequest =
+                serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+            let decoded = wire.decode_operation();
+            assert!(
+                matches!(
+                    decoded,
+                    Ok(webcodex_core::runner_operation::RunnerOperation::Job(
+                        webcodex_core::runner_operation::RunnerJobOperation::StartValidation(_)
+                    ))
+                ),
+                "emitted validation wire must decode: {decoded:?}"
+            );
+            let envelope = crate::runner_protocol::RunnerEnvelope::Request {
+                request: wire.clone(),
+            };
+            let encoded = envelope.to_json().unwrap();
+            let envelope = crate::runner_protocol::RunnerEnvelope::from_slice(encoded.as_bytes())
+                .expect("actual validation transport envelope must deserialize");
+            let crate::runner_protocol::RunnerEnvelope::Request {
+                request: transported,
+            } = envelope
+            else {
+                panic!("expected validation request transport envelope");
+            };
+            let transported_operation = transported.decode_operation();
+            assert!(
+                matches!(
+                    transported_operation,
+                    Ok(webcodex_core::runner_operation::RunnerOperation::Job(
+                        webcodex_core::runner_operation::RunnerJobOperation::StartValidation(_)
+                    ))
+                ),
+                "actual validation envelope must preserve operation: {transported_operation:?}"
+            );
+            let context = wire.job_context.as_ref().unwrap();
+            assert!(context
+                .runtime_project_id
+                .as_ref()
+                .unwrap()
+                .starts_with("agent:project-validation:"));
+            assert!(context
+                .validation
+                .as_ref()
+                .unwrap()
+                .source_fence
+                .as_ref()
+                .is_some_and(|fence| fence.is_valid()));
             let metadata = request
                 .job_context
                 .as_ref()
