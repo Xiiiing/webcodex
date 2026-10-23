@@ -1,7 +1,5 @@
 use super::support::*;
-use crate::runner_protocol::{
-    RunnerCapabilities, RunnerRegisterRequest, RunnerResultPayload, RunnerResultRequest,
-};
+use crate::runner_protocol::{RunnerCapabilities, RunnerRegisterRequest, RunnerResultPayload};
 use crate::tool_runtime::ToolRuntime;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -21,11 +19,7 @@ async fn register_runner_with_run_inventory(
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
             process_started_at: Some(1_700_000_000),
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
             coding_agent_providers: Some(vec![CodingAgentProvider {
                 provider_id: "codex".into(),
                 provider_instance_id: "codex-instance".into(),
@@ -34,18 +28,16 @@ async fn register_runner_with_run_inventory(
             coding_agent_inventory: Some(CodingAgentRunInventory {
                 runs: run.into_iter().collect(),
             }),
-            client_id: client_id.into(),
-            runner_instance_id: "inst".into(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
             display_name: Some("Workbench recovery runner".into()),
             owner: Some("workbench-owner".into()),
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(RunnerCapabilities {
-                coding_agent_runs: true,
-                ..Default::default()
-            }),
-            policy: None,
+            ..crate::test_support::runner_registration(
+                client_id,
+                "inst",
+                RunnerCapabilities {
+                    coding_agent_runs: true,
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -88,11 +80,13 @@ async fn workbench_runner_submission_is_durable_and_same_key_replay_never_starts
     let auth = bootstrap_auth_context();
     let agent = runtime.create_agent_identity(
         Some(&auth),
-        "workbench-runner-agent".into(),
-        "Workbench Runner Agent".into(),
-        None,
-        Vec::new(),
-        "workbench-runner-agent-create".into(),
+        webcodex_tool_contracts::CreateAgentIdentityInput {
+            handle: "workbench-runner-agent".into(),
+            display_name: "Workbench Runner Agent".into(),
+            description: None,
+            specialty_labels: Vec::new(),
+            idempotency_key: "workbench-runner-agent-create".into(),
+        },
     );
     assert!(agent.success, "{:?}", agent.output);
     let agent_id = agent.output["agent"]["agent_id"].as_str().unwrap();
@@ -139,18 +133,7 @@ async fn workbench_runner_submission_is_durable_and_same_key_replay_never_starts
     runtime
         .runner_registry
         .complete(RunnerResultPayload {
-            result: RunnerResultRequest {
-                client_id: client_id.into(),
-                runner_instance_id: "inst".into(),
-                request_id: request.request_id,
-                exit_code: None,
-                stdout: None,
-                stderr: None,
-                stdout_truncated: false,
-                stderr_truncated: false,
-                duration_ms: None,
-                error: None,
-            },
+            result: runner_result_request(client_id.into(), "inst".into(), request.request_id),
             command_execution_state: None,
             mcp_gateway: None,
             plugin_gateway: None,
@@ -411,11 +394,13 @@ async fn workbench_rejects_missing_project_and_stale_chat_route_before_creating_
     let auth = bootstrap_auth_context();
     let agent = runtime.create_agent_identity(
         Some(&auth),
-        "workbench-reject-agent".into(),
-        "Workbench Reject Agent".into(),
-        None,
-        Vec::new(),
-        "workbench-reject-agent-create".into(),
+        webcodex_tool_contracts::CreateAgentIdentityInput {
+            handle: "workbench-reject-agent".into(),
+            display_name: "Workbench Reject Agent".into(),
+            description: None,
+            specialty_labels: Vec::new(),
+            idempotency_key: "workbench-reject-agent-create".into(),
+        },
     );
     assert!(agent.success, "{:?}", agent.output);
     let agent_id = agent.output["agent"]["agent_id"].as_str().unwrap();
@@ -481,11 +466,13 @@ async fn workbench_chat_executor_is_projected_and_usable_only_in_its_bound_windo
     let auth = bootstrap_auth_context();
     let agent = runtime.create_agent_identity(
         Some(&auth),
-        "workbench-chat-agent".into(),
-        "Workbench Chat Agent".into(),
-        None,
-        Vec::new(),
-        "workbench-chat-agent-create".into(),
+        webcodex_tool_contracts::CreateAgentIdentityInput {
+            handle: "workbench-chat-agent".into(),
+            display_name: "Workbench Chat Agent".into(),
+            description: None,
+            specialty_labels: Vec::new(),
+            idempotency_key: "workbench-chat-agent-create".into(),
+        },
     );
     assert!(agent.success, "{:?}", agent.output);
     let agent_id = agent.output["agent"]["agent_id"]
@@ -494,10 +481,12 @@ async fn workbench_chat_executor_is_projected_and_usable_only_in_its_bound_windo
         .to_owned();
     let attached = runtime.attach_agent_endpoint(
         Some(&auth),
-        agent_id.clone(),
-        "ChatGPT".into(),
-        None,
-        "workbench-chat-endpoint".into(),
+        webcodex_tool_contracts::RotateAgentContinuationEndpointInput {
+            agent_id: agent_id.clone(),
+            host: "ChatGPT".into(),
+            client_attachment_id: None,
+            idempotency_key: "workbench-chat-endpoint".into(),
+        },
     );
     assert!(attached.success, "{:?}", attached.output);
     let endpoint_id = attached.output["endpoint"]["endpoint_id"]

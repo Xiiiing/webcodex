@@ -55,7 +55,8 @@ pub struct PluginToolCall {
     #[schemars(regex(pattern = "^wc_pbind_[A-Za-z0-9_-]{21}[AQgw]$"))]
     #[serde(default)]
     pub binding: Option<String>,
-    /// Exact Project required by projectBound on describe; calls recheck write authority and root, not a sandbox.
+    /// Exact Project selected only on describe, required by projectBound. Call accepts only binding
+    /// and arguments and rechecks the bound Project's write authority and root; not a sandbox.
     #[schemars(length(min = 1, max = 512))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
@@ -71,14 +72,18 @@ mod plugin_project_tests;
 
 impl PluginToolCall {
     fn validate(&self) -> Result<(), String> {
+        const CALL_INPUT_ERROR: &str = "action=call accepts only binding and arguments; both are required. Project is selected on action=describe. Reuse a retained binding only for the same intended Project. If no binding is retained or you intend another Project, describe the exact runner, plugin, and tool (with the intended project when projectBound) and use its binding. Reconcile any earlier unknown outcome before retrying an effect.";
         if let Some(project) = self.project.as_deref() {
-            if self.action != PluginToolAction::Describe
-                || project.trim().is_empty()
-                || project.len() > 512
-                || project.chars().any(char::is_control)
+            if self.action == PluginToolAction::Call {
+                return Err(CALL_INPUT_ERROR.to_string());
+            }
+            if self.action != PluginToolAction::Describe {
+                return Err("project is accepted only on action=describe, not on list, check, reload, or call".to_string());
+            }
+            if project.trim().is_empty() || project.len() > 512 || project.chars().any(char::is_control)
             {
                 return Err(
-                    "project must be an exact bounded Project on action=describe".to_string(),
+                    "project on action=describe must be an exact bounded Project: a non-empty authorized Project selector of at most 512 bytes without control characters. Select the intended Project explicitly; do not infer it from a Session or recorder metadata.".to_string(),
                 );
             }
         }
@@ -155,7 +160,7 @@ impl PluginToolCall {
                     || self.arguments.is_some()
                 {
                     return Err(
-                        "action=describe requires only runner, plugin, and tool".to_string()
+                        "action=describe requires runner, plugin, and tool, plus project when projectBound; not binding or arguments".to_string()
                     );
                 }
             }
@@ -166,7 +171,7 @@ impl PluginToolCall {
                     || self.plugin.is_some()
                     || self.tool.is_some()
                 {
-                    return Err("action=call requires only binding and arguments".to_string());
+                    return Err(CALL_INPUT_ERROR.to_string());
                 }
             }
         }
@@ -1256,6 +1261,9 @@ pub enum ComputerObserveToolCall {
         client_id: String,
         #[schemars(length(min = 1, max = 128))]
         surface_id: String,
+        #[schemars(length(min = 9, max = 128))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        root_element_id: Option<String>,
         #[schemars(range(min = 0))]
         #[serde(default)]
         max_depth: Option<usize>,
@@ -1268,6 +1276,9 @@ pub enum ComputerObserveToolCall {
         client_id: String,
         #[schemars(length(min = 1, max = 128))]
         surface_id: String,
+        #[schemars(length(min = 9, max = 128))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        root_element_id: Option<String>,
         #[schemars(length(min = 1, max = 256))]
         #[serde(default)]
         role: Option<String>,
@@ -1285,6 +1296,7 @@ pub enum ComputerObserveToolCall {
         #[serde(default)]
         limit: Option<usize>,
     },
+    /// Re-resolve a current element without replacing its observation_generation. When action support is unclear, inspect can_press/can_focus/can_input_text before choosing press/focus/input_text. Advisory native state grants no permission or capability and cannot refresh a stale element_id.
     ElementState {
         #[schemars(length(min = 1, max = 128))]
         client_id: String,
@@ -1389,8 +1401,14 @@ pub enum ComputerControlToolCall {
         client_id: String,
         #[schemars(length(min = 1, max = 128))]
         surface_id: String,
+        /// Exact lowercase navigation key from the closed vocabulary; letters and shortcut strings
+        /// such as Ctrl+P are unsupported. The exact surface must already be foreground/focused.
+        #[schemars(schema_with = "webcodex_core::computer_input_contract::computer_key_schema")]
         key: String,
-        #[schemars(length(max = 4))]
+        /// Unique canonical modifiers; omission/null means none. Windows maps option to Alt, rejects
+        /// command, option+Tab, option+Escape, and any control+Escape chord. macOS uses the named
+        /// Shift/Control/Option/Command flags. Held/interfering keys can fail native preflight.
+        #[schemars(schema_with = "webcodex_core::computer_input_contract::computer_key_modifiers_schema")]
         #[serde(default)]
         modifiers: Option<Vec<String>>,
     },

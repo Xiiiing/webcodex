@@ -564,38 +564,6 @@ impl Database {
             );
             ",
         )?;
-        let has_recovery_fingerprint: i64 = transaction.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM pragma_table_info('wc_agent_endpoints')
-                WHERE name = 'mcp_app_recovery_fingerprint'
-            )",
-            [],
-            |row| row.get(0),
-        )?;
-        if has_recovery_fingerprint == 0 {
-            transaction.execute(
-                "ALTER TABLE wc_agent_endpoints
-                 ADD COLUMN mcp_app_recovery_fingerprint TEXT
-                 CHECK(mcp_app_recovery_fingerprint IS NULL OR length(mcp_app_recovery_fingerprint) = 64)",
-                [],
-            )?;
-        }
-        let has_client_window_key: i64 = transaction.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM pragma_table_info('wc_agent_endpoints')
-                WHERE name = 'mcp_app_client_window_key'
-            )",
-            [],
-            |row| row.get(0),
-        )?;
-        if has_client_window_key == 0 {
-            transaction.execute(
-                "ALTER TABLE wc_agent_endpoints
-                 ADD COLUMN mcp_app_client_window_key TEXT
-                 CHECK(mcp_app_client_window_key IS NULL OR length(mcp_app_client_window_key) = 64)",
-                [],
-            )?;
-        }
         transaction.commit()?;
         Ok(())
     }
@@ -919,6 +887,29 @@ impl Database {
         principal: &CommunicationPrincipal,
         input: NewAgentEndpoint,
     ) -> Result<AgentEndpointMutation, CommunicationStoreError> {
+        self.attach_agent_endpoint_with_host_window(principal, input, None)
+    }
+
+    /// Reserve authenticated Host-window continuity during explicit Endpoint
+    /// creation, before an iframe can mount. This is NOT a live binding or a
+    /// lease renewal: wake capability remains false until a separate View bind.
+    /// It only allows the originating Window to recover a naturally expired
+    /// first mount without granting another Window controller authority.
+    pub fn attach_agent_endpoint_with_host_window(
+        &self,
+        principal: &CommunicationPrincipal,
+        input: NewAgentEndpoint,
+        host_window_key: Option<&str>,
+    ) -> Result<AgentEndpointMutation, CommunicationStoreError> {
+        if let Some(key) = host_window_key {
+            validate_mcp_app_client_window_key(key)?;
+            if input.wake_capable {
+                return Err(CommunicationStoreError::new(
+                    "host_window_requires_inert_endpoint",
+                    "Host Window reservation cannot create a wake-capable Endpoint",
+                ));
+            }
+        }
         validate_id(&input.agent_id, DURABLE_AGENT_ID_PREFIX, "invalid_agent_id")?;
         validate_communication_principal(principal)?;
         let host = validate_nonempty_chars(
@@ -1057,12 +1048,13 @@ impl Database {
                 "INSERT INTO wc_agent_endpoints (
                     endpoint_id, agent_id, attachment_principal_kind,
                     attachment_principal_digest, host, client_attachment_id,
-                    wake_capable, controller_generation, lifecycle,
+                    wake_capable, mcp_app_client_window_key,
+                    controller_generation, lifecycle,
                     attached_at_unix_ms, last_seen_at_unix_ms,
                     lease_expires_at_unix_ms, expired_at_unix_ms,
                     detached_at_unix_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'attached',
-                           ?9, ?9, ?10, NULL, NULL)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'attached',
+                           ?10, ?10, ?11, NULL, NULL)",
                 params![
                     endpoint_id,
                     input.agent_id,
@@ -1071,6 +1063,7 @@ impl Database {
                     host,
                     client_attachment_id,
                     input.wake_capable as i64,
+                    host_window_key,
                     controller_generation,
                     now,
                     lease_expires_at_unix_ms,

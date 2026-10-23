@@ -36,12 +36,15 @@ pub use evidence::{
     event_is_job_acceptance_only, event_observes_validation_activity, extract_validation_events,
     skipped_validation_summary, validation_kind_for_tool, validation_summary_for_session_events,
     validation_summary_from_events, CurrentValidationEvidenceProjection, ValidationEvent,
+    ValidationFacts, ValidationReport, ValidationStatus,
 };
 pub use recipe::{
-    detect_validation_recipe, resolve_node_native_project_check, resolve_node_native_project_test,
-    resolve_node_project_build, resolve_project_validation_recipe, resolve_validation_recipe,
-    resolve_validation_recipe_with_packages, resolve_validation_recipe_with_project_policy,
-    validate_node_project_markers, RecipeError, RecipeId, ResolvedValidationRecipe, SemanticCheck,
+    detect_validation_recipe, resolve_node_native_project_check, resolve_node_native_project_lint,
+    resolve_node_native_project_test, resolve_node_project_build,
+    resolve_project_validation_recipe, resolve_project_validation_recipe_with_resolution_policy,
+    resolve_validation_recipe, resolve_validation_recipe_with_packages,
+    resolve_validation_recipe_with_project_policy, validate_node_project_markers, RecipeError,
+    RecipeId, ResolvedValidationRecipe, SemanticCheck,
 };
 pub use webcodex_core::cargo_test_count::{
     parse_cargo_test_run_metadata, CargoTestRunMetadata, CargoTestRunMetadataAccumulator,

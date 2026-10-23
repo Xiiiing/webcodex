@@ -22,6 +22,7 @@ mod orchestration_host;
 mod validation;
 #[cfg(feature = "experimental-code-mode")]
 pub(crate) use code_mode::is_admitted_nested_tool as code_mode_nested_tool_is_admitted;
+mod closeout_evidence;
 mod closeout_facts;
 mod closeout_projection;
 mod coding_agent;
@@ -165,10 +166,13 @@ pub(crate) use files::{
 };
 #[cfg(test)]
 pub(crate) use permissions::{AuthorityMode, PermissionEvaluator};
+pub(crate) use projects::{ProjectInventoryPage, ProjectInventoryRow};
 #[cfg(test)]
 pub(crate) use runner_authorization::required_runner_capability;
 pub use runtime::ToolRuntime;
+pub(crate) use runtime_compatibility::build_alignment_name;
 pub use runtime_info::RuntimeInfo;
+pub(crate) use runtime_info::{ListRunnersOptions, RunnerInventoryPage, RunnerInventoryRow};
 #[cfg(test)]
 pub(crate) use session_context::workflow_session_authority_fingerprint;
 #[cfg(test)]

@@ -77,6 +77,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
   const resultAppCallIds = new WeakMap();
   let identity = null;
   let presentationRef = null;
+  let initialResultUnavailable = false;
   let identityEpoch = 0;
   let endpointRecoveryProbeEpoch = -1;
   let bindingId = null;
@@ -588,6 +589,10 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
     el("binding").textContent = "Connected";
     if (projection.dispatch_observation === "continuation_consumed") {
       el("status").textContent = "Work resumed successfully";
+    } else if (projection.dispatch_observation === "dispatch_unknown") {
+      el("status").textContent = "Host delivery unconfirmed · no automatic retry";
+    } else if (projection.dispatch_observation === "dispatch_accepted") {
+      el("status").textContent = "Host accepted follow-up · awaiting a fresh turn";
     } else if (document.hidden) {
       el("status").textContent = projection.wake ? "Continuing queued work in background…" : "Connected in background";
     } else if (projection.wake) {
@@ -744,14 +749,20 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
     // This process-local marker is set before the Host call. Reload/loss cannot
     // cause a blind resend: replacement binding reconciles prepared -> unknown.
     dispatchStarted = wake.attempt_id;
-    let outcome = "delivery_unknown";
     const hostDispatchStartedAt = performance.now();
-    timing("host_dispatch_start", { outcome: "dispatching" });
+    let outcome = "delivery_unknown";
+    timing("host_dispatch_start");
     try {
-      await request("ui/message", {
+      const hostMessageResult = await request("ui/message", {
         role: "user",
         content: [{ type: "text", text: automaticMessage }],
       });
+      // A Host can resolve ui/message with isError:true instead of rejecting.
+      // Acceptance is not a new model turn and never licenses a blind retry.
+      if (!hostMessageResult || typeof hostMessageResult !== "object" || Array.isArray(hostMessageResult)
+        || ![undefined, false].includes(hostMessageResult.isError)) {
+        throw hostFailure("malformed-result");
+      }
       outcome = "dispatch_accepted";
       timing("host_dispatch_complete", { outcome, duration_ms: performance.now() - hostDispatchStartedAt });
     } catch (error) {
@@ -761,6 +772,9 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
       timing("host_dispatch_error", { outcome, failure_kind: failureKind, duration_ms: performance.now() - hostDispatchStartedAt });
       // After prepare, Host rejection/timeout/response loss is conservatively unknown.
     }
+    // Observation only: acceptance is not proof of a new turn or Wake consumption.
+    // Do not log the prepared message, private Attempt ids, or Host errors.
+    timing("host_dispatch_result", { outcome, duration_ms: performance.now() - hostDispatchStartedAt });
     await finishAttempt(wake, outcome);
   }
 
@@ -894,6 +908,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
       // exact authorized Server projection on this presentation's tool-result;
       // it is also authoritative when the Host delivers result before input.
       presentationRef = reference;
+      if (initialResultUnavailable && !identity) acceptIdentity(null);
       return;
     }
     if (!acceptIdentity(args && !Array.isArray(args) && {
@@ -905,8 +920,19 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
   }
 
   function acceptToolResult(result) {
-    const projection = projectionOf(result);
-    if (!projection || !acceptIdentity(projection)) return;
+    if (tornDown || initialResultUnavailable) return;
+    const projection = toolCallSucceeded(result) ? projectionOf(result) : null;
+    if (!projection) {
+      // A final result without identity cannot leave a ref-only carrier waiting.
+      // Remember result-first failure; explicit canonical input keeps its bind
+      // fallback, and a late failed result cannot revoke an established binding.
+      if (!identity) {
+        initialResultUnavailable = true;
+        if (presentationRef !== null) acceptIdentity(null);
+      }
+      return;
+    }
+    if (!acceptIdentity(projection)) return;
     const output = outputOf(result);
     if (output && Object.prototype.hasOwnProperty.call(output, "agent_wait")
       && !acceptWaitReference(output.agent_wait)) return;
@@ -1022,7 +1048,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 
   request("ui/initialize", {
     protocolVersion: APP_PROTOCOL,
-    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "22.0.0" },
+    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "24.0.0" },
     appCapabilities: {},
   }).then(() => {
     if (tornDown) return;

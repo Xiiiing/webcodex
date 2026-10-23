@@ -8,14 +8,16 @@ use crate::client_window::ClientWindow;
 use crate::runner_http::RunnerTransport;
 use crate::runner_protocol::{
     RunnerBuildInfo, RunnerCapabilities, RunnerHostContext, RunnerProtocolGenerationNumber,
-    RunnerRegisterRequest, ShellJobOpRequest, RUNNER_PROTOCOL_GENERATION_V2,
+    RunnerRegisterRequest, RUNNER_PROTOCOL_GENERATION_V2,
 };
+use crate::tool_runtime::dispatch::DispatchContext;
 use crate::tool_runtime::observations::ToolCallObservation;
 use crate::tool_runtime::tool_inputs::{SessionMode, StartupDetail};
 use crate::tool_runtime::{ToolCall, ToolRuntime};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Notify;
+use webcodex_runner_registry::JobStartRequest;
 
 fn persisted_session_authority_fingerprint(
     ledger: &std::path::Path,
@@ -49,33 +51,24 @@ fn register_request(
     process_started_at: Option<i64>,
     build: Option<RunnerBuildInfo>,
 ) -> RunnerRegisterRequest {
-    crate::test_support::current_runner_registration(RunnerRegisterRequest {
-        computer_session_availability: None,
-        client_id: client_id.to_string(),
-        runner_instance_id: instance.to_string(),
-        runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-        display_name: None,
-        owner: None,
-        hostname: None,
-        host_context: None,
-        capabilities: RunnerCapabilities {
-            shell: true,
-            git: true,
-            file_read: true,
-            file_write: true,
-            jobs: true,
-            async_jobs: true,
-            async_shell_jobs: true,
-            ..Default::default()
-        },
-        policy: None,
+    RunnerRegisterRequest {
         process_started_at,
         build,
-        job_concurrency_limit: None,
-        job_inventory: None,
-        coding_agent_providers: None,
-        coding_agent_inventory: None,
-    })
+        ..crate::test_support::runner_registration(
+            client_id,
+            instance,
+            RunnerCapabilities {
+                shell: true,
+                git: true,
+                file_read: true,
+                file_write: true,
+                jobs: true,
+                async_jobs: true,
+                async_shell_jobs: true,
+                ..Default::default()
+            },
+        )
+    }
 }
 
 async fn register_with_project(
@@ -513,21 +506,10 @@ async fn agent_job_lost_on_disconnect_stays_terminal_after_reconnect() {
     let job = runtime
         .runner_registry
         .start_job(
-            ShellJobOpRequest {
-                login: false,
-                op: "start".to_string(),
-                client_id: Some("job-agent".to_string()),
-                cwd: None,
-                command: Some("sleep 60".to_string()),
-                timeout_secs: Some(120),
-                job_id: None,
-                since_stdout_line: None,
-                since_stderr_line: None,
-                tail_lines: None,
-                limit: None,
-                codex: None,
-            },
+            JobStartRequest::shell("job-agent".to_string(), "sleep 60".to_string()),
             "reconnect-test".to_string(),
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -847,12 +829,9 @@ async fn dispatch_coding_call_in_window_with_transport(
         async move {
             let window = ClientWindow::for_test(&window_id);
             runtime
-                .dispatch_with_auth_transport_options_and_metadata_with_window(
+                .dispatch_with_context(
                     call,
-                    auth.as_ref(),
-                    transport,
-                    Default::default(),
-                    Some(&window),
+                    DispatchContext::internal(auth.as_ref(), transport, Some(&window)),
                 )
                 .await
         }

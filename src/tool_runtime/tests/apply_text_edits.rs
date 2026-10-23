@@ -3,6 +3,7 @@
 use super::super::*;
 use super::support::*;
 use crate::runner_protocol::{RunnerCapabilities, RunnerPollRequest, RunnerResultRequest};
+use crate::tool_runtime::dispatch::DispatchContext;
 use serde_json::Value;
 
 fn scoped_text_edit(
@@ -960,9 +961,6 @@ async fn apply_text_edits_translates_strong_read_revisions_to_existing_wire_sha_
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: "ate-revision-translation".to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -992,10 +990,8 @@ async fn apply_text_edits_translates_strong_read_revisions_to_existing_wire_sha_
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request("ate-revision-translation".to_string(), "inst".to_string(), request.request_id)
         })
         .await
         .unwrap();
@@ -1089,9 +1085,6 @@ async fn apply_text_edits_success_mints_final_revisions_and_continues_without_re
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1111,10 +1104,8 @@ async fn apply_text_edits_success_mints_final_revisions_and_continues_without_re
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(client_id.to_string(), "inst".to_string(), request.request_id)
         })
         .await
         .unwrap();
@@ -1185,9 +1176,6 @@ async fn apply_text_edits_success_mints_final_revisions_and_continues_without_re
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: continuation_request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1198,10 +1186,8 @@ async fn apply_text_edits_success_mints_final_revisions_and_continues_without_re
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(client_id.to_string(), "inst".to_string(), continuation_request.request_id)
         })
         .await
         .unwrap();
@@ -1259,9 +1245,6 @@ async fn apply_text_edits_success_mints_final_revisions_and_continues_without_re
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: destination_request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1272,10 +1255,8 @@ async fn apply_text_edits_success_mints_final_revisions_and_continues_without_re
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(client_id.to_string(), "inst".to_string(), destination_request.request_id)
         })
         .await
         .unwrap();
@@ -1462,9 +1443,6 @@ async fn edit_project_files_ambiguous_guarded_exact_retries_as_range_without_rer
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: first_request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1492,10 +1470,8 @@ async fn edit_project_files_ambiguous_guarded_exact_retries_as_range_without_rer
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(client_id.to_string(), "inst".to_string(), first_request.request_id)
         })
         .await
         .unwrap();
@@ -1544,9 +1520,6 @@ async fn edit_project_files_ambiguous_guarded_exact_retries_as_range_without_rer
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: retry_request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1575,10 +1548,12 @@ async fn edit_project_files_ambiguous_guarded_exact_retries_as_range_without_rer
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(
+                client_id.to_string(),
+                "inst".to_string(),
+                retry_request.request_id,
+            )
         })
         .await
         .unwrap();
@@ -1627,9 +1602,6 @@ async fn apply_text_edits_without_occurrence_unique_match_queues_and_succeeds() 
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: "ate-no-occurrence-unique".to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1645,10 +1617,12 @@ async fn apply_text_edits_without_occurrence_unique_match_queues_and_succeeds() 
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(
+                "ate-no-occurrence-unique".to_string(),
+                "inst".to_string(),
+                request.request_id,
+            )
         })
         .await
         .unwrap();
@@ -1690,9 +1664,6 @@ async fn apply_text_edits_without_occurrence_ambiguous_match_fails_closed() {
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: "ate-no-occurrence-ambiguous".to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1704,10 +1675,8 @@ async fn apply_text_edits_without_occurrence_ambiguous_match_fails_closed() {
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request("ate-no-occurrence-ambiguous".to_string(), "inst".to_string(), request.request_id)
         })
         .await
         .unwrap();
@@ -1762,9 +1731,6 @@ async fn apply_text_edits_overlap_projects_bounded_resolved_ranges_without_bodie
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: request.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -1794,10 +1760,8 @@ async fn apply_text_edits_overlap_projects_bounded_resolved_ranges_without_bodie
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(client_id.to_string(), "inst".to_string(), request.request_id)
         })
         .await
         .unwrap();
@@ -1953,9 +1917,6 @@ async fn apply_text_edits_duplicate_anchor_advisory_survives_runner_projection()
         runtime
             .runner_registry
             .complete(RunnerResultRequest {
-                client_id: "ate-advisory".to_string(),
-                runner_instance_id: "inst".to_string(),
-                request_id: req.request_id,
                 exit_code: Some(0),
                 stdout: Some(
                     serde_json::json!({
@@ -1974,10 +1935,12 @@ async fn apply_text_edits_duplicate_anchor_advisory_survives_runner_projection()
                     .to_string(),
                 ),
                 stderr: Some(String::new()),
-                stdout_truncated: false,
-                stderr_truncated: false,
                 duration_ms: Some(1),
-                error: None,
+                ..runner_result_request(
+                    "ate-advisory".to_string(),
+                    "inst".to_string(),
+                    req.request_id,
+                )
             })
             .await
             .unwrap();
@@ -2041,9 +2004,6 @@ async fn apply_text_edits_dry_run_does_not_write() {
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: "ate-dry".to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: req.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -2061,10 +2021,8 @@ async fn apply_text_edits_dry_run_does_not_write() {
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request("ate-dry".to_string(), "inst".to_string(), req.request_id)
         })
         .await
         .unwrap();
@@ -2225,22 +2183,14 @@ async fn apply_text_edits_session_event_summary() {
     session_change.expected_read_revision = Some(revision);
     let task = tokio::spawn(async move {
         runtime_for_task
-            .dispatch_with_auth_transport_options_and_metadata_with_recording_mode_and_context_with_result_projection(
+            .dispatch_canonical(
                 ToolCall::ApplyTextEdits {
                     project: project_for_task,
                     changes: vec![session_change],
                     dry_run: None,
                     session_id: Some(session_id),
                 },
-                Some(&bootstrap),
-                sessions::SessionTransport::Api,
-                Default::default(),
-                None,
-                true,
-                Vec::new(),
-                Default::default(),
-                Default::default(),
-                super::super::return_timing::ToolReturnTimingPolicy::unconstrained(),
+                DispatchContext::internal(Some(&bootstrap), sessions::SessionTransport::Api, None),
             )
             .await
     });
@@ -2250,9 +2200,6 @@ async fn apply_text_edits_session_event_summary() {
     runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: "ate-sess".to_string(),
-            runner_instance_id: "inst".to_string(),
-            request_id: req.request_id,
             exit_code: Some(0),
             stdout: Some(
                 serde_json::json!({
@@ -2276,10 +2223,8 @@ async fn apply_text_edits_session_event_summary() {
                 .to_string(),
             ),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request("ate-sess".to_string(), "inst".to_string(), req.request_id)
         })
         .await
         .unwrap();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::tool_runtime::dispatch::DispatchContext;
 use crate::tool_runtime::return_timing::ToolReturnTimingPolicy;
 use webcodex_core::project_validation::*;
 
@@ -14,6 +15,7 @@ async fn setup(grace_ms: u64) -> ToolRuntime {
             structured_validation_argv: true,
             structured_cargo_check_packages: true,
             project_validation_v1: true,
+            project_validation_rust_clippy_v1: true,
             project_go_single_module_v1: true,
             project_validation_package_scope_v1: true,
             project_all_packages_v1: true,
@@ -67,6 +69,7 @@ fn call_with_scope(
             all_packages: false,
         }),
         dependency_policy: None,
+        dependency_resolution_policy: None,
         test: None,
         timeout_secs: Some(60),
     }
@@ -138,17 +141,16 @@ async fn project_validation_governance_preserves_trusted_handoff_cap() {
         async move {
             let auth = auth_context(None, true);
             let (result, _, _) = runtime
-                .dispatch_with_auth_transport_options_and_metadata_with_recording_mode_and_context_with_result_projection(
+                .dispatch_canonical(
                     call(ProjectValidationAction::Check, None),
-                    Some(&auth),
-                    crate::tool_runtime::sessions::SessionTransport::Api,
-                    Default::default(),
-                    None,
-                    true,
-                    Vec::new(),
-                    Default::default(),
-                    Default::default(),
-                    ToolReturnTimingPolicy::handoff_max_secs(4),
+                    DispatchContext {
+                        return_timing: ToolReturnTimingPolicy::handoff_max_secs(4),
+                        ..DispatchContext::internal(
+                            Some(&auth),
+                            crate::tool_runtime::sessions::SessionTransport::Api,
+                            None,
+                        )
+                    },
                 )
                 .await;
             result
@@ -427,6 +429,7 @@ async fn project_validation_package_scope_requires_additive_runner_capability() 
             async_shell_jobs: true,
             structured_validation_argv: true,
             project_validation_v1: true,
+            project_validation_rust_clippy_v1: true,
             project_validation_package_scope_v1: false,
             project_all_packages_v1: false,
             ..Default::default()
@@ -465,6 +468,7 @@ async fn project_validation_all_packages_requires_additive_runner_capability() {
             async_shell_jobs: true,
             structured_validation_argv: true,
             project_validation_v1: true,
+            project_validation_rust_clippy_v1: true,
             project_validation_package_scope_v1: true,
             project_all_packages_v1: false,
             ..Default::default()
@@ -511,6 +515,7 @@ async fn project_validation_test_options_reject_before_any_plan_on_old_runner() 
             async_shell_jobs: true,
             structured_validation_argv: true,
             project_validation_v1: true,
+            project_validation_rust_clippy_v1: true,
             project_validation_package_scope_v1: true,
             project_all_packages_v1: true,
             ..Default::default()
@@ -825,6 +830,7 @@ async fn project_validation_python_pytest_old_runner_rejects_before_planning() {
         None,
         RunnerCapabilities {
             project_validation_v1: true,
+            project_validation_rust_clippy_v1: true,
             ..Default::default()
         },
     )
@@ -1147,5 +1153,93 @@ async fn node_json_project_validation_handoff_owns_counts_and_keeps_freshness_un
                 .await
                 .is_none());
         }
+    }
+}
+
+#[tokio::test]
+async fn rust_clippy_pending_observes_same_job_and_exit_status_controls_outcome() {
+    for (exit, status, stderr) in [
+        (
+            0,
+            "completed",
+            "warning: unused variable: `x`\n --> src/lib.rs:1:5\n",
+        ),
+        (
+            101,
+            "failed",
+            "error: impossible comparison\n --> src/lib.rs:1:5\n",
+        ),
+    ] {
+        let runtime = setup(1).await;
+        let task = tokio::spawn({
+            let runtime = runtime.clone();
+            async move {
+                runtime
+                    .dispatch_with_auth(
+                        call(ProjectValidationAction::Lint, None),
+                        Some(&auth_context(None, true)),
+                    )
+                    .await
+            }
+        });
+        let (request, job_id) = reply_plan(&runtime, "rust", ProjectValidationAction::Lint).await;
+        let metadata = request
+            .job_context
+            .as_ref()
+            .unwrap()
+            .validation
+            .as_ref()
+            .unwrap();
+        assert_eq!(metadata.adapter, "cargo_clippy");
+        assert_eq!(metadata.kind, "lint");
+        assert!(metadata.is_valid());
+        let result = task.await.unwrap();
+        assert!(result.success, "{result:?}");
+        assert_eq!(
+            result.output["continuation"]["arguments"]["items"][0]["job_id"],
+            job_id
+        );
+        assert_model_cargo_result_matches_schema("project_validate", &result);
+        assert!(probe_patch_agent_request(&runtime, "project-validation")
+            .await
+            .is_none());
+        runtime
+            .runner_registry
+            .update_job(cargo_test_update(
+                "project-validation",
+                &request.request_id,
+                &job_id,
+                status,
+                "",
+                stderr,
+                Some(exit),
+                completed_progress(),
+                true,
+            ))
+            .await
+            .unwrap();
+        let observed = runtime
+            .job_status_for_auth(job_id.clone(), false, None)
+            .await;
+        assert_eq!(
+            observed.output["validation"]["passed"],
+            exit == 0,
+            "{observed:?}"
+        );
+        assert_eq!(observed.output["validation"]["adapter"], "cargo_clippy");
+        assert_eq!(
+            observed.output["validation"].get("warnings_count"),
+            Some(&json!(u64::from(exit == 0)))
+        );
+        assert_eq!(
+            observed.output["validation"].get("errors_count"),
+            Some(&json!(u64::from(exit != 0)))
+        );
+        // Re-observation retains the same Job and its structured evidence.
+        let retained = runtime.job_status_for_auth(job_id, false, None).await;
+        assert_eq!(retained.output["validation"], observed.output["validation"]);
+        assert!(probe_patch_agent_request(&runtime, "project-validation")
+            .await
+            .is_none());
     }
 }

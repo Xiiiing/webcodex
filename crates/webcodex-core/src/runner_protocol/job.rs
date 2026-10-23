@@ -298,6 +298,25 @@ impl ShellJobValidationStep {
         let args = self.args.iter().map(String::as_str).collect::<Vec<_>>();
         match (self.name.as_str(), self.program.as_str()) {
             ("format", "cargo") => args == ["fmt", "--", "--check"],
+            ("lint", "cargo") => {
+                args.starts_with(&["clippy"])
+                    && args.ends_with(&["--", "-D", "clippy::correctness"])
+                    && args.len() >= 5
+                    && args.iter().filter(|arg| **arg == "-p").count() <= 8
+                    && args[1..args.len() - 3].contains(&"--all-targets")
+                    && args[1..args.len() - 3].iter().all(|a| {
+                        !matches!(
+                            *a,
+                            "--offline" | "--all-features" | "--no-default-features" | "--features"
+                        )
+                    })
+                    && is_canonical_cargo_flags(
+                        &args[1..args.len() - 3],
+                        false,
+                        true,
+                        allow_project_workspace,
+                    )
+            }
             ("check", "cargo") => is_canonical_cargo_check_args(&args, allow_project_workspace),
             ("test", "cargo") => is_canonical_cargo_test_args(&args, allow_project_workspace),
             ("check", "go") => is_canonical_go_vet_args(&args),
@@ -406,7 +425,7 @@ impl ShellJobValidationStep {
 
     pub fn is_project_workspace_cargo(&self) -> bool {
         self.program == "cargo"
-            && matches!(self.name.as_str(), "check" | "test")
+            && matches!(self.name.as_str(), "check" | "lint" | "test")
             && self.args.iter().any(|arg| arg == "--workspace")
             && self.is_canonical_project_step()
     }
@@ -685,7 +704,11 @@ fn is_canonical_cargo_flags(
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let key = match *arg {
-            "--all-targets" | "--all-features" | "--no-default-features" | "--locked" => *arg,
+            "--all-targets"
+            | "--all-features"
+            | "--no-default-features"
+            | "--locked"
+            | "--offline" => *arg,
             "--workspace" if allow_project_workspace => *arg,
             "--lib" | "--no-run" if cargo_test => *arg,
             "--features" => {
@@ -999,14 +1022,20 @@ impl ShellJobValidationMetadata {
                 return false;
             };
             if !provenance.is_valid()
-                || provenance.request.action.kind() != self.kind
+                || provenance
+                    .request
+                    .action
+                    .kind_for_backend(&provenance.backend)
+                    != self.kind
                 || (provenance.backend == "rust"
                     && project_all_packages
                     && !self.steps[0].is_project_workspace_cargo())
                 || !matches!(
                     (provenance.backend.as_str(), self.adapter.as_str()),
-                    ("rust", "cargo_fmt" | "cargo_check" | "cargo_test")
-                        | ("go", "go_vet" | "go_test")
+                    (
+                        "rust",
+                        "cargo_fmt" | "cargo_check" | "cargo_clippy" | "cargo_test"
+                    ) | ("go", "go_vet" | "go_test")
                         | (
                             "python",
                             "python:pytest:test" | "python:ruff:check" | "python:ruff:format"
@@ -1025,12 +1054,16 @@ impl ShellJobValidationMetadata {
                         (
                             "node:script:check",
                             crate::project_validation::ProjectValidationAction::Check
+                                | crate::project_validation::ProjectValidationAction::Lint
                         ) | (
                             "node:tap:test" | "node:vitest:test" | "node:jest:test",
                             crate::project_validation::ProjectValidationAction::Test
                         )
                     ) || provenance.request.scope.is_some()
                         || provenance.request.dependency_policy.is_some()
+                        || (provenance.request.action
+                            == crate::project_validation::ProjectValidationAction::Lint
+                            && self.steps[0].args != ["--run", "lint"])
                         || (self.adapter == "node:script:check"
                             && provenance.request.test.is_some())))
                 || (self.require_tests, self.minimum_tests)
@@ -1046,6 +1079,15 @@ impl ShellJobValidationMetadata {
         match self.adapter.as_str() {
             "cargo_fmt" => {
                 self.kind == "format" && step.name == "format" && step.program == "cargo"
+            }
+            "cargo_clippy" => {
+                self.tool == "project_validate"
+                    && self.kind == "lint"
+                    && step.name == "lint"
+                    && step.program == "cargo"
+                    && self.project_validation.as_ref().is_some_and(|p| {
+                        p.request.action == crate::project_validation::ProjectValidationAction::Lint
+                    })
             }
             "cargo_check" => {
                 self.kind == "check" && step.name == "check" && step.program == "cargo"
@@ -1234,6 +1276,31 @@ pub struct ShellJobContext {
 }
 
 impl ShellJobContext {
+    /// Bounded ordered step names retained by admission and recovery.
+    pub fn validation_steps_are_valid(&self) -> bool {
+        self.validation_steps.len() <= 3
+            && self
+                .validation_steps
+                .iter()
+                .enumerate()
+                .all(|(index, step)| {
+                    matches!(step.as_str(), "format" | "check" | "lint" | "test")
+                        && !self.validation_steps[..index].contains(step)
+                })
+    }
+
+    /// Optional executable metadata must describe the same ordered steps.
+    pub fn validation_metadata_is_valid(&self) -> bool {
+        self.validation.as_ref().is_none_or(|metadata| {
+            metadata.is_valid()
+                && metadata
+                    .steps
+                    .iter()
+                    .map(|step| &step.name)
+                    .eq(self.validation_steps.iter())
+        })
+    }
+
     /// Semantic execution identities shared by Runner admission and Server
     /// reconciliation. Interpreter executable names are not shell identities.
     pub fn is_valid_shell(shell: &str) -> bool {

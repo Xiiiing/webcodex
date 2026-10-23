@@ -9,6 +9,7 @@ use crate::runner_protocol::{
     RunnerCapabilities, RunnerJobUpdateRequest, RunnerRegisterRequest, RunnerResultPayload,
     RunnerResultRequest, ShellCommandExecutionState,
 };
+use crate::tool_runtime::dispatch::DispatchContext;
 use serde_json::json;
 
 #[test]
@@ -659,16 +660,13 @@ async fn run_shell_via_agent_lifecycle_error(
         .runner_registry
         .complete(RunnerResultPayload {
             result: RunnerResultRequest {
-                client_id: client_id.to_string(),
-                runner_instance_id: "inst".to_string(),
-                request_id: request.request_id,
-                exit_code: None,
-                stdout: None,
-                stderr: None,
-                stdout_truncated: false,
-                stderr_truncated: false,
                 duration_ms: Some(1),
                 error: Some(error.to_string()),
+                ..runner_result_request(
+                    client_id.to_string(),
+                    "inst".to_string(),
+                    request.request_id,
+                )
             },
             command_execution_state: Some(execution_state),
             mcp_gateway: None,
@@ -696,25 +694,20 @@ async fn update_agent_shell_job(
     runtime
         .runner_registry
         .update_job(RunnerJobUpdateRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            job_id: job_id.to_string(),
             request_id: Some(request_id.to_string()),
-            update_seq: None,
-            status: status.to_string(),
             stdout_chunk: stdout_chunk.map(str::to_string),
             stderr_chunk: stderr_chunk.map(str::to_string),
-            log_snapshot: None,
             exit_code,
             duration_ms: finished.then_some(25),
             error: error.map(str::to_string),
             command_execution_state,
-            validation_progress: None,
-            test_count_evidence: None,
-            format_mutation: None,
-            build_artifacts: None,
-            activity: None,
-            finished,
+            ..runner_job_update(
+                client_id.to_string(),
+                "inst".to_string(),
+                job_id.to_string(),
+                status.to_string(),
+                finished,
+            )
         })
         .await
         .unwrap();
@@ -970,16 +963,22 @@ async fn long_run_shell_fast_terminal_returns_ordinary_result_without_visible_jo
         let session_id = session_id.clone();
         async move {
             let auth = auth_context(None, true);
-            runtime.dispatch_with_auth_transport_options_and_metadata_with_recording_mode_and_context_with_result_projection(
-                ToolCall::RunShell {
-                    project, command: "printf fast".to_string(), timeout_secs: Some(600),
-                    sync_wait_secs: None, cwd: None, purpose: None, shell: None,
-                    session_id: Some(session_id), login: false,
-                },
-                Some(&auth), sessions::SessionTransport::Api, Default::default(),
-                None, true, Vec::new(), Default::default(), Default::default(),
-                super::super::return_timing::ToolReturnTimingPolicy::unconstrained(),
-            ).await
+            runtime
+                .dispatch_canonical(
+                    ToolCall::RunShell {
+                        project,
+                        command: "printf fast".to_string(),
+                        timeout_secs: Some(600),
+                        sync_wait_secs: None,
+                        cwd: None,
+                        purpose: None,
+                        shell: None,
+                        session_id: Some(session_id),
+                        login: false,
+                    },
+                    DispatchContext::internal(Some(&auth), sessions::SessionTransport::Api, None),
+                )
+                .await
         }
     });
     let start = wait_for_patch_agent_request(&runtime, client_id).await;
@@ -1218,28 +1217,16 @@ async fn long_run_shell_async_job_capability_does_not_bypass_shell_authority() {
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
-                computer_session_availability: None,
-                process_started_at: None,
-                build: None,
                 job_concurrency_limit: Some(4),
-                job_inventory: None,
-                coding_agent_providers: None,
-                coding_agent_inventory: None,
-                client_id: client_id.to_string(),
-                runner_instance_id: "inst".to_string(),
-                runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-                display_name: None,
-                owner: None,
-                hostname: None,
-                host_context: None,
-                capabilities: crate::test_support::current_runner_capabilities(
+                ..crate::test_support::runner_registration(
+                    client_id,
+                    "inst",
                     RunnerCapabilities {
                         shell: false,
                         async_shell_jobs: true,
                         ..Default::default()
                     },
-                ),
-                policy: None,
+                )
             },
             Some(&crate::test_support::runner_access(&auth)),
         )
@@ -1661,16 +1648,16 @@ async fn run_shell_runner_timeout_preserves_known_timeout_state() {
         .runner_registry
         .complete(RunnerResultPayload {
             result: RunnerResultRequest {
-                client_id: client_id.to_string(),
-                runner_instance_id: "inst".to_string(),
-                request_id: request.request_id,
                 exit_code: Some(-1),
                 stdout: Some("partial output".to_string()),
                 stderr: Some("runner stopped the process at its deadline".to_string()),
-                stdout_truncated: false,
-                stderr_truncated: false,
                 duration_ms: Some(1_000),
                 error: Some("runner timeout".to_string()),
+                ..runner_result_request(
+                    client_id.to_string(),
+                    "inst".to_string(),
+                    request.request_id,
+                )
             },
             command_execution_state: Some(ShellCommandExecutionState::TimedOut),
             mcp_gateway: None,
@@ -2137,25 +2124,12 @@ pub(super) async fn register_job_agent_for_auth_with_reconciliation(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
-                computer_session_availability: None,
-                process_started_at: None,
-                build: None,
                 job_concurrency_limit: Some(4),
                 job_inventory: reconciliation.then(|| crate::runner_protocol::ShellJobInventory {
                     active_complete: true,
                     jobs: Vec::new(),
                 }),
-                coding_agent_providers: None,
-                coding_agent_inventory: None,
-                client_id: client_id.to_string(),
-                runner_instance_id: "inst".to_string(),
-                runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-                display_name: None,
-                owner: None,
-                hostname: None,
-                host_context: None,
-                capabilities: caps,
-                policy: None,
+                ..crate::test_support::runner_registration(client_id, "inst", caps)
             },
             Some(&crate::test_support::runner_access(auth)),
         )
@@ -2192,25 +2166,16 @@ async fn register_managed_job_agent(
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
             job_concurrency_limit: Some(4),
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: Some(owner.to_string()),
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(RunnerCapabilities {
-                async_shell_jobs: true,
-                ..Default::default()
-            }),
-            policy: None,
+            ..crate::test_support::runner_registration(
+                client_id,
+                "inst",
+                RunnerCapabilities {
+                    async_shell_jobs: true,
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -2266,25 +2231,15 @@ pub(super) async fn mark_next_agent_job_running(runtime: &ToolRuntime, client_id
     runtime
         .runner_registry
         .update_job(RunnerJobUpdateRequest {
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            job_id: job_id.clone(),
             request_id: Some(request.request_id),
             update_seq: Some(1),
-            status: "running".to_string(),
-            stdout_chunk: None,
-            stderr_chunk: None,
-            log_snapshot: None,
-            exit_code: None,
-            duration_ms: None,
-            error: None,
-            command_execution_state: None,
-            validation_progress: None,
-            test_count_evidence: None,
-            format_mutation: None,
-            build_artifacts: None,
-            activity: None,
-            finished: false,
+            ..runner_job_update(
+                client_id.to_string(),
+                "inst".to_string(),
+                job_id.clone(),
+                "running".to_string(),
+                false,
+            )
         })
         .await
         .unwrap();
@@ -3258,6 +3213,7 @@ fn run_shell_recovered_terminal_snapshot_stays_rich_after_projection() {
     job.recovery_state = Some("reconciled".to_string());
     job.recovered_after_server_restart = true;
     job.reconciled_at = Some(42);
+    job.recovery_reason_code = Some("server_restart_reconciliation".to_string());
     let mut result =
         ToolRuntime::run_shell_terminal_job_result(&job, "witness".into(), String::new(), 60);
     super::super::process::add_structured_continuation_facts(&mut result, 60, 10, true);
@@ -3274,6 +3230,10 @@ fn run_shell_recovered_terminal_snapshot_stays_rich_after_projection() {
     assert_eq!(result.output["recovery_state"], "reconciled");
     assert_eq!(result.output["reconciled_at"], 42);
     assert_eq!(result.output["recovered_after_server_restart"], true);
+    assert_eq!(
+        result.output["recovery_reason_code"],
+        "server_restart_reconciliation"
+    );
     assert_run_shell_result_matches_schema(&result);
 }
 
@@ -3581,5 +3541,34 @@ fn node_json_validation_uses_only_owned_report_evidence_and_same_job_policy() {
             );
             assert_ne!(value["passed"], true);
         }
+    }
+}
+
+#[test]
+fn rust_clippy_projection_requires_completed_zero_exit_and_keeps_warnings() {
+    use crate::tool_runtime::jobs::validation_job_projection;
+    for (status, exit, expected) in [
+        ("completed", Some(0), json!(true)),
+        ("completed", None, json!(false)),
+        ("failed", Some(101), json!(false)),
+        ("timed_out", None, serde_json::Value::Null),
+        ("cancelled", None, serde_json::Value::Null),
+        ("lost", None, serde_json::Value::Null),
+    ] {
+        let value = validation_job_projection(
+            Some("cargo_clippy"),
+            Some("lint"),
+            status,
+            exit,
+            "",
+            "warning: unused variable: `x`\n --> src/lib.rs:1:5\n",
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(value["passed"], expected, "{status}: {value}");
+        assert_eq!(value["kind"], "lint");
+        assert!(value.get("diagnostics").is_some());
+        assert!(value.get("tests_run_count").is_none());
     }
 }

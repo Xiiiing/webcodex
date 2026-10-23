@@ -44,11 +44,12 @@ pub enum SemanticCheck {
     Format,
     Check,
     Test,
+    Lint,
 }
 
 impl SemanticCheck {
     pub fn as_str(self) -> &'static str {
-        ["format", "check", "test"][self as usize]
+        ["format", "check", "test", "lint"][self as usize]
     }
 }
 
@@ -174,10 +175,34 @@ pub fn resolve_project_validation_recipe(
     all_packages: bool,
     dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
 ) -> Result<ResolvedValidationRecipe, RecipeError> {
+    resolve_project_validation_recipe_with_resolution_policy(
+        execution_root,
+        cwd,
+        explicit_recipe,
+        checks,
+        test_filter,
+        package_scope,
+        all_packages,
+        dependency_policy,
+        None,
+    )
+}
+
+pub fn resolve_project_validation_recipe_with_resolution_policy(
+    execution_root: &Path,
+    cwd: Option<&str>,
+    explicit_recipe: Option<RecipeId>,
+    checks: &[SemanticCheck],
+    test_filter: Option<&str>,
+    package_scope: Option<&[String]>,
+    all_packages: bool,
+    dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
+    resolution_policy: Option<webcodex_core::project_validation::ProjectDependencyResolutionPolicy>,
+) -> Result<ResolvedValidationRecipe, RecipeError> {
     let resolved = resolve_project_recipe_root(execution_root, cwd, explicit_recipe)
         .map_err(map_project_recipe_error)?;
     if resolved.recipe != RecipeId::Python {
-        return resolve_validation_recipe_with_project_policy(
+        return resolve_validation_recipe_with_policies(
             execution_root,
             cwd,
             explicit_recipe,
@@ -186,7 +211,11 @@ pub fn resolve_project_validation_recipe(
             package_scope,
             all_packages,
             dependency_policy,
+            resolution_policy,
         );
+    }
+    if resolution_policy.is_some() {
+        return Err(RecipeError::new("dependency_resolution_policy_unsupported"));
     }
     let ruff_digest = if checks.iter().any(|check| *check != SemanticCheck::Test) {
         Some(project_ruff_manifest_digest(
@@ -422,10 +451,37 @@ pub fn resolve_validation_recipe_with_project_policy(
     all_packages: bool,
     dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
 ) -> Result<ResolvedValidationRecipe, RecipeError> {
+    resolve_validation_recipe_with_policies(
+        execution_root,
+        cwd,
+        explicit_recipe,
+        checks,
+        test_filter,
+        package_scope,
+        all_packages,
+        dependency_policy,
+        None,
+    )
+}
+
+pub fn resolve_validation_recipe_with_policies(
+    execution_root: &Path,
+    cwd: Option<&str>,
+    explicit_recipe: Option<RecipeId>,
+    checks: &[SemanticCheck],
+    test_filter: Option<&str>,
+    package_scope: Option<&[String]>,
+    all_packages: bool,
+    dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
+    resolution_policy: Option<webcodex_core::project_validation::ProjectDependencyResolutionPolicy>,
+) -> Result<ResolvedValidationRecipe, RecipeError> {
     let resolved_root = resolve_project_recipe_root(execution_root, cwd, explicit_recipe)
         .map_err(map_project_recipe_error)?;
     let root = &resolved_root.execution_root;
     let recipe = resolved_root.recipe;
+    if resolution_policy.is_some() && recipe != RecipeId::Rust {
+        return Err(RecipeError::new("dependency_resolution_policy_unsupported"));
+    }
     let recipe_root = &resolved_root.absolute_root;
     if (package_scope.is_some() || all_packages) && !matches!(recipe, RecipeId::Rust | RecipeId::Go)
     {
@@ -460,6 +516,7 @@ pub fn resolve_validation_recipe_with_project_policy(
                     package_scope,
                     all_packages,
                     dependency_policy,
+                    resolution_policy,
                 )?;
                 let manifest_digest = if recipe == RecipeId::Rust && all_packages {
                     digest_project_cargo_all_packages_provenance(&resolved_root)
@@ -530,6 +587,7 @@ fn canonical_adapter_steps(
     package_scope: Option<&[String]>,
     all_packages: bool,
     dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
+    resolution_policy: Option<webcodex_core::project_validation::ProjectDependencyResolutionPolicy>,
 ) -> Result<Vec<ShellJobValidationStep>, RecipeError> {
     let mut steps = Vec::with_capacity(checks.len());
     for check in checks {
@@ -548,6 +606,7 @@ fn canonical_adapter_steps(
         })?;
         let operation = operation
             .with_dependency_policy(dependency_policy)
+            .and_then(|operation| operation.with_dependency_resolution_policy(resolution_policy))
             .map_err(RecipeError::new)?
             .with_test_filter(
                 (*check == SemanticCheck::Test)
@@ -581,20 +640,29 @@ pub fn resolve_node_native_project_check(
     execution_root: &Path,
     cwd: Option<&str>,
 ) -> Result<ResolvedValidationRecipe, RecipeError> {
-    resolve_node_native_project_action(execution_root, cwd, SemanticCheck::Check)
+    resolve_node_native_project_action(execution_root, cwd, SemanticCheck::Check, None)
+}
+
+/// Explicit Node lint intent: do not silently run check/typecheck instead.
+pub fn resolve_node_native_project_lint(
+    execution_root: &Path,
+    cwd: Option<&str>,
+) -> Result<ResolvedValidationRecipe, RecipeError> {
+    resolve_node_native_project_action(execution_root, cwd, SemanticCheck::Check, Some("lint"))
 }
 
 pub fn resolve_node_native_project_test(
     execution_root: &Path,
     cwd: Option<&str>,
 ) -> Result<ResolvedValidationRecipe, RecipeError> {
-    resolve_node_native_project_action(execution_root, cwd, SemanticCheck::Test)
+    resolve_node_native_project_action(execution_root, cwd, SemanticCheck::Test, None)
 }
 
 fn resolve_node_native_project_action(
     execution_root: &Path,
     cwd: Option<&str>,
     action: SemanticCheck,
+    selected_script: Option<&'static str>,
 ) -> Result<ResolvedValidationRecipe, RecipeError> {
     const MAX_NODE_MANIFEST_BYTES: u64 = 1024 * 1024;
 
@@ -612,7 +680,15 @@ fn resolve_node_native_project_action(
         .get("scripts")
         .map(|value| value.as_object().ok_or_else(manifest_invalid))
         .transpose()?;
-    let selected = select_node_script(scripts, action)?;
+    let selected = match selected_script {
+        Some(script) => {
+            if !scripts.is_some_and(|scripts| scripts.contains_key(script)) {
+                return Err(check_unavailable());
+            }
+            script
+        }
+        None => select_node_script(scripts, action)?,
+    };
     if scripts
         .and_then(|scripts| scripts.get(selected))
         .and_then(Value::as_str)
@@ -689,6 +765,7 @@ fn select_node_script(
     let names: &[&str] = match check {
         SemanticCheck::Format => &["format:check", "format-check", "check:format"],
         SemanticCheck::Check => &["check", "typecheck", "lint"],
+        SemanticCheck::Lint => return Err(check_unavailable()),
         SemanticCheck::Test => &["test"],
     };
     let name = names
@@ -780,7 +857,9 @@ fn python_manifestless_steps(
                     .map(|a| (*a).to_string())
                     .collect(),
             )),
-            SemanticCheck::Format | SemanticCheck::Check => Err(check_unavailable()),
+            SemanticCheck::Format | SemanticCheck::Check | SemanticCheck::Lint => {
+                Err(check_unavailable())
+            }
         })
         .collect()
 }
@@ -796,6 +875,7 @@ fn step(check: SemanticCheck, program: &str, args: Vec<String>) -> ShellJobValid
 
 fn tool_identity(step: &ShellJobValidationStep) -> String {
     match step.program.as_str() {
+        "cargo" if step.name == "lint" => "cargo_clippy".to_string(),
         "cargo" if step.name == "format" => "cargo_fmt".to_string(),
         "cargo" => format!("cargo_{}", step.name),
         "python" => format!(

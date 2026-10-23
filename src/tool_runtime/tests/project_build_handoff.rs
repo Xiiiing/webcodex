@@ -37,6 +37,7 @@ fn call() -> ToolCall {
         adapter: Some(ProjectBuildAdapter::Rust),
         scope: None,
         dependency_policy: None,
+        dependency_resolution_policy: None,
         timeout_secs: Some(60),
     }
 }
@@ -68,18 +69,13 @@ async fn reply_plan(runtime: &ToolRuntime) -> (crate::runner_protocol::RunnerReq
         .runner_registry
         .complete(RunnerResultPayload {
             result: RunnerResultRequest {
-                client_id: CLIENT.into(),
-                runner_instance_id: "inst".into(),
-                request_id: request.request_id,
                 exit_code: Some(0),
                 stdout: Some(
                     serde_json::to_string(&ProjectBuildPlanningResult::Ready { plan }).unwrap(),
                 ),
                 stderr: Some(String::new()),
-                stdout_truncated: false,
-                stderr_truncated: false,
                 duration_ms: Some(5),
-                error: None,
+                ..runner_result_request(CLIENT.into(), "inst".into(), request.request_id)
             },
             command_execution_state: Some(ShellCommandExecutionState::Completed),
             mcp_gateway: None,
@@ -106,25 +102,18 @@ async fn finish_build_job(
     runtime
         .runner_registry
         .update_job(RunnerJobUpdateRequest {
-            client_id: CLIENT.into(),
-            runner_instance_id: "inst".into(),
-            update_seq: None,
-            job_id: job_id.into(),
             request_id: Some(request.request_id.clone()),
-            status: status.into(),
-            stdout_chunk: None,
             stderr_chunk: stderr.map(str::to_string),
-            log_snapshot: None,
             exit_code,
             duration_ms: Some(25),
-            error: None,
             command_execution_state: Some(state),
-            validation_progress: None,
-            test_count_evidence: None,
-            format_mutation: None,
-            build_artifacts: None,
-            activity: None,
-            finished: true,
+            ..runner_job_update(
+                CLIENT.into(),
+                "inst".into(),
+                job_id.into(),
+                status.into(),
+                true,
+            )
         })
         .await
         .unwrap();
@@ -219,6 +208,41 @@ async fn project_build_pending_projection_returns_the_same_durable_job() {
 }
 
 #[tokio::test]
+async fn rust_project_build_offline_policy_is_fenced_before_runner_plan() {
+    let runtime = runtime_with_agent_project(CLIENT);
+    register_agent(
+        &runtime,
+        CLIENT,
+        None,
+        RunnerCapabilities {
+            project_build_v1: true,
+            project_dependency_resolution_offline_v1: false,
+            ..Default::default()
+        },
+    )
+    .await;
+    let mut input = call();
+    if let ToolCall::ProjectBuild {
+        dependency_resolution_policy,
+        ..
+    } = &mut input
+    {
+        *dependency_resolution_policy =
+            Some(webcodex_core::project_build::ProjectDependencyResolutionPolicy::Offline);
+    }
+    let result = runtime
+        .dispatch_with_auth(input, Some(&auth_context(None, true)))
+        .await;
+    assert!(!result.success);
+    assert!(result
+        .error
+        .unwrap()
+        .contains("project_dependency_resolution_offline_v1"));
+    assert!(runtime.runner_registry.list_jobs(Some(10)).await.is_empty());
+    assert!(probe_patch_agent_request(&runtime, CLIENT).await.is_none());
+}
+
+#[tokio::test]
 async fn project_build_missing_capability_starts_nothing() {
     let runtime = runtime_with_agent_project(CLIENT);
     register_agent(&runtime, CLIENT, None, RunnerCapabilities::default()).await;
@@ -293,25 +317,18 @@ async fn python_project_build_success_projects_observed_artifacts_without_correc
     runtime
         .runner_registry
         .update_job(RunnerJobUpdateRequest {
-            client_id: CLIENT.into(),
-            runner_instance_id: "inst".into(),
-            update_seq: None,
-            job_id: job_id.clone(),
             request_id: Some(request.request_id),
-            status: "completed".into(),
-            stdout_chunk: None,
-            stderr_chunk: None,
-            log_snapshot: None,
             exit_code: Some(0),
             duration_ms: Some(25),
-            error: None,
             command_execution_state: Some(ShellCommandExecutionState::Completed),
-            validation_progress: None,
-            test_count_evidence: None,
-            format_mutation: None,
             build_artifacts: Some(artifacts.clone()),
-            activity: None,
-            finished: true,
+            ..runner_job_update(
+                CLIENT.into(),
+                "inst".into(),
+                job_id.clone(),
+                "completed".into(),
+                true,
+            )
         })
         .await
         .unwrap();

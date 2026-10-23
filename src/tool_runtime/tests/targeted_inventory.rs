@@ -55,26 +55,19 @@ async fn register_target_agent(
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
             build,
             job_concurrency_limit: Some(4),
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: format!("inst-{client_id}"),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
             display_name: Some(format!("Runner {client_id}")),
-            owner: None,
             hostname: Some(format!("host-{client_id}")),
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(RunnerCapabilities {
-                git: true,
-                async_shell_jobs: true,
-                ..Default::default()
-            }),
-            policy: None,
+            ..crate::test_support::runner_registration(
+                client_id,
+                &format!("inst-{client_id}"),
+                RunnerCapabilities {
+                    git: true,
+                    async_shell_jobs: true,
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -97,24 +90,12 @@ async fn register_target_agent_for_auth(
         .runner_registry
         .register_with_auth(
             RunnerRegisterRequest {
-                computer_session_availability: None,
-                process_started_at: None,
-                build: None,
                 job_concurrency_limit: Some(4),
-                job_inventory: None,
-                coding_agent_providers: None,
-                coding_agent_inventory: None,
-                client_id: client_id.to_string(),
-                runner_instance_id: format!("inst-{client_id}"),
-                runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-                display_name: None,
-                owner: None,
-                hostname: None,
-                host_context: None,
-                capabilities: crate::test_support::current_runner_capabilities(
+                ..crate::test_support::runner_registration(
+                    client_id,
+                    &format!("inst-{client_id}"),
                     RunnerCapabilities::default(),
-                ),
-                policy: None,
+                )
             },
             Some(&crate::test_support::runner_access(auth)),
         )
@@ -151,24 +132,15 @@ async fn register_managed_target_agent(
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
             job_concurrency_limit: Some(4),
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: format!("inst-{client_id}"),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
             display_name: Some(format!("{owner} private runner")),
             owner: Some(owner.to_string()),
             hostname: Some(format!("{owner}-private-host")),
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(
+            ..crate::test_support::runner_registration(
+                client_id,
+                &format!("inst-{client_id}"),
                 RunnerCapabilities::default(),
-            ),
-            policy: None,
+            )
         })
         .await
         .unwrap();
@@ -228,26 +200,18 @@ async fn list_projects_batch_job_counts_join_exact_projects_and_skip_empty_selec
     for id in ["a", "a", "b"] {
         runtime
             .runner_registry
-            .start_job_with_metadata(
-                crate::runner_protocol::ShellJobOpRequest {
-                    login: false,
-                    op: "start".into(),
-                    client_id: Some("batch".into()),
-                    cwd: None,
-                    command: Some("echo fixture".into()),
-                    timeout_secs: Some(60),
-                    job_id: None,
-                    since_stdout_line: None,
-                    since_stderr_line: None,
-                    tail_lines: None,
-                    limit: None,
-                    codex: None,
+            .start_job(
+                webcodex_runner_registry::JobStartRequest {
+                    timeout_secs: 60,
+                    context: webcodex_runner_registry::JobStartContext {
+                        project_id: Some(format!("agent:batch:{id}")),
+                        ..Default::default()
+                    },
+                    ..webcodex_runner_registry::JobStartRequest::shell("batch", "echo fixture")
                 },
                 "fixture".into(),
-                webcodex_runner_registry::ShellJobStartMetadata {
-                    project_id: Some(format!("agent:batch:{id}")),
-                    ..Default::default()
-                },
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -790,26 +754,21 @@ async fn runtime_status_focused_job_counts_do_not_leak_other_runners() {
         for _ in 0..count {
             runtime
                 .runner_registry
-                .start_job_with_metadata(
-                    crate::runner_protocol::ShellJobOpRequest {
-                        login: false,
-                        op: "start".into(),
-                        client_id: Some(client_id.into()),
-                        cwd: None,
-                        command: Some("echo fixture".into()),
-                        timeout_secs: Some(60),
-                        job_id: None,
-                        since_stdout_line: None,
-                        since_stderr_line: None,
-                        tail_lines: None,
-                        limit: None,
-                        codex: None,
+                .start_job(
+                    webcodex_runner_registry::JobStartRequest {
+                        timeout_secs: 60,
+                        context: webcodex_runner_registry::JobStartContext {
+                            project_id: Some(format!("agent:{client_id}:root")),
+                            ..Default::default()
+                        },
+                        ..webcodex_runner_registry::JobStartRequest::shell(
+                            client_id,
+                            "echo fixture",
+                        )
                     },
                     "fixture".into(),
-                    webcodex_runner_registry::ShellJobStartMetadata {
-                        project_id: Some(format!("agent:{client_id}:root")),
-                        ..Default::default()
-                    },
+                    None,
+                    None,
                 )
                 .await
                 .unwrap();

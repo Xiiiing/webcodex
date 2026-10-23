@@ -1,3 +1,4 @@
+import { Select } from "@mantine/core";
 import { useEffect, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -146,26 +147,26 @@ function DiagnosticsContents({ state, onState, onActivity, onRuntime, onConnecti
       </section>}
       <div className="shell-subsection diagnostics-support"><h3>{p("supportHelp")}</h3><p>{p("supportPurpose")}</p>
         <p className="field-help">{s("The copied report excludes configuration contents. The support bundle adds an allowlisted nonsecret diagnostic configuration snapshot that may include private local paths; review it before sharing. Credentials, raw configuration and project code remain excluded.")}</p>
-        <div className="shell-actions"><button type="button" className="secondary-button" disabled={disabled} onClick={() => void act(async valid => { await desktopApi.copyDiagnosticReport(); if (valid()) setNotice("Copied"); })}>{s("Copy Diagnostic Report")}</button>
+        <div className="shell-actions"><button type="button" className="secondary-button" disabled={disabled} onClick={() => void act(async valid => { await desktopApi.copyDiagnosticReport(); if (valid()) setNotice("Copied"); })}>{s("Copy diagnostic report")}</button>
           <button type="button" className="secondary-button" disabled={disabled} onClick={() => void act(async valid => {
-            const path = await save({ title: s("Export Support Bundle"), defaultPath: "webcodex-support.zip", filters: [{ name: "ZIP", extensions: ["zip"] }] });
+            const path = await save({ title: s("Export support bundle"), defaultPath: "webcodex-support.zip", filters: [{ name: "ZIP", extensions: ["zip"] }] });
             if (!path || !valid()) return;
             await desktopApi.exportSupportBundle(path); if (valid()) setNotice("Support bundle exported");
-          })}>{s("Export Support Bundle")}</button></div>
+          })}>{s("Export support bundle")}</button></div>
       </div>
       <section className="shell-subsection" aria-labelledby="desktop-tracing-title">
-        <h3 id="desktop-tracing-title">{s("Tool Request Tracing")}</h3>
+        <h3 id="desktop-tracing-title">{s("Tool request tracing")}</h3>
         <p className="field-help">{p("tracePurpose")}</p>
         <dl className="runtime-facts">
           <div><dt>{p("traceCurrentMode")}</dt><dd>{data.trace.effective_mode ? traceLabel(data.trace.effective_mode) : p("traceUnconfirmed")}</dd></div>
           <div><dt>{p("traceSavedMode")}</dt><dd>{data.trace.configured_mode ? traceLabel(data.trace.configured_mode) : p("traceUnconfirmed")}</dd></div>
         </dl>
         <p className="field-help">{data.trace.effective_mode ? p("traceCurrentHelp") : p("traceUnconfirmedHelp")}</p>
-        <label htmlFor="desktop-trace-mode">{s("Tool Request Tracing")}</label>
-        <select id="desktop-trace-mode" value={displayedMode ?? "unknown"} onChange={event => { dirtyMode.current = true; setMode(event.target.value as TraceMode); setConfirmation(null); }} disabled={disabled || !canTrace} aria-describedby={canTrace ? "desktop-trace-mode-help" : "desktop-trace-mode-help desktop-trace-authority-help"}>
-          {!canTrace && !data.trace.effective_mode && <option value="unknown">{p("traceUnconfirmed")}</option>}
-          <option value="off">{s("Off")}</option><option value="metadata">{p("traceMetadata")}</option><option value="full">{p("traceFull")}</option>
-        </select>
+        <label htmlFor="desktop-trace-mode">{s("Tool request tracing")}</label>
+        <Select id="desktop-trace-mode" value={displayedMode ?? "unknown"} allowDeselect={false} onChange={value => { if (value === "off" || value === "metadata" || value === "full") { dirtyMode.current = true; setMode(value); setConfirmation(null); } }} disabled={disabled || !canTrace} aria-describedby={canTrace ? "desktop-trace-mode-help" : "desktop-trace-mode-help desktop-trace-authority-help"} data={[
+          ...(!canTrace && !data.trace.effective_mode ? [{ value: "unknown", label: p("traceUnconfirmed") }] : []),
+          { value: "off", label: s("Off") }, { value: "metadata", label: p("traceMetadata") }, { value: "full", label: p("traceFull") },
+        ]} />
         <p id="desktop-trace-mode-help" className="field-help">{!displayedMode ? p("traceUnconfirmedHelp") : displayedMode === "off" ? p("traceOffHelp") : s(displayedMode === "full" ? "Full tracing may contain sensitive tool inputs and results. Enable it only temporarily." : "Metadata records lifecycle and correlation, not full tool arguments or results.")}</p>
         {data.trace.restart_required && data.trace.effective_mode && <p role="status">{p("tracePendingHelp")}</p>}
         {canTrace ? <>
@@ -201,7 +202,7 @@ function DiagnosticsContents({ state, onState, onActivity, onRuntime, onConnecti
     {confirmation && <WorkspaceDialog title={s(confirmation.kind === "trace" ? confirmation.mode === "full" ? "Confirm full tracing" : "Runtime restart warning" : "Restore configuration")} onClose={() => setConfirmation(null)} busy={disabled}>
       {confirmation.kind === "trace" ? <>
         {confirmation.mode === "full" && <p>{s("Full tracing may contain sensitive tool inputs and results. Enable it only temporarily.")}</p>}
-        {confirmation.restart && <><p>{s("Server restart may interrupt in-flight requests; the existing Runner will reconnect.")}</p><p>{confirmation.jobs == null ? s("Job count is not confirmed.") : `${s("Active Jobs")}: ${confirmation.jobs}`}</p></>}
+        {confirmation.restart && <><p>{s("Server restart may interrupt in-flight requests; the existing Runner will reconnect.")}</p><p>{confirmation.jobs == null ? s("Job count is not confirmed.") : s("Active jobs: {count}").replace("{count}", String(confirmation.jobs))}</p></>}
       </> : <p>{s("Restore the previous known-good configuration without deleting Projects or credentials. Runtime will remain stopped until explicitly started.")}</p>}
       {errorCard}
       <div className="shell-actions"><button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmation(null)}>{s("Cancel")}</button><button type="button" className="primary-button" disabled={disabled} onClick={() => void confirmAction()}>{confirmation.kind === "trace" && confirmation.restart ? p("traceSaveRestart") : s(confirmation.kind === "restore" ? "Restore previous configuration" : "Confirm full tracing")}</button></div>

@@ -197,6 +197,21 @@ impl RunnerJobOperation {
         }
     }
 
+    pub fn context_mut(&mut self) -> Option<&mut ShellJobContext> {
+        match self {
+            Self::StartShell(operation) => Some(&mut operation.context),
+            Self::StartValidation(operation) => Some(&mut operation.context),
+            Self::StartBuild(operation) => Some(&mut operation.context),
+            Self::StartFormat(operation) => Some(&mut operation.context),
+            Self::StartProcess(operation)
+            | Self::StartInteractiveProcess(operation)
+            | Self::StartDetachedProcess(operation) => Some(&mut operation.context),
+            Self::StartScript(operation) => Some(&mut operation.context),
+            Self::StartSkillResource(operation) => Some(&mut operation.context),
+            Self::Stop { .. } => None,
+        }
+    }
+
     pub fn cwd(&self) -> Option<&str> {
         match self {
             Self::StartShell(operation) => operation.cwd.as_deref(),
@@ -566,7 +581,10 @@ impl RunnerComputerOperationKind {
     }
 
     pub fn is_large_image(self) -> bool {
-        matches!(self, Self::Snapshot | Self::SnapshotDisplay)
+        matches!(
+            self,
+            Self::Snapshot | Self::SnapshotRegion | Self::SnapshotDisplay
+        )
     }
 }
 
@@ -2415,6 +2433,30 @@ fn ensure_empty_generic_execution_fields(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn computer_snapshot_kinds_share_the_native_image_response_budget() {
+        for kind in [
+            RunnerComputerOperationKind::Snapshot,
+            RunnerComputerOperationKind::SnapshotRegion,
+            RunnerComputerOperationKind::SnapshotDisplay,
+        ] {
+            assert!(kind.is_large_image(), "{kind:?}");
+            assert!(RunnerOperation::Computer(RunnerComputerOperation {
+                kind,
+                payload: "{}".to_string(),
+                timeout_secs: 30
+            })
+            .is_large_native_image_request());
+        }
+        for kind in [
+            RunnerComputerOperationKind::ListWindows,
+            RunnerComputerOperationKind::AccessibilityTree,
+            RunnerComputerOperationKind::KeyInput,
+        ] {
+            assert!(!kind.is_large_image(), "{kind:?}");
+        }
+    }
+
+    #[test]
     fn browser_user_handoff_wire_roundtrip_preserves_exact_identity_and_bounds() {
         for kind in [
             RunnerBrowserOperationKind::BeginUserHandoff,
@@ -2950,6 +2992,7 @@ mod tests {
                         all_packages: true,
                     }),
                     dependency_policy: None,
+                    dependency_resolution_policy: None,
                     test: None,
                 },
                 backend: "rust".into(),
@@ -3049,6 +3092,7 @@ mod tests {
         let mut validation_context = job_context(Some("/repo"));
         validation_context.validation_steps = vec!["check".to_string()];
         let build_request = crate::project_build::ProjectBuildRequest {
+            dependency_resolution_policy: None,
             project_id: "demo".to_string(),
             cwd: None,
             adapter: crate::project_build::ProjectBuildAdapter::Rust,

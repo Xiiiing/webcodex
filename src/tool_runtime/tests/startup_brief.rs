@@ -1,7 +1,8 @@
 use super::reconnect::dispatch_coding_call_in_window;
 use super::support::*;
-use crate::runner_http::ShellJobStartMetadata;
-use crate::runner_protocol::{RunnerCapabilities, RunnerJobUpdateRequest, ShellJobOpRequest};
+use webcodex_runner_registry::{JobStartContext, JobStartRequest};
+
+use crate::runner_protocol::{RunnerCapabilities, RunnerJobUpdateRequest};
 use crate::tool_runtime::startup_brief::{
     startup_brief_size, validate_schema_instance_for_test, STANDARD_STARTUP_HARD_MAX_BYTES,
 };
@@ -204,8 +205,12 @@ fn assert_builtin_workflow(output: &Value) {
         "reuse still-current Git/read/validation/Job facts",
         "continue independent work",
         "For inspection, files/data/artifacts, diagnostics, or coding",
-        "Coding maps cross-layer changes end to end",
-        "compiler/schema/exhaustiveness failures",
+        "Map cross-layer changes end to end",
+        "compiler/schema/exhaustiveness failures reveal gaps",
+        "tests don't prove architectural fit",
+        "Before nontrivial coding",
+        "necessary local refactoring",
+        "Report verified deliverables promptly",
         "Validation failure is evidence, not queue cleanliness",
         "Reuse assertion_name",
         "outcome_unknown fails closed",
@@ -410,7 +415,10 @@ async fn fresh_coding_task_session_loads_all_bounded_repository_rules() {
     }
     let bytes = startup_brief_size(&result.output);
     eprintln!("common_clean_standard_startup_bytes={bytes}");
-    assert!(bytes < 16 * 1024, "{bytes}");
+    // v30 adds architecture discovery/completion and structural review guidance.
+    // Allow that measured prose increment in this common-case regression target;
+    // the independent hard startup and context envelopes remain unchanged.
+    assert!(bytes < 17 * 1024, "{bytes}");
     assert!(bytes <= STANDARD_STARTUP_HARD_MAX_BYTES);
     let serialized = result.output.to_string();
     assert_ne!(
@@ -1097,27 +1105,19 @@ async fn startup_uses_project_scoped_lifecycle_aware_job_summary() {
     let project_b = crate::tool_runtime::runner_project_runtime_id("startup-jobs", "b");
     let job = runtime
         .runner_registry
-        .start_job_with_metadata(
-            ShellJobOpRequest {
-                login: false,
-                op: "start".to_string(),
-                client_id: Some("startup-jobs".to_string()),
+        .start_job(
+            JobStartRequest {
                 cwd: Some(root_a.path().to_string_lossy().to_string()),
-                command: Some("sleep 60".to_string()),
-                timeout_secs: Some(120),
-                job_id: None,
-                since_stdout_line: None,
-                since_stderr_line: None,
-                tail_lines: None,
-                limit: None,
-                codex: None,
+                context: JobStartContext {
+                    project_id: Some(project_a.clone()),
+                    project_cwd: Some(root_a.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+                ..JobStartRequest::shell("startup-jobs".to_string(), "sleep 60".to_string())
             },
             "startup-test".to_string(),
-            ShellJobStartMetadata {
-                project_id: Some(project_a.clone()),
-                project_cwd: Some(root_a.path().to_string_lossy().to_string()),
-                ..Default::default()
-            },
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1127,25 +1127,14 @@ async fn startup_uses_project_scoped_lifecycle_aware_job_summary() {
     runtime
         .runner_registry
         .update_job(RunnerJobUpdateRequest {
-            client_id: "startup-jobs".to_string(),
-            runner_instance_id: "inst".to_string(),
-            job_id: job.job_id.clone(),
             request_id: Some(start_request.request_id.clone()),
-            update_seq: None,
-            status: "running".to_string(),
-            stdout_chunk: None,
-            stderr_chunk: None,
-            log_snapshot: None,
-            exit_code: None,
-            duration_ms: None,
-            error: None,
-            command_execution_state: None,
-            validation_progress: None,
-            test_count_evidence: None,
-            format_mutation: None,
-            build_artifacts: None,
-            activity: None,
-            finished: false,
+            ..runner_job_update(
+                "startup-jobs".to_string(),
+                "inst".to_string(),
+                job.job_id.clone(),
+                "running".to_string(),
+                false,
+            )
         })
         .await
         .unwrap();
@@ -1267,25 +1256,15 @@ async fn startup_uses_project_scoped_lifecycle_aware_job_summary() {
     runtime
         .runner_registry
         .update_job(RunnerJobUpdateRequest {
-            client_id: "startup-jobs".to_string(),
-            runner_instance_id: "inst".to_string(),
-            job_id: job.job_id.clone(),
             request_id: Some(start_request.request_id),
-            update_seq: None,
-            status: "stopped".to_string(),
-            stdout_chunk: None,
-            stderr_chunk: None,
-            log_snapshot: None,
-            exit_code: None,
             duration_ms: Some(1),
-            error: None,
-            command_execution_state: None,
-            validation_progress: None,
-            test_count_evidence: None,
-            format_mutation: None,
-            build_artifacts: None,
-            activity: None,
-            finished: true,
+            ..runner_job_update(
+                "startup-jobs".to_string(),
+                "inst".to_string(),
+                job.job_id.clone(),
+                "stopped".to_string(),
+                true,
+            )
         })
         .await
         .unwrap();

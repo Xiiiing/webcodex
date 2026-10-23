@@ -3,9 +3,9 @@
 use super::super::*;
 use super::support::*;
 use crate::runner_protocol::{
-    RunnerCapabilities, RunnerJobUpdateRequest, RunnerPollRequest, RunnerRegisterRequest,
-    RunnerResultRequest,
+    RunnerCapabilities, RunnerJobUpdateRequest, RunnerPollRequest, RunnerResultRequest,
 };
+use crate::tool_runtime::dispatch::DispatchContext;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -58,22 +58,55 @@ async fn read_files_snapshot_service_does_not_retain_unrelated_runtime_state() {
     assert!(unrelated_state.upgrade().is_none());
     registry
         .complete(RunnerResultRequest {
-            client_id: client.to_string(),
-            runner_instance_id: runner.runner_instance_id.clone(),
-            request_id: request.request_id,
             exit_code: Some(0),
             stdout: Some(canonical_agent_file_read_range("one\ntwo\nthree\n", 1, 2)),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(
+                client.to_string(),
+                runner.runner_instance_id.clone(),
+                request.request_id,
+            )
         })
         .await
         .unwrap();
-    let result = read.await;
-    assert!(result.success, "{:?}", result.error);
-    assert_eq!(result.output["text"], "one\ntwo");
+    let result = read.await.unwrap();
+    assert_eq!(result.content, "one\ntwo");
+}
+
+#[tokio::test]
+async fn read_files_snapshot_service_fences_sha_without_read_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = ToolRuntime::new_for_tests();
+    let client = "read-service-unscoped-sha";
+    register_runner_project_at_path(&runtime, client, "demo", root.path()).await;
+    let resolved = runtime.resolve_project_input("demo").await.unwrap();
+    let runner = runtime
+        .runner_registry
+        .get_runner_view(client)
+        .await
+        .unwrap();
+    let runner_project_id =
+        crate::tool_runtime::runner_local_project_id(&resolved.resolved_id).unwrap();
+    let expected_sha = "a".repeat(64);
+    let read = runtime.read_project_snapshot(
+        &resolved,
+        runner_project_id,
+        &runner.runner_instance_id,
+        "a.rs".into(),
+        Some(1),
+        Some(2),
+        Some(&expected_sha),
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    );
+    tokio::pin!(read);
+    assert!(futures_util::poll!(&mut read).is_pending());
+    let request = next_read_request(&runtime, client).await;
+    complete_read(&runtime, client, &request, "one\ntwo\n").await;
+    assert_eq!(
+        read.await.unwrap_err(),
+        super::super::files::FileReadFailure::StaleRevision
+    );
 }
 
 #[tokio::test]
@@ -385,8 +418,8 @@ async fn read_files_singleflight_late_waiter_keeps_its_own_deadline_budget() {
 
     complete_read(&runtime, client, &first_request, "one\ntwo\n").await;
     complete_read(&runtime, client, &second_request, "one\ntwo\n").await;
-    assert!(first.await.success);
-    assert!(second.await.success);
+    assert!(first.await.is_ok());
+    assert!(second.await.is_ok());
 }
 
 #[tokio::test]
@@ -422,16 +455,11 @@ async fn read_files_singleflight_last_waiter_drop_cancels_runner_registry_reques
     let late = runtime
         .runner_registry
         .complete(RunnerResultRequest {
-            client_id: client.into(),
-            runner_instance_id: "inst".into(),
-            request_id: request.request_id,
             exit_code: Some(0),
             stdout: Some(canonical_agent_file_read_output("one\ntwo\n", 1)),
             stderr: Some(String::new()),
-            stdout_truncated: false,
-            stderr_truncated: false,
             duration_ms: Some(1),
-            error: None,
+            ..runner_result_request(client.into(), "inst".into(), request.request_id)
         })
         .await;
     assert!(
@@ -556,31 +584,16 @@ async fn replace_runner_project_at_path(
 ) {
     runtime
         .runner_registry
-        .register(crate::test_support::current_runner_registration(
-            RunnerRegisterRequest {
-                computer_session_availability: None,
-                process_started_at: None,
-                build: None,
-                job_concurrency_limit: None,
-                job_inventory: None,
-                coding_agent_providers: None,
-                coding_agent_inventory: None,
-                client_id: client_id.to_string(),
-                runner_instance_id: runner_instance_id.to_string(),
-                runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-                display_name: None,
-                owner: None,
-                hostname: None,
-                host_context: None,
-                capabilities: RunnerCapabilities {
-                    shell: true,
-                    git: true,
-                    file_read: true,
-                    file_write: true,
-                    internal_posix_script: true,
-                    ..Default::default()
-                },
-                policy: None,
+        .register(crate::test_support::runner_registration(
+            client_id,
+            runner_instance_id,
+            RunnerCapabilities {
+                shell: true,
+                git: true,
+                file_read: true,
+                file_write: true,
+                internal_posix_script: true,
+                ..Default::default()
             },
         ))
         .await
@@ -938,19 +951,21 @@ async fn assert_merged_byte_fallback(content: String) {
 
 #[tokio::test]
 async fn read_files_coalesced_numbering_overflow_keeps_members_without_rereading() {
-    use webcodex_workspace::file_read_normalize::success_output;
     use webcodex_workspace::file_read_range::{read_range_from, EffectiveRange};
     let content = format!("{}\n", "\"".repeat(356)).repeat(360);
     let range =
         read_range_from(content.as_bytes(), EffectiveRange::new(Some(1), Some(360))).unwrap();
-    let parent = success_output(&range, false);
     let plain =
-        super::super::files::slice_read_file_result(&parent, Some(1), Some(360), false, "a.rs");
-    assert!(plain.success);
+        super::super::files::slice_read_file_range(&range, Some(1), Some(360), false, "a.rs");
+    assert!(plain.is_ok());
     let numbered =
-        super::super::files::slice_read_file_result(&parent, Some(1), Some(360), true, "a.rs");
-    assert!(!numbered.success);
-    assert_eq!(numbered.output["reason_code"], "range_too_large");
+        super::super::files::slice_read_file_range(&range, Some(1), Some(360), true, "a.rs");
+    assert_eq!(
+        numbered.unwrap_err(),
+        super::super::files::FileReadFailure::Read(
+            webcodex_workspace::file_read_range::ReadFileReason::RangeTooLarge,
+        )
+    );
 
     let root = tempfile::tempdir().unwrap();
     let runtime = ToolRuntime::new_for_tests();
@@ -970,7 +985,9 @@ async fn read_files_coalesced_numbering_overflow_keeps_members_without_rereading
     let request = next_read_request(&runtime, client).await;
     assert_eq!(request.end_line, Some(360));
     complete_read(&runtime, client, &request, &content).await;
-    let (result, items) = read.await;
+    let output = read.await;
+    let result = output.result;
+    let items = output.items;
     assert_eq!(result.output["succeeded_count"], 2);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].limit, Some(180));
@@ -2088,16 +2105,15 @@ async fn read_files_deadline_preserves_completed_results_and_cancels_unfinished_
         let late = runtime
             .runner_registry
             .complete(RunnerResultRequest {
-                client_id: client_id.to_string(),
-                runner_instance_id: "inst".to_string(),
-                request_id: request.request_id.clone(),
                 exit_code: Some(0),
                 stdout: Some(canonical_agent_file_read_output("late\n", 1)),
                 stderr: Some(String::new()),
-                stdout_truncated: false,
-                stderr_truncated: false,
                 duration_ms: Some(100),
-                error: None,
+                ..runner_result_request(
+                    client_id.to_string(),
+                    "inst".to_string(),
+                    request.request_id.clone(),
+                )
             })
             .await;
         assert!(late.is_err(), "timed-out Runner request was not cancelled");
@@ -2188,7 +2204,7 @@ async fn read_files_direct_session_overlay_pressure_keeps_final_response_under_h
         let auth = auth.clone();
         async move {
             runtime
-                .dispatch_with_auth_transport_options_and_metadata(
+                .dispatch_with_context(
                     ToolCall::ReadFiles {
                         project,
                         items: vec![
@@ -2201,10 +2217,11 @@ async fn read_files_direct_session_overlay_pressure_keeps_final_response_under_h
                         with_line_numbers: None,
                         max_result_bytes: Some(MAX_SERIALIZED_OUTPUT_BYTES),
                     },
-                    Some(&auth),
-                    SessionTransport::Mcp,
-                    ToolCallRecorderMetadata {
-                        ..Default::default()
+                    DispatchContext {
+                        recorder: ToolCallRecorderMetadata {
+                            ..Default::default()
+                        },
+                        ..DispatchContext::internal(Some(&auth), SessionTransport::Mcp, None)
                     },
                 )
                 .await
@@ -2284,25 +2301,18 @@ async fn ordinary_read_delivers_terminal_attention_without_host_continuation_sup
     runtime
         .runner_registry
         .update_job(RunnerJobUpdateRequest {
-            client_id: client_id.into(),
-            runner_instance_id: "inst".into(),
-            job_id: job_id.clone(),
             request_id: job.request_id,
             update_seq: Some(2),
-            status: "completed".into(),
             stdout_chunk: Some("PRIVATE_JOB_OUTPUT".into()),
-            stderr_chunk: None,
-            log_snapshot: None,
             exit_code: Some(0),
             duration_ms: Some(50),
-            error: None,
-            command_execution_state: None,
-            validation_progress: None,
-            test_count_evidence: None,
-            format_mutation: None,
-            build_artifacts: None,
-            activity: None,
-            finished: true,
+            ..runner_job_update(
+                client_id.into(),
+                "inst".into(),
+                job_id.clone(),
+                "completed".into(),
+                true,
+            )
         })
         .await
         .unwrap();
@@ -2394,8 +2404,7 @@ async fn ordinary_read_delivers_terminal_attention_without_host_continuation_sup
 #[tokio::test]
 async fn read_files_outer_recording_session_preserves_complete_sparse_shape() {
     use crate::tool_runtime::kernel::{
-        HostFileImportTrust, ToolCallContext, ToolCallRequest, ToolInvocationMetadata,
-        ToolProtocolCapabilities, ToolTransport,
+        ToolCallRequest, ToolInvocationMetadata, ToolProtocolCapabilities,
     };
 
     let root = tempfile::tempdir().unwrap();
@@ -2422,14 +2431,7 @@ async fn read_files_outer_recording_session_preserves_complete_sparse_shape() {
                         tool_name: "read_files".to_string(),
                         arguments,
                     },
-                    ToolCallContext {
-                        transport: ToolTransport::Mcp,
-                        session_id: Some(&session_id),
-                        auth: Some(&auth),
-                        window: None,
-                        record_oauth_scope_denials: false,
-                        host_file_import_trust: HostFileImportTrust::Untrusted,
-                    },
+                    mcp_recording_context(&session_id, &auth),
                     ToolInvocationMetadata {
                         ..Default::default()
                     },
@@ -2475,8 +2477,7 @@ async fn read_files_outer_recording_session_preserves_complete_sparse_shape() {
 #[tokio::test]
 async fn read_files_outer_recorder_observes_canonical_batch_before_primary_projection() {
     use crate::tool_runtime::kernel::{
-        HostFileImportTrust, ToolCallContext, ToolCallRequest, ToolInvocationMetadata,
-        ToolProtocolCapabilities, ToolTransport,
+        ToolCallRequest, ToolInvocationMetadata, ToolProtocolCapabilities,
     };
 
     let root = tempfile::tempdir().unwrap();
@@ -2510,14 +2511,7 @@ async fn read_files_outer_recorder_observes_canonical_batch_before_primary_proje
                         tool_name: "read_files".to_string(),
                         arguments,
                     },
-                    ToolCallContext {
-                        transport: ToolTransport::Mcp,
-                        session_id: Some(&session_id),
-                        auth: Some(&auth),
-                        window: None,
-                        record_oauth_scope_denials: false,
-                        host_file_import_trust: HostFileImportTrust::Untrusted,
-                    },
+                    mcp_recording_context(&session_id, &auth),
                     ToolInvocationMetadata::default(),
                     ToolProtocolCapabilities::default(),
                 )
@@ -2567,8 +2561,7 @@ async fn read_files_outer_recorder_observes_canonical_batch_before_primary_proje
 #[tokio::test]
 async fn read_files_ignores_context_ack_and_preserves_bounded_attention() {
     use crate::tool_runtime::kernel::{
-        HostFileImportTrust, ToolCallContext, ToolCallRequest, ToolInvocationMetadata,
-        ToolProtocolCapabilities, ToolTransport,
+        ToolCallRequest, ToolInvocationMetadata, ToolProtocolCapabilities,
     };
     use crate::tool_runtime::sessions::{
         PostSessionMessageInput, SessionMessageKind, SessionMessagePriority,
@@ -2689,14 +2682,7 @@ async fn read_files_ignores_context_ack_and_preserves_bounded_attention() {
                         tool_name: "read_files".to_string(),
                         arguments,
                     },
-                    ToolCallContext {
-                        transport: ToolTransport::Mcp,
-                        session_id: Some(&session_id),
-                        auth: Some(&auth),
-                        window: None,
-                        record_oauth_scope_denials: false,
-                        host_file_import_trust: HostFileImportTrust::Untrusted,
-                    },
+                    mcp_recording_context(&session_id, &auth),
                     ToolInvocationMetadata {
                         context_request: vec!["webcodex.workflow".to_string()],
 
@@ -2747,8 +2733,7 @@ async fn read_files_ignores_context_ack_and_preserves_bounded_attention() {
 #[tokio::test]
 async fn read_files_outer_recording_session_keeps_final_response_under_hard_cap() {
     use crate::tool_runtime::kernel::{
-        HostFileImportTrust, ToolCallContext, ToolCallRequest, ToolInvocationMetadata,
-        ToolProtocolCapabilities, ToolTransport,
+        ToolCallRequest, ToolInvocationMetadata, ToolProtocolCapabilities,
     };
     use webcodex_core::runtime_contract::MODEL_INSPECTION_MAX_RESULT_BYTES as MAX_SERIALIZED_OUTPUT_BYTES;
 
@@ -2784,14 +2769,7 @@ async fn read_files_outer_recording_session_keeps_final_response_under_hard_cap(
                         tool_name: "read_files".to_string(),
                         arguments,
                     },
-                    ToolCallContext {
-                        transport: ToolTransport::Mcp,
-                        session_id: Some(&session_id),
-                        auth: Some(&auth),
-                        window: None,
-                        record_oauth_scope_denials: false,
-                        host_file_import_trust: HostFileImportTrust::Untrusted,
-                    },
+                    mcp_recording_context(&session_id, &auth),
                     ToolInvocationMetadata {
                         ..Default::default()
                     },

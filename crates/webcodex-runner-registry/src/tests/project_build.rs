@@ -12,6 +12,7 @@ fn build_request() -> ProjectBuildRequest {
         adapter: ProjectBuildAdapter::Rust,
         scope: None,
         dependency_policy: None,
+        dependency_resolution_policy: None,
     }
 }
 
@@ -38,6 +39,7 @@ fn go_build_request() -> ProjectBuildRequest {
         adapter: ProjectBuildAdapter::Go,
         scope: None,
         dependency_policy: None,
+        dependency_resolution_policy: None,
     }
 }
 
@@ -57,28 +59,85 @@ fn go_build_plan() -> ProjectBuildPlan {
     }
 }
 
+fn build_job_request(plan: ProjectBuildPlan) -> JobStartRequest {
+    JobStartRequest {
+        cwd: Some("/tmp/demo".into()),
+        timeout_secs: 60,
+        context: JobStartContext {
+            project_id: Some("agent:build-runner:demo".into()),
+            project_cwd: Some(".".into()),
+            purpose: Some("build".into()),
+            shell: Some("direct_argv".into()),
+            ..Default::default()
+        },
+        ..JobStartRequest::new("build-runner", JobStartExecution::Build(plan))
+    }
+}
+
 fn registration(project_build: bool) -> RunnerRegisterRequest {
     let mut capabilities =
         crate::test_support::current_runner_capabilities(RunnerCapabilities::default());
     capabilities.project_build_v1 = project_build;
     current_runner_registration(RunnerRegisterRequest {
-        computer_session_availability: None,
-        process_started_at: None,
-        build: None,
-        job_concurrency_limit: None,
-        job_inventory: None,
-        coding_agent_providers: None,
-        coding_agent_inventory: None,
-        client_id: "build-runner".into(),
-        runner_instance_id: "inst".into(),
-        runner_protocol_generation: RUNNER_PROTOCOL_GENERATION_V2,
-        display_name: None,
-        owner: None,
-        hostname: None,
-        host_context: None,
         capabilities,
-        policy: None,
+        ..runner_registration("build-runner", "inst", Vec::new())
     })
+}
+#[tokio::test]
+async fn missing_build_capabilities_preserve_stage_order_without_admission() {
+    for (base, node, planning_feature, job_feature) in [
+        (false, false, "project_build_v1", "project_build_node_v1"),
+        (false, true, "project_build_v1", "project_build_v1"),
+        (
+            true,
+            false,
+            "project_build_node_v1",
+            "project_build_node_v1",
+        ),
+    ] {
+        let registry = RunnerRegistry::default();
+        let access = auth_context(None, true);
+        let mut registration = registration(base);
+        registration.capabilities.project_build_node_v1 = node;
+        registry.register(registration).await.unwrap();
+
+        let mut plan = build_plan();
+        plan.provenance.request.adapter = ProjectBuildAdapter::Node;
+        plan.provenance.backend = "node".into();
+        plan.process = canonical_project_build_process("node", &plan.provenance.request).unwrap();
+        plan.provenance.invocation_digest = project_build_invocation_digest(&plan.process);
+        let expected_error = |feature| {
+            format!(
+            "capability_unavailable: Runner `build-runner` does not support {feature}; upgrade that Runner to use this operation"
+        )
+        };
+
+        let error = registry
+            .enqueue_project_build_plan(
+                "build-runner".into(),
+                plan.provenance.request.clone(),
+                Some(&access),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, expected_error(planning_feature));
+
+        let error = registry
+            .start_job(build_job_request(plan), "test".into(), Some(&access), None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.failure_kind(), "capability_unavailable");
+        assert_eq!(error.to_string(), expected_error(job_feature));
+        assert!(registry.list_jobs(Some(10)).await.is_empty());
+        assert!(registry
+            .poll(RunnerPollRequest {
+                client_id: "build-runner".into(),
+                runner_instance_id: "inst".into(),
+            })
+            .await
+            .unwrap()
+            .is_none());
+    }
 }
 
 #[tokio::test]
@@ -91,10 +150,16 @@ async fn project_build_plan_requires_capability_and_stays_planning_only() {
         .enqueue_project_build_plan("build-runner".into(), build_request(), Some(&access))
         .await
         .unwrap_err();
-    assert!(error.starts_with("capability_unavailable:"), "{error}");
-    assert!(error.contains("Runner `build-runner`"), "{error}");
-    assert!(error.contains("project_build_v1"), "{error}");
-    assert!(error.contains("upgrade that Runner"), "{error}");
+    assert!(
+        error.to_string().starts_with("capability_unavailable:"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("Runner `build-runner`"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("project_build_v1"), "{error}");
+    assert!(error.to_string().contains("upgrade that Runner"), "{error}");
     assert!(registry
         .poll(RunnerPollRequest {
             client_id: "build-runner".into(),
@@ -140,10 +205,19 @@ async fn project_build_scope_capability_error_identifies_runner_without_dispatch
         .enqueue_project_build_plan("build-runner".into(), request, Some(&access))
         .await
         .unwrap_err();
-    assert!(error.starts_with("capability_unavailable:"), "{error}");
-    assert!(error.contains("Runner `build-runner`"), "{error}");
-    assert!(error.contains("project_all_packages_v1"), "{error}");
-    assert!(error.contains("upgrade that Runner"), "{error}");
+    assert!(
+        error.to_string().starts_with("capability_unavailable:"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("Runner `build-runner`"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("project_all_packages_v1"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("upgrade that Runner"), "{error}");
     assert!(registry
         .poll(RunnerPollRequest {
             client_id: "build-runner".into(),
@@ -161,34 +235,7 @@ async fn project_build_job_handoff_emits_typed_start_build() {
 
     let plan = build_plan();
     let job = registry
-        .start_job_with_metadata_for_access(
-            ShellJobOpRequest {
-                login: false,
-                op: "start".into(),
-                client_id: Some("build-runner".into()),
-                cwd: Some("/tmp/demo".into()),
-                command: Some(String::new()),
-                timeout_secs: Some(60),
-                job_id: None,
-                since_stdout_line: None,
-                since_stderr_line: None,
-                tail_lines: None,
-                limit: None,
-                codex: None,
-            },
-            "test".into(),
-            ShellJobStartMetadata {
-                project_id: Some("agent:build-runner:demo".into()),
-                project_cwd: Some(".".into()),
-                purpose: Some("build".into()),
-                shell: Some("direct_argv".into()),
-                visibility: ShellJobVisibility::Public,
-                structured_execution: Some(StructuredJobExecution::ProjectBuild(plan.clone())),
-                ..Default::default()
-            },
-            None,
-            None,
-        )
+        .start_job(build_job_request(plan.clone()), "test".into(), None, None)
         .await
         .unwrap();
     assert_eq!(job.kind, "project_build");
@@ -221,38 +268,19 @@ async fn project_build_base_capability_error_identifies_runner_without_job_admis
     registry.register(registration(false)).await.unwrap();
 
     let error = registry
-        .start_job_with_metadata(
-            ShellJobOpRequest {
-                login: false,
-                op: "start".into(),
-                client_id: Some("build-runner".into()),
-                cwd: Some("/tmp/demo".into()),
-                command: Some(String::new()),
-                timeout_secs: Some(60),
-                job_id: None,
-                since_stdout_line: None,
-                since_stderr_line: None,
-                tail_lines: None,
-                limit: None,
-                codex: None,
-            },
-            "test".into(),
-            ShellJobStartMetadata {
-                project_id: Some("agent:build-runner:demo".into()),
-                project_cwd: Some(".".into()),
-                purpose: Some("build".into()),
-                shell: Some("direct_argv".into()),
-                visibility: ShellJobVisibility::Public,
-                structured_execution: Some(StructuredJobExecution::ProjectBuild(build_plan())),
-                ..Default::default()
-            },
-        )
+        .start_job(build_job_request(build_plan()), "test".into(), None, None)
         .await
         .unwrap_err();
-    assert!(error.starts_with("capability_unavailable:"), "{error}");
-    assert!(error.contains("Runner `build-runner`"), "{error}");
-    assert!(error.contains("project_build_v1"), "{error}");
-    assert!(error.contains("upgrade that Runner"), "{error}");
+    assert!(
+        error.to_string().starts_with("capability_unavailable:"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("Runner `build-runner`"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("project_build_v1"), "{error}");
+    assert!(error.to_string().contains("upgrade that Runner"), "{error}");
     assert!(registry.list_jobs(Some(10)).await.is_empty());
     assert!(registry
         .poll(RunnerPollRequest {
@@ -274,44 +302,26 @@ async fn go_project_build_job_handoff_requires_single_module_capability() {
 
         let plan = go_build_plan();
         let result = registry
-            .start_job_with_metadata_for_access(
-                ShellJobOpRequest {
-                    login: false,
-                    op: "start".into(),
-                    client_id: Some("build-runner".into()),
-                    cwd: Some("/tmp/demo".into()),
-                    command: Some(String::new()),
-                    timeout_secs: Some(60),
-                    job_id: None,
-                    since_stdout_line: None,
-                    since_stderr_line: None,
-                    tail_lines: None,
-                    limit: None,
-                    codex: None,
-                },
-                "test".into(),
-                ShellJobStartMetadata {
-                    project_id: Some("agent:build-runner:demo".into()),
-                    project_cwd: Some(".".into()),
-                    purpose: Some("build".into()),
-                    shell: Some("direct_argv".into()),
-                    visibility: ShellJobVisibility::Public,
-                    structured_execution: Some(StructuredJobExecution::ProjectBuild(plan)),
-                    ..Default::default()
-                },
-                None,
-                None,
-            )
+            .start_job(build_job_request(plan), "test".into(), None, None)
             .await;
 
         if supported {
             assert!(result.is_ok(), "{result:?}");
         } else {
             let error = result.unwrap_err();
-            assert!(error.starts_with("capability_unavailable:"), "{error}");
-            assert!(error.contains("Runner `build-runner`"), "{error}");
-            assert!(error.contains("project_go_single_module_v1"), "{error}");
-            assert!(error.contains("upgrade that Runner"), "{error}");
+            assert!(
+                error.to_string().starts_with("capability_unavailable:"),
+                "{error}"
+            );
+            assert!(
+                error.to_string().contains("Runner `build-runner`"),
+                "{error}"
+            );
+            assert!(
+                error.to_string().contains("project_go_single_module_v1"),
+                "{error}"
+            );
+            assert!(error.to_string().contains("upgrade that Runner"), "{error}");
             assert!(registry.list_jobs(Some(10)).await.is_empty());
         }
     }
@@ -328,7 +338,10 @@ async fn python_project_build_capability_is_checked_for_planning_and_auto_discov
         .enqueue_project_build_plan("build-runner".into(), request.clone(), Some(&access))
         .await
         .unwrap_err();
-    assert!(error.contains("project_build_python_v1"), "{error}");
+    assert!(
+        error.to_string().contains("project_build_python_v1"),
+        "{error}"
+    );
     // Auto planning can discover Python. Its typed StartBuild still cannot be
     // submitted to an older Runner advertising only generic project_build_v1.
     request.adapter = ProjectBuildAdapter::Auto;
@@ -345,36 +358,13 @@ async fn python_project_build_capability_is_checked_for_planning_and_auto_discov
         process,
     };
     let error = registry
-        .start_job_with_metadata_for_access(
-            ShellJobOpRequest {
-                login: false,
-                op: "start".into(),
-                client_id: Some("build-runner".into()),
-                cwd: Some("/tmp/demo".into()),
-                command: Some(String::new()),
-                timeout_secs: Some(60),
-                job_id: None,
-                since_stdout_line: None,
-                since_stderr_line: None,
-                tail_lines: None,
-                limit: None,
-                codex: None,
-            },
-            "test".into(),
-            ShellJobStartMetadata {
-                project_id: Some("agent:build-runner:demo".into()),
-                project_cwd: Some(".".into()),
-                purpose: Some("build".into()),
-                shell: Some("direct_argv".into()),
-                structured_execution: Some(StructuredJobExecution::ProjectBuild(plan)),
-                ..Default::default()
-            },
-            None,
-            None,
-        )
+        .start_job(build_job_request(plan), "test".into(), None, None)
         .await
         .unwrap_err();
-    assert!(error.contains("project_build_python_v1"), "{error}");
+    assert!(
+        error.to_string().contains("project_build_python_v1"),
+        "{error}"
+    );
     assert!(registry
         .poll(RunnerPollRequest {
             client_id: "build-runner".into(),
@@ -416,44 +406,26 @@ async fn node_project_build_job_handoff_requires_additive_capability() {
         plan.process = canonical_project_build_process("node", &plan.provenance.request).unwrap();
         plan.provenance.invocation_digest = project_build_invocation_digest(&plan.process);
         let result = registry
-            .start_job_with_metadata_for_access(
-                ShellJobOpRequest {
-                    login: false,
-                    op: "start".into(),
-                    client_id: Some("build-runner".into()),
-                    cwd: Some("/tmp/demo".into()),
-                    command: Some(String::new()),
-                    timeout_secs: Some(60),
-                    job_id: None,
-                    since_stdout_line: None,
-                    since_stderr_line: None,
-                    tail_lines: None,
-                    limit: None,
-                    codex: None,
-                },
-                "test".into(),
-                ShellJobStartMetadata {
-                    project_id: Some("agent:build-runner:demo".into()),
-                    project_cwd: Some(".".into()),
-                    purpose: Some("build".into()),
-                    shell: Some("direct_argv".into()),
-                    visibility: ShellJobVisibility::Public,
-                    structured_execution: Some(StructuredJobExecution::ProjectBuild(plan)),
-                    ..Default::default()
-                },
-                None,
-                None,
-            )
+            .start_job(build_job_request(plan), "test".into(), None, None)
             .await;
 
         if supported {
             assert!(result.is_ok(), "{result:?}");
         } else {
             let error = result.unwrap_err();
-            assert!(error.starts_with("capability_unavailable:"), "{error}");
-            assert!(error.contains("Runner `build-runner`"), "{error}");
-            assert!(error.contains("project_build_node_v1"), "{error}");
-            assert!(error.contains("upgrade that Runner"), "{error}");
+            assert!(
+                error.to_string().starts_with("capability_unavailable:"),
+                "{error}"
+            );
+            assert!(
+                error.to_string().contains("Runner `build-runner`"),
+                "{error}"
+            );
+            assert!(
+                error.to_string().contains("project_build_node_v1"),
+                "{error}"
+            );
+            assert!(error.to_string().contains("upgrade that Runner"), "{error}");
             assert!(registry.list_jobs(Some(10)).await.is_empty());
         }
     }
@@ -470,7 +442,10 @@ async fn node_project_build_planning_requires_additive_capability() {
         .enqueue_project_build_plan("build-runner".into(), request, Some(&access))
         .await
         .unwrap_err();
-    assert!(error.contains("project_build_node_v1"), "{error}");
+    assert!(
+        error.to_string().contains("project_build_node_v1"),
+        "{error}"
+    );
     assert!(registry
         .poll(RunnerPollRequest {
             client_id: "build-runner".into(),

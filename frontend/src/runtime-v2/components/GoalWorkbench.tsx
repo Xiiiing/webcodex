@@ -1,3 +1,4 @@
+import { useFlowingSelection } from "../../ui/useFlowingSelection.js";
 import { displayProjectPath } from "../../ui/projectPresentation.js";
 import {
   Activity,
@@ -17,8 +18,7 @@ import {
   Users,
 } from "lucide-react";
 import { Progress, SegmentedControl, Stepper, TextInput } from "@mantine/core";
-import { motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { RuntimeLanguage } from "../../runtime_i18n.js";
 import { translate } from "../../runtime_i18n.js";
 import type { RuntimeV2Client } from "../api/client.js";
@@ -37,8 +37,6 @@ type Props = {
   client: RuntimeV2Client;
   language: RuntimeLanguage;
   projects: ProjectRow[];
-  surface: WorkSurface;
-  onSurfaceChange: (surface: WorkSurface) => void;
   onOpenSession: (location: SessionLocation) => void;
   onOpenAgent: (agentId: string) => void;
   onOpenWindow: (windowKey: string) => void;
@@ -77,7 +75,15 @@ function WorkSurfaceSwitch({
   language: RuntimeLanguage;
 }) {
   const t = (value: string) => translate(value, language);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  useFlowingSelection(surfaceRef, surface, {
+    variant: "filled",
+    itemSelector: ".mantine-SegmentedControl-label",
+    selectedSelector: ".mantine-SegmentedControl-label[data-active]",
+  });
   return <SegmentedControl<WorkSurfaceTab>
+    ref={surfaceRef}
+    styles={{ indicator: { display: "none" } }}
     className="work-surface-control"
     aria-label={t("Work level")}
     value={surface === "goals" ? "goals" : "windows"}
@@ -86,7 +92,6 @@ function WorkSurfaceSwitch({
       { value: "goals", label: <span className="work-surface-label"><Flag size={13} />{t("Goals")}</span> },
       { value: "windows", label: <span className="work-surface-label"><Activity size={13} />{t("Activity")}</span> },
     ]}
-    fullWidth
     size="xs"
     radius="md"
     withItemsBorders={false}
@@ -99,8 +104,6 @@ export function GoalWorkbench({
   client,
   language,
   projects,
-  surface,
-  onSurfaceChange,
   onOpenSession,
   onOpenAgent,
   onOpenWindow,
@@ -135,10 +138,10 @@ export function GoalWorkbench({
       type="button"
       className={"goal-list-row " + (state.selectedGoalId === goal.goal_id ? "selected" : "")}
       data-testid={"goal-row-" + goal.goal_id}
+      aria-current={state.selectedGoalId === goal.goal_id ? "true" : undefined}
       onClick={() => state.selectGoal(goal.goal_id)}
       key={goal.goal_id}
     >
-      {state.selectedGoalId === goal.goal_id && <motion.span className="ui-selection-rail" layoutId="runtime-goal-rail" aria-hidden="true" />}
       <span className={"goal-list-icon " + lifecycleClass(goal.lifecycle)}><Flag size={14} /></span>
       <span className="goal-list-copy">
         <strong>{goal.title}</strong>
@@ -163,7 +166,6 @@ export function GoalWorkbench({
         <div className="work-list-header goal-list-header">
           <div><span className="eyebrow">{t("Durable work")}</span><h1>{t("Work")}</h1></div>
           <IconButton label={t("Refresh")} onClick={state.refresh}><RefreshCw size={16} /></IconButton>
-          <WorkSurfaceSwitch surface={surface} onSurfaceChange={onSurfaceChange} language={language} />
         </div>
         <div className="goal-list-filters">
           <TextInput type="search" aria-label={t("Search Goals")} leftSection={<Search size={14} />}
@@ -176,6 +178,7 @@ export function GoalWorkbench({
           {!!active.length && <section className="work-group"><div className="work-group-heading"><span>{t("Active Goals")}</span><small>{active.length}</small></div><div className="work-group-list">{active.map(renderGoalRow)}</div></section>}
           {!!history.length && <section className="work-group"><div className="work-group-heading"><span>{t("Goal history")}</span><small>{history.length}</small></div><div className="work-group-list">{history.map(renderGoalRow)}</div></section>}
           {state.availability === "loading" && <div className="empty-inline">{t("Loading Goals…")}</div>}
+          {(state.availability === "error" || state.availability === "stale") && <div className="inventory-note" role="status">{t(state.availability === "stale" ? "Goal refresh failed; previous data retained." : "Goals could not be loaded. Refresh to retry.")}</div>}
           {state.availability === "denied" && <div className="empty-inline">{t("Goals require communication and Project read access.")}</div>}
           {state.availability === "available" && !filtered.length && <div className="empty-panel"><Flag size={18} /><strong>{t("No matching Goals")}</strong></div>}
         </div>
@@ -194,7 +197,8 @@ export function GoalWorkbench({
         ) : (
           <div className="empty-work">
             <Flag size={23} />
-            <h2>{state.detailAvailability === "loading" ? t("Loading Goal…") : t("Select a Goal")}</h2>
+            <h2>{t(state.detailAvailability === "loading" ? "Loading Goal…" : state.detailAvailability === "denied" ? "Goal details are not available with this access key." : state.detailAvailability === "error" ? "Goal details could not be loaded." : "Select a Goal")}</h2>
+            {state.detailAvailability === "error" && <button type="button" className="text-button" onClick={state.refresh}>{t("Refresh")}</button>}
           </div>
         )}
       </main>

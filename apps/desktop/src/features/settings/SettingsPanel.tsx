@@ -1,3 +1,5 @@
+import { Select } from "@mantine/core";
+import { useFlowingSelection } from "../../../../../frontend/src/ui/useFlowingSelection";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleHelp, Database, FolderLock, Info, Monitor, Network, Settings2 } from "lucide-react";
 import { desktopApi } from "../../lib/desktop-api";
@@ -21,6 +23,7 @@ import type { RuntimeUpdates } from "../../hooks/useRuntimeUpdates";
 
 import { ConfigurationDataPanel } from "./ConfigurationDataPanel";
 import { useConfigurationData } from "../../i18n/configuration-data";
+import { exposureStatusKey } from "../workspace/WorkspaceStatus";
 
 const SECTIONS = ["general", "access", "network", "runtime", "configuration", "diagnostics", "about"] as const;
 type SettingsSection = typeof SECTIONS[number];
@@ -60,9 +63,11 @@ function SettingsView({
   selectSection: (section: SettingsSection) => void;
 }) {
   const { locale, setLocale, t } = useLocale();
-  const { appearance, setAppearance, accent, setAccent } = useAppearance();
+  const { appearance, setAppearance, accent, setAccent, selectionColor, setSelectionColor } = useAppearance();
   const p = useProduct();
   const c = useConfigurationData();
+  const selectionRef = useRef<HTMLDivElement | null>(null);
+  useFlowingSelection(selectionRef, section, { variant: "filled" });
   const [runnerSettings, setRunnerSettings] = useState<RunnerSettings | null>(null);
   const [loadingRunnerSettings, setLoadingRunnerSettings] = useState(true);
   const [runnerSettingsError, setRunnerSettingsError] = useState<DesktopError | null>(null);
@@ -182,7 +187,7 @@ function SettingsView({
     <section className="page-section workspace-page settings-page" aria-labelledby="settings-title" data-webcodex-page="settings">
       <header className="page-heading-row"><h1 id="settings-title">{t("settings.title")}</h1></header>
       <div className="settings-layout">
-      <div className="settings-navigation" role="tablist" aria-label={t("settings.title")} aria-orientation="vertical">
+      <div ref={selectionRef} className="settings-navigation" role="tablist" aria-label={t("settings.title")} aria-orientation="vertical">
         {SECTIONS.map(value => {
           const Icon = SECTION_ICONS[value];
           return <button type="button" role="tab" key={value} id={`settings-tab-${value}`} aria-controls={`desktop-settings-${value}`} aria-selected={section === value} tabIndex={section === value ? 0 : -1} onClick={() => selectSection(value)} onKeyDown={event => {
@@ -200,10 +205,11 @@ function SettingsView({
       <div id="desktop-settings-general" hidden={section !== "general"}>
       <section className="settings-section" aria-labelledby="settings-general-title">
         <h2 id="settings-general-title">{p("general")}</h2>
-        <div className="setting-row"><label htmlFor="desktop-settings-locale">{t("locale.label")}</label><select id="desktop-settings-locale" value={locale} onChange={event => setLocale(event.target.value as typeof locale)} data-webcodex-control="locale">{LANGUAGES.map(language => <option key={language.value} value={language.value}>{language.label}</option>)}</select></div>
-        <div className="setting-row"><label htmlFor="desktop-settings-appearance">{t("appearance.label")}</label><select id="desktop-settings-appearance" value={appearance} onChange={event => setAppearance(event.target.value as typeof appearance)} data-webcodex-control="appearance">{APPEARANCES.map(value => <option key={value} value={value}>{t(`appearance.${value}`)}</option>)}</select></div>
+        <div className="setting-row"><label htmlFor="desktop-settings-locale">{t("locale.label")}</label><Select id="desktop-settings-locale" value={locale} onChange={value => { if (value) setLocale(value as typeof locale); }} data-webcodex-control="locale" data={LANGUAGES.map(language => ({ ...language }))} allowDeselect={false} /></div>
+        <div className="setting-row"><label htmlFor="desktop-settings-appearance">{t("appearance.label")}</label><Select id="desktop-settings-appearance" value={appearance} onChange={value => { if (value) setAppearance(value as typeof appearance); }} data-webcodex-control="appearance" data={APPEARANCES.map(value => ({ value, label: t(`appearance.${value}`) }))} allowDeselect={false} /></div>
+        <div className="setting-row"><label htmlFor="desktop-settings-selection">{t("selection.label")}</label><Select id="desktop-settings-selection" value={selectionColor} onChange={value => { if (value === "accent" || value === "monochrome") setSelectionColor(value); }} data={[{ value: "accent", label: t("selection.accent") }, { value: "monochrome", label: t("selection.monochrome") }]} allowDeselect={false} /></div>
         <div className="setting-row"><span>{t("accent.label")}</span><AccentPicker color={accent} onChange={setAccent} /></div>
-        <div className="setting-row"><label htmlFor="desktop-launch-at-login">{t("settings.launchAtLogin")}</label><input id="desktop-launch-at-login" type="checkbox" checked={launchAtLogin ?? false} onChange={event => void updateLaunchAtLogin(event.target.checked)} disabled={launchAtLogin === null || savingLaunchAtLogin} data-webcodex-control="launch-at-login" /></div>
+        <div className="setting-row"><label htmlFor="desktop-launch-at-login">{t("settings.launchAtLogin")}</label><input id="desktop-launch-at-login" className="desktop-switch" type="checkbox" checked={launchAtLogin ?? false} onChange={event => void updateLaunchAtLogin(event.target.checked)} disabled={launchAtLogin === null || savingLaunchAtLogin} data-webcodex-control="launch-at-login" /></div>
         {launchAtLoginError && <SettingsError error={launchAtLoginError} />}
         <div className="setting-row"><span>{p("background")}</span><span className="setting-value">{p("keepRunning")}</span></div>
       </section>
@@ -218,13 +224,13 @@ function SettingsView({
       </div>
       <div id="desktop-settings-network" hidden={section !== "network"} className="settings-network">
         <h2>{t("settings.tunnelProxy")}</h2>
-        <div className="field-group"><label htmlFor="desktop-tunnel-proxy-mode">{t("settings.tunnelProxy")}</label><select id="desktop-tunnel-proxy-mode" value={proxyMode} onChange={event => setProxyMode(event.target.value as TunnelProxyMode)} disabled={savingProxy || operationBusy} data-webcodex-control="tunnel-proxy-mode"><option value="auto">{t("settings.tunnelProxyAuto")}</option><option value="direct">{t("settings.tunnelProxyDirect")}</option><option value="custom">{t("settings.tunnelProxyCustom")}</option></select></div>
+        <div className="field-group"><label htmlFor="desktop-tunnel-proxy-mode">{t("settings.tunnelProxy")}</label><Select id="desktop-tunnel-proxy-mode" value={proxyMode} onChange={value => { if (value) setProxyMode(value as TunnelProxyMode); }} disabled={savingProxy || operationBusy} data-webcodex-control="tunnel-proxy-mode" data={[{ value: "auto", label: t("settings.tunnelProxyAuto") }, { value: "direct", label: t("settings.tunnelProxyDirect") }, { value: "custom", label: t("settings.tunnelProxyCustom") }]} allowDeselect={false} /></div>
         {proxyMode === "custom" && <div className="field-group"><label htmlFor="desktop-tunnel-proxy-url">{t("settings.tunnelProxyCustomUrl")}</label><input id="desktop-tunnel-proxy-url" value={customProxy} onChange={event => setCustomProxy(event.target.value)} placeholder="http://127.0.0.1:7890" disabled={savingProxy || operationBusy} spellCheck={false} data-webcodex-control="tunnel-proxy-url" /></div>}
         <dl className="detail-list" data-webcodex-tunnel-routing>
           <div><dt>{p("configuredMode")}</dt><dd>{configuredProxyMode}</dd></div>
           <div><dt>{p("detectedProxy")}</dt><dd>{detectedProxy}</dd></div>
           <div><dt>{p("effectiveConnectionPath")}</dt><dd>{effectiveProxyPath}</dd></div>
-          <div><dt>{p("tunnelStatus")}</dt><dd>{state.readiness.exposure}</dd></div>
+          <div><dt>{p("tunnelStatus")}</dt><dd>{p(exposureStatusKey(state.readiness.exposure))}</dd></div>
         </dl>
         <button type="button" className="secondary-button" onClick={() => void saveProxy()} disabled={savingProxy || operationBusy || (proxyMode === "custom" && !customProxy.trim())} data-webcodex-action="save-tunnel-proxy">{savingProxy ? p("loading") : p("saveApply")}</button>
         {proxyError && <SettingsError error={proxyError} />}

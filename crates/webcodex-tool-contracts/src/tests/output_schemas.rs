@@ -2772,6 +2772,8 @@ fn skill_load_declares_exact_loading_and_ambiguity_output_contract() {
         "catalog_revision",
         "descriptor",
         "skill_id",
+        "skill_path",
+        "project_path",
         "name",
         "text",
         "definition_revision",
@@ -2784,6 +2786,12 @@ fn skill_load_declares_exact_loading_and_ambiguity_output_contract() {
     ] {
         assert!(fields.contains(field), "load_skill missing {field}");
     }
+    assert!(!fields.contains("path"));
+    let skill_specs = crate::registry::skill_runtime_tool_specs();
+    let read_fields = output_schema_field_names(spec_named(&skill_specs, "read_skill_file"));
+    assert!(read_fields.contains("skill_path"));
+    assert!(read_fields.contains("project_path"));
+    assert!(!read_fields.contains("path"));
     assert_ne!(fields, default_output_schema_field_names());
 }
 
@@ -3680,6 +3688,7 @@ fn project_validate_schema_admits_canonical_planning_and_replan_failures() {
         "validation_scope_unavailable",
         "validation_action_unsupported",
         "dependency_policy_unsupported",
+        "dependency_resolution_policy_unsupported",
         "test_filter_unsupported",
         "validation_check_unavailable",
     ] {
@@ -3874,6 +3883,115 @@ fn browser_observation_schema_accepts_canonical_runner_output_and_rejects_privat
     let mut leaked_endpoint = effect;
     leaked_endpoint["debug_endpoint"] = json!("ws://127.0.0.1/devtools");
     assert!(act_ok(leaked_endpoint).is_err());
+}
+
+#[test]
+fn observe_browser_surface_geometry_is_not_capped_by_screenshot_dimensions() {
+    let observe = crate::output_schema_for_tool("observe_browser");
+    let admit = |output: Value| {
+        test_support::validate_schema_instance(
+            &json!({"success": true, "output": output, "error": null}),
+            &observe,
+        )
+    };
+    let screenshot = |width: u64, height: u64| {
+        json!({
+            "execution_state": "completed",
+            "state_changed": false,
+            "browser_id": "browser_abcdefghijklmnop",
+            "page_id": "page_abcdefghijklmnop",
+            "content_base64": "iVBORw0KGgo=",
+            "mime_type": "image/png",
+            "width": width,
+            "height": height,
+            "file_bytes": 8,
+            "sha256": "a".repeat(64)
+        })
+    };
+
+    admit(screenshot(4096, 1440)).expect("screenshot at the encoded-image bound must stay valid");
+    let oversized_screenshot = admit(screenshot(4097, 1440));
+    assert!(
+        oversized_screenshot.as_ref().is_err_and(|error| {
+            error.contains("$.output.width") && error.contains("above maximum")
+        }),
+        "screenshot width 4097 must stay outside the encoded-image contract, got {oversized_screenshot:?}"
+    );
+    let zero_screenshot = admit(screenshot(0, 1440));
+    assert!(
+        zero_screenshot
+            .as_ref()
+            .is_err_and(|error| error.contains("$.output.width") && error.contains("below minimum")),
+        "screenshot width 0 must stay outside the encoded-image contract, got {zero_screenshot:?}"
+    );
+
+    let surface = json!({
+        "execution_state": "completed",
+        "state_changed": false,
+        "surface_id": "surface_abcdefghijklmnop",
+        "application": "Browser",
+        "title": "Wide window",
+        "width": 5120,
+        "height": 1440,
+        "focused": null,
+        "active": true
+    });
+    admit(surface.clone())
+        .expect("observe_browser surface width is native window geometry and must accept 5120");
+    let mut tall_surface = surface.clone();
+    tall_surface["width"] = json!(1440);
+    tall_surface["height"] = json!(4320);
+    admit(tall_surface).expect("surface height above 4096 is window geometry, not a screenshot");
+    let mut surface_floor = surface.clone();
+    surface_floor["width"] = json!(0);
+    let zero_surface = admit(surface_floor);
+    assert!(
+        zero_surface
+            .as_ref()
+            .is_err_and(|error| error.contains("$.output.width") && error.contains("below minimum")),
+        "surface width 0 is not emitted and stays below the published floor, got {zero_surface:?}"
+    );
+    let mut leaked = surface.clone();
+    leaked["process_id"] = json!(4242);
+    assert!(
+        admit(leaked).is_err(),
+        "surface observation must stay closed"
+    );
+
+    // Mirrors adapt_native_image_output_schema_for_mcp: it renames content_base64
+    // and does not rewrite allOf. The screenshot cap has to follow mime_type.
+    let mut mcp_schema = observe;
+    {
+        let properties = mcp_schema
+            .pointer_mut("/properties/output/properties")
+            .and_then(Value::as_object_mut)
+            .expect("observe_browser output properties");
+        properties.remove("content_base64");
+        properties.insert(
+            "content_delivery".to_string(),
+            json!({"type": "string", "const": "mcp_image"}),
+        );
+    }
+    let admit_mcp = |output: Value| {
+        test_support::validate_schema_instance(
+            &json!({"success": true, "output": output, "error": null}),
+            &mcp_schema,
+        )
+    };
+    admit_mcp(surface).expect("MCP surface geometry must keep the uncapped window size");
+    let mut mcp_screenshot = screenshot(4097, 1440);
+    mcp_screenshot
+        .as_object_mut()
+        .expect("screenshot object")
+        .remove("content_base64");
+    mcp_screenshot["content_delivery"] = json!("mcp_image");
+    let oversized_mcp = admit_mcp(mcp_screenshot);
+    assert!(
+        oversized_mcp.as_ref().is_err_and(|error| {
+            error.contains("$.output.width") && error.contains("above maximum")
+        }),
+        "MCP screenshot width 4097 must stay capped after the image-field rename, got {oversized_mcp:?}"
+    );
 }
 
 #[test]

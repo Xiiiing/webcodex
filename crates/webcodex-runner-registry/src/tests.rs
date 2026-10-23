@@ -87,6 +87,17 @@ fn runner_registration(
     }
 }
 
+fn shell_job_start_request(
+    client_id: &str,
+    command: &str,
+    timeout_secs: Option<u64>,
+) -> JobStartRequest {
+    JobStartRequest {
+        timeout_secs: timeout_secs.unwrap_or(120),
+        ..JobStartRequest::shell(client_id, command)
+    }
+}
+
 fn all_enabled_capabilities() -> RunnerCapabilities {
     let mut capabilities = RunnerCapabilities::default();
     for feature in RunnerFeature::all() {
@@ -144,20 +155,7 @@ async fn register_computer_test_runner(
 ) {
     registry
         .register(current_runner_registration(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: "computer-inst".to_string(),
-            runner_protocol_generation: RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: Some(owner.to_string()),
-            hostname: None,
-            host_context: None,
             capabilities: RunnerCapabilities {
                 shell: true,
                 file_read: true,
@@ -168,7 +166,7 @@ async fn register_computer_test_runner(
                 computer_text_input: text_input_capable,
                 ..Default::default()
             },
-            policy: None,
+            ..runner_registration(client_id, "computer-inst", Vec::new())
         }))
         .await
         .unwrap();
@@ -177,22 +175,8 @@ async fn register_computer_test_runner(
 async fn register_quic_v1_runner(registry: &RunnerRegistry, client_id: &str) {
     registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            runner_protocol_generation: RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: Some("alice".to_string()),
-            hostname: None,
-            host_context: None,
-            capabilities: async_job_capabilities(),
-            policy: None,
+            ..runner_registration(client_id, "inst", Vec::new())
         })
         .await
         .unwrap();
@@ -210,22 +194,9 @@ async fn register_instance_with_capabilities(
 ) -> Result<RunnerView, String> {
     registry
         .register(current_runner_registration(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: instance.to_string(),
-            runner_protocol_generation: RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: Some("alice".to_string()),
-            hostname: None,
-            host_context: None,
             capabilities,
-            policy: None,
+            ..runner_registration(client_id, instance, Vec::new())
         }))
         .await
 }
@@ -249,22 +220,8 @@ async fn register_with_instance(
 ) -> RunnerView {
     registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: instance.to_string(),
-            runner_protocol_generation: RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: Some("alice".to_string()),
-            hostname: None,
-            host_context: None,
-            capabilities: async_job_capabilities(),
-            policy: None,
+            ..runner_registration(client_id, instance, Vec::new())
         })
         .await
         .unwrap()
@@ -332,6 +289,8 @@ mod computer_text_input;
 mod connection_lease;
 #[path = "tests/disconnect_reconciliation.rs"]
 mod disconnect_reconciliation;
+#[path = "tests/execution_admission.rs"]
+mod execution_admission;
 #[path = "tests/file_validation.rs"]
 mod file_validation;
 #[path = "tests/instance_lease.rs"]
@@ -362,6 +321,8 @@ mod project_build;
 mod project_dependency_policy;
 #[path = "tests/project_file_read.rs"]
 mod project_file_read;
+#[path = "tests/project_format.rs"]
+mod project_format;
 #[path = "tests/project_inventory.rs"]
 mod project_inventory;
 #[path = "tests/project_projection.rs"]

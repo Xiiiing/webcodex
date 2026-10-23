@@ -51,6 +51,14 @@ Bootstrap 或 discovery 返回 `project_ref` 后，普通 Project-scoped tool ca
 
 默认情况下，它还会返回一个很小且有界的 `extensions` selection catalog：Skill metadata 来自 canonical 的 project / Runner-configured `skills.roots` / Runner-managed Skill Store 三类来源；Plugin metadata 只包含 configured working directory 与当前 Project root 匹配、且已 ready/committed 的 provider。该 metadata 不授予任何 authority，也不会自动读取 Skill body 或创建 Plugin binding；模型选择后使用 `read_skill_file` 读取 Skill 文本，`run_skill_resource` 只执行可信 Runner-configured live `scripts/` resource（由 `expected_definition_revision` fence definition）或 Runner-installed managed resource（另由 `expected_package_revision` fence package），Plugin 则走 `plugin_tool describe -> call`。Configured resource bytes 会一直保持 live 到实际执行时，并不会预先被 package revision 固定。只有当前模型上下文仍明确保留这些 discovery metadata 时，才应设置 `include_extension_catalog=false`。
 
+应用原有字节预算前，启动结果会按当前 `instruction` 的词法相关性排序已发现条目：名称命中优先于描述命中，同分和未匹配条目保留原顺序。匹配复用工具发现的英文词形归一化，并识别 metadata 中出现的完整多字中文短语，不进行翻译或语义检索。最多检查指令前 2,048 个字符和 64 个不同英文词。排序只影响选择 metadata；显式目录、来源 revision、授权、资源加载与执行继续沿用原有路径。
+
+Skill 读取（`load_skill` 和 `read_skill_file`）返回规范化的包内路径 `skill_path`，供 `read_skill_file.path` 使用。Project Skill 另返回权威的项目相对路径 `project_path`：项目引用应使用它和返回的来源行号，即使包目录与 metadata name 不同。Runner-configured 和 managed Skill 不返回 `project_path`；引用其 Skill identity、`skill_path`、resource `sha256`、revision 和来源行号，不要编造项目路径。不会暴露 Skill 的本机根目录。
+
+Skill 读取返回 `has_more=true` 时，直接使用完整的 `suggested_call` 续读，不必重新拼装范围。该调用包含精确的 Project、Skill ID、包内路径、下一行、行数限制、definition revision、适用的 managed package revision，以及 `expected_resource_sha256`。这个可选输入必须是 64 位小写十六进制，校验 project、configured 和 managed 三类来源的完整资源哈希。跨页资源变化时返回 `skill_resource_changed`、`state_changed=false`，不返回替换正文；不要拼接这些页，也不要自动换成新版本。已有 definition/package 检查继续生效；省略新哈希的调用保留原有实时读取行为。
+
+完整读取不附加建议，现有分页字段保留。续读元数据计入既有 64 KiB 结果预算（正文 48 KiB、最多 400 行），Skill 页在选定范围超出正文预算时于完整行边界停止，仍校验全文哈希及 UTF-8。单行本身超过预算时继续失败，不返回无法前进的游标。普通文件范围读取仍沿用原有严格溢出行为。不推断 Session。MCP 沿已有准入和 gateway 路由投影建议，并移除不可用工具；建议不会自动读取或授予权限。
+
 跨轮次的重要工作可以用 durable Goal 记录目标和完成标准，无需用户管理步骤。`update_goal` 使用精确的 `expected_revision` 和 `idempotency_key` 编辑 active Goal：省略 `completion_conditions` 会保留原列表，传入 `[]` 则清空。替换条件沿用创建时的限制（最多八项，每项去除首尾空白后非空，且不超过 512 UTF-8 字节）。编辑完成标准保留已有步骤、checkpoint 和进度；不会自动判断验收、恢复执行或重新打开 completed/cancelled Goal。revision 冲突时重新读取；结果不确定时复用同一个 key 和完全相同的请求。
 
 ## Workbench 应用
@@ -72,6 +80,22 @@ Fresh work 仍须明确 `project` 或 `client_id + path`。`mode="worktree"` 始
 在原 Window 丢失 Session selector 时，请求 `_wc.context=["workflow.resume"]` 并显式选择候选。已授权候选保留 canonical identity，并提供 `session_ref`；当前 root fingerprint 和 reference store 可用时还提供 `project_ref`。这只是发现，不会自动恢复；丢失任务上下文时应先读取精确 handoff。跨 Window 必要时仍用 `list_sessions(project)` 发现候选。
 
 ## 工具策略 guidance
+
+普通实现无需指定角色。对于非简单代码变更，先定位职责所属层，追踪相关调用方和数据流，
+查找可复用实现，并阅读涉及边界的设计指导；调查范围应与任务规模相称。现有模式是需要
+判断的证据，新增抽象或平行实现必须有具体任务理由。共享展示之前的权威业务事实，
+用结构完整的最小改动解决根因，包括任务范围内必要的局部重构和被替代路径清理。
+交付前同时检查行为、职责归属、重复实现和跨层一致性；测试通过本身不能证明架构合适。
+
+编译器、Schema 和穷尽性检查的失败也可能暴露跨层修改遗漏。长任务应及时报告已验证的阶段
+成果；创建获授权的 PR 或其他外部交付物后，应尽早报告实际链接及验证状态，不要把所有
+结果都推迟到最终回复。提示指导本身无法避免模型服务额度耗尽导致的中断。
+
+`independent_review` 仅在明确要求独立评审时使用。除权限、安全和运行时契约外，还应检查
+此次改动引入或扩大的重复事实或执行流程、职责错位、展示数据反向解析和不完整迁移。
+发现应有具体代码及正确性、漂移风险或维护成本证据，区分必须修复的问题和可选清理；
+个人风格偏好本身不构成问题，无关重设计不在任务范围内。只读评审不授权修改代码，
+只有任务明确包含修正时才修复并执行针对性验证；角色本身不授予权限。
 
 需要切换账号或窗口时，用 `post_session_message` 保存已确认的决策和当前进度。不知道旧 Session 身份时，通过 `list_sessions(project)` 发现并显式选择候选，读取交接后再恢复。完整恢复及已配置模型评审流程见[任务接续](SESSION_CONTINUITY.zh-CN.md)。
 

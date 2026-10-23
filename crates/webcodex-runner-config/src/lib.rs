@@ -293,7 +293,9 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             project_validation_node_json_v1: false,
             project_build_python_v1: false,
             project_format_v1: false,
+            project_format_go_v1: false,
             project_dependency_policy_v1: false,
+            project_dependency_resolution_offline_v1: false,
             // Go project single-module semantics are implemented and advertised
             // by the running binary, never inferred from generated static config.
             project_go_single_module_v1: false,
@@ -304,6 +306,7 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             project_validation_python_ruff_v1: false,
             project_validation_node_script_check_v1: false,
             project_validation_node_tap_v1: false,
+            project_validation_rust_clippy_v1: false,
             // Like JSON parsing, first-class durable go_test support is
             // advertised by the running binary, never by generated static config.
             structured_go_test_tool: false,

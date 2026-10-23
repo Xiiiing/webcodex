@@ -8,9 +8,12 @@ mod access;
 mod access_control;
 mod capabilities;
 mod console_snapshot;
+mod dispatch_fence;
 pub use console_snapshot::{
     ActiveJobAggregate, ConsoleRegistrySnapshot, WorkspaceObservationIdentity,
 };
+mod execution_admission;
+pub use execution_admission::ExecutionAdmissionError;
 mod job_index;
 mod job_input;
 mod job_status;
@@ -131,9 +134,10 @@ pub use access::{DetachedInitiatorIdentity, RunnerAccess, RunnerAccessGroup};
 pub use capabilities::{RunnerFeature, RunnerFeatureSet};
 pub use job_status::job_status_is_active;
 pub use job_updates::{
-    JobAttentionSnapshot, JobLogWait, JobLogWaitOutcome, JobTelemetrySnapshot, JobValidationOutput,
-    RuntimeJobAggregateSnapshot, RuntimeJobRunnerCounts, ShellJobLogObservation,
-    ShellJobStartMetadata, StructuredJobExecution, MAX_JOB_TELEMETRY_SNAPSHOTS,
+    JobAttentionSnapshot, JobLogWait, JobLogWaitOutcome, JobShellTarget, JobStartContext,
+    JobStartExecution, JobStartRequest, JobTelemetrySnapshot, JobValidationCorrelation,
+    JobValidationOutput, JobValidationPlan, RuntimeJobAggregateSnapshot, RuntimeJobRunnerCounts,
+    ShellJobLogObservation, MAX_JOB_TELEMETRY_SNAPSHOTS,
 };
 pub use jobs::{command_preview, process_preview, script_preview, COMMAND_PREVIEW_MAX_CHARS};
 pub use maintenance::{
@@ -154,4 +158,7 @@ pub(crate) use registry::{
 pub use requests::{EnqueueLspError, EnqueueRunnerSkillError};
 pub use state::{JobRecoveryPhase, JobRecoveryReason};
 pub use state::{RunnerSemanticView, ShellJobVisibility};
-pub use telemetry::{NoopRunnerRegistryTelemetry, RunnerRegistryTelemetry, ValidatedMcpToolResult};
+pub use telemetry::{
+    NoopRunnerRegistryTelemetry, RunnerRegistryTelemetry, RunnerRequestCancellationReason,
+    ValidatedMcpToolResult,
+};

@@ -305,10 +305,16 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: linux-ci
+      - name: Check Clippy correctness
+        if: matrix.shard == 'workspace-crates'
+        run: cargo clippy --locked --workspace --all-targets -- -D clippy::correctness
       - name: Run ${{ matrix.shard }} Rust tests
         env:
           CI_RUST_SHARD: ${{ matrix.shard }}
         run: python3 scripts/ci_rust_test.py --report target/ci-test-reports/${{ matrix.shard }}.json -- cargo test --locked ${{ matrix.packages }}
+      - name: Run real Clippy smoke regression
+        if: matrix.shard == 'runner'
+        run: cargo test --locked -p webcodex-runner --features runner-real-process-tests --bin webcodex-runner runner_real_process_rust_clippy_warnings_pass_and_correctness_fails -- --ignored
       - name: Run experimental Code Mode and receipt tests
         if: matrix.shard == 'server'
         run: |
@@ -348,10 +354,20 @@ jobs:
         run: node --test src/mcp_tests/*.test.mjs
       - name: Ensure Python tooling test dependencies
         run: |
-          if ! command -v rg >/dev/null 2>&1; then
+          if ! command -v rg >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then
             sudo apt-get update
-            sudo apt-get install --no-install-recommends -y ripgrep
+            sudo apt-get install --no-install-recommends -y ripgrep zstd
           fi
+      - name: Test opt-in knowledge and Skill acceptance evidence
+        run: >-
+          python3 -B -m unittest
+          scripts.tests.test_agent_loop_benchmark
+          scripts.tests.test_agent_loop_report
+          scripts.tests.test_agent_efficiency_benchmark
+          scripts.tests.test_agent_temporal_evidence
+          scripts.tests.test_agent_knowledge_fixture
+          scripts.tests.test_agent_knowledge_evidence
+          scripts.tests.test_agent_knowledge_benchmark
       - name: Test optional Codex observation adapter
         run: python3 -m unittest discover -s integrations/codex -p 'test_*.py' -v
       - name: Test optional project knowledge provider
@@ -767,7 +783,13 @@ jobs:
         # production startup/request deadlines.
         env:
           RUST_TEST_THREADS: "2"
-        run: cargo test --locked -p webcodex-runner -p webcodex-lsp -p webcodex-computer --features runner-real-process-tests
+        run: cargo test --locked -p webcodex-runner -p webcodex-lsp -p webcodex-computer --features runner-real-process-tests -- --skip webcodex_runner::persistent_shell::windows_tests::runner_windows_local_persistent_shell_preserves_state_and_existing_protocol
+      - name: Run Windows persistent-shell protocol regression
+        # The bootstrap compiles a C# controller. Run this case without concurrent
+        # Plugin child-process fixtures consuming its production startup budget.
+        env:
+          RUST_TEST_THREADS: "1"
+        run: cargo test --locked -p webcodex-runner --features runner-real-process-tests --bin webcodex-runner webcodex_runner::persistent_shell::windows_tests::runner_windows_local_persistent_shell_preserves_state_and_existing_protocol -- --exact
 
   test-windows-package:
     needs: changes
