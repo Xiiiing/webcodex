@@ -18,6 +18,12 @@ fn rust_build_exact_generated_output_reader_keeps_secret_and_generic_artifact_gu
     };
     let observed = inspect("target/dogfood/app").unwrap();
     assert_eq!(observed.bytes, 17);
+    assert_eq!(observed.path, "target/dogfood/app");
+    assert!(
+        crate::webcodex_runner::artifacts::observe_build_artifact(&root, "target/dogfood/app")
+            .is_err(),
+        "non-Cargo build readers retain bulk restrictions"
+    );
     assert!(
         crate::webcodex_runner::artifacts::validate_artifact_runner_path("target/dogfood/app")
             .is_err(),
@@ -120,29 +126,15 @@ fn rust_build_artifact_metadata_selects_only_project_packages_and_rejects_trunca
     std::fs::write(root.join("Cargo.toml"), "").unwrap();
     let metadata = json!({"packages":[{"id":"local","name":"demo","manifest_path":root.join("Cargo.toml")}],"workspace_members":["local"],"workspace_default_members":["local"]});
     assert_eq!(
-        selected_packages(
-            &root,
-            &root,
-            &request(),
-            &webcodex_core::project_build::canonical_project_build_process("rust", &request())
-                .unwrap(),
-            &metadata.to_string()
-        )
-        .unwrap()
-        .ids,
+        selected_packages(&root, &root, &request(), &metadata.to_string())
+            .unwrap()
+            .ids,
         BTreeSet::from(["local".into()])
     );
     let outside = tempfile::NamedTempFile::new().unwrap();
     let mut invalid = metadata.clone();
     invalid["packages"][0]["manifest_path"] = json!(outside.path());
-    assert!(selected_packages(
-        &root,
-        &root,
-        &request(),
-        &webcodex_core::project_build::canonical_project_build_process("rust", &request()).unwrap(),
-        &invalid.to_string()
-    )
-    .is_err());
+    assert!(selected_packages(&root, &root, &request(), &invalid.to_string()).is_err());
     let mut result = ShellCommandResult::completed(CommandResult {
         exit_code: Some(0),
         stdout: Some(metadata.to_string()),
@@ -164,7 +156,7 @@ fn rust_build_artifact_metadata_selects_only_project_packages_and_rejects_trunca
 }
 
 #[test]
-fn rust_build_artifact_selection_uses_admitted_native_workspace_exclusions() {
+fn rust_build_artifact_selection_uses_admitted_typed_workspace_exclusions() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     std::fs::write(root.join("Cargo.toml"), "").unwrap();
@@ -175,16 +167,19 @@ fn rust_build_artifact_selection_uses_admitted_native_workspace_exclusions() {
     request.scope = Some(ProjectBuildScope {
         packages: Vec::new(),
         all_packages: true,
+        exclude_packages: vec!["member".into()],
     });
-    let mut process =
-        webcodex_core::project_build::canonical_project_build_process("rust", &request).unwrap();
-    process.args.extend(["--exclude".into(), "member".into()]);
     assert_eq!(
-        selected_packages(&root, &root, &request, &process, &metadata.to_string())
+        selected_packages(&root, &root, &request, &metadata.to_string())
             .unwrap()
             .ids,
         BTreeSet::from(["local".into()])
     );
-    process.args.extend(["--exclude".into(), "demo".into()]);
-    assert!(selected_packages(&root, &root, &request, &process, &metadata.to_string()).is_err());
+    request
+        .scope
+        .as_mut()
+        .unwrap()
+        .exclude_packages
+        .push("demo".into());
+    assert!(selected_packages(&root, &root, &request, &metadata.to_string()).is_err());
 }

@@ -578,7 +578,10 @@ pub(crate) fn observe_cargo_build_artifact(
         .canonicalize()
         .map_err(|_| "build_artifacts_missing".to_string())?;
     let relative = canonical.strip_prefix(root).map_err(|_| invalid())?;
-    if !webcodex_core::project_build::build_artifact_path_valid(&relative.to_string_lossy()) {
+    let relative = relative.to_str().ok_or_else(invalid)?;
+    #[cfg(windows)]
+    let relative = relative.replace('\\', "/");
+    if !webcodex_core::project_build::build_artifact_path_valid(&relative) {
         return Err(invalid());
     }
     let mut file = open_regular_file(&target).map_err(|_| invalid())?;

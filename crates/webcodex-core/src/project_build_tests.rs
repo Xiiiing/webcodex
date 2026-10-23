@@ -132,6 +132,7 @@ fn project_build_scope_and_canonical_processes_are_bounded() {
     rust.scope = Some(ProjectBuildScope {
         packages: vec!["package-b".into(), "package-a".into(), "package-a".into()],
         all_packages: false,
+        exclude_packages: Vec::new(),
     });
     assert_eq!(
         canonical_project_build_process("rust", &rust).unwrap().args,
@@ -142,6 +143,7 @@ fn project_build_scope_and_canonical_processes_are_bounded() {
     go.scope = Some(ProjectBuildScope {
         packages: vec!["./cmd/...".into(), "./internal".into()],
         all_packages: false,
+        exclude_packages: Vec::new(),
     });
     assert_eq!(
         canonical_project_build_process("go", &go).unwrap().args,
@@ -158,6 +160,7 @@ fn project_build_scope_and_canonical_processes_are_bounded() {
         invalid.scope = Some(ProjectBuildScope {
             packages,
             all_packages: false,
+            exclude_packages: Vec::new(),
         });
         assert!(invalid.validate().is_err());
     }
@@ -173,6 +176,7 @@ fn project_build_all_packages_maps_to_portable_native_scope() {
         request.scope = Some(ProjectBuildScope {
             packages: Vec::new(),
             all_packages: true,
+            exclude_packages: Vec::new(),
         });
         assert_eq!(
             canonical_project_build_process(backend, &request)
@@ -181,6 +185,34 @@ fn project_build_all_packages_maps_to_portable_native_scope() {
             expected
         );
     }
+}
+
+#[test]
+fn project_build_workspace_exclusions_are_canonical_and_rust_only() {
+    let mut request = request();
+    request.scope = Some(ProjectBuildScope {
+        packages: Vec::new(),
+        all_packages: true,
+        exclude_packages: vec!["zeta".into(), "alpha".into(), "alpha".into()],
+    });
+    assert_eq!(
+        canonical_project_build_process("rust", &request)
+            .unwrap()
+            .args,
+        [
+            "build",
+            "--workspace",
+            "--exclude",
+            "alpha",
+            "--exclude",
+            "zeta"
+        ]
+    );
+    assert!(canonical_project_build_process("go", &request)
+        .unwrap_err()
+        .contains("workspace_exclusions_unsupported"));
+    request.scope.as_mut().unwrap().exclude_packages = vec!["crate-*".into()];
+    assert!(canonical_project_build_process("rust", &request).is_err());
 }
 
 #[test]
@@ -433,6 +465,7 @@ fn python_build_is_canonical_no_install_and_rejects_scope_or_argv_drift() {
     request.scope = Some(ProjectBuildScope {
         packages: vec![],
         all_packages: true,
+        exclude_packages: Vec::new(),
     });
     assert!(canonical_project_build_process("python", &request).is_err());
     let caps: crate::runner_protocol::RunnerCapabilities = serde_json::from_str("{}").unwrap();
@@ -450,7 +483,8 @@ fn build_artifact_observations_are_bounded_private_and_never_validation_evidence
     assert!(validate_build_artifacts(&[artifact.clone()]));
     let mut generated = artifact.clone();
     generated.path = "target/dogfood/demo".into();
-    assert!(validate_build_artifacts(&[generated]));
+    assert!(!validate_build_artifacts(&[generated.clone()]));
+    assert!(validate_cargo_build_artifacts(&[generated]));
     assert!(!validate_build_artifacts(&vec![
         artifact.clone();
         PROJECT_BUILD_ARTIFACTS_MAX
@@ -469,7 +503,8 @@ fn build_artifact_observations_are_bounded_private_and_never_validation_evidence
     ] {
         let mut invalid = artifact.clone();
         invalid.path = path.into();
-        assert!(!validate_build_artifacts(&[invalid]), "{path}");
+        assert!(!validate_build_artifacts(&[invalid.clone()]), "{path}");
+        assert!(!validate_cargo_build_artifacts(&[invalid]), "{path}");
     }
     use crate::runner_protocol::ShellCommandExecutionState::Completed;
     assert!(validate_build_artifact_report(

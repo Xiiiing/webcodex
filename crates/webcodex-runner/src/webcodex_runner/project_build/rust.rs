@@ -33,7 +33,6 @@ fn selected_packages(
     root: &Path,
     cwd: &Path,
     request: &ProjectBuildRequest,
-    process: &webcodex_core::runner_protocol::ShellProcessArgv,
     text: &str,
 ) -> Result<SelectedPackages, String> {
     let invalid = || evidence_error("build_artifact_metadata_invalid");
@@ -106,18 +105,11 @@ fn selected_packages(
             .map(|id| id.as_str().map(str::to_owned).ok_or_else(invalid))
             .collect::<Result<BTreeSet<_>, _>>()?
     };
-    // Native selectors come only from the admitted Runner-owned process. This
-    // also composes with the independently delivered workspace-exclusion stage:
-    // an excluded member built as a dependency is not a selected output owner.
-    for pair in process
-        .args
-        .windows(2)
-        .filter(|pair| pair[0] == "--exclude")
-    {
-        if let Some(id) = names.get(&pair[1]) {
-            ids.remove(id);
-        } else {
-            return Err(invalid());
+    // Reuse admitted typed scope; an excluded member built as a dependency
+    // does not become a selected output owner.
+    if let Some(scope) = &request.scope {
+        for name in scope.normalized_exclude_packages().map_err(|_| invalid())? {
+            ids.remove(names.get(&name).ok_or_else(invalid)?);
         }
     }
     if ids.is_empty() || !ids.is_subset(&member_ids) {
@@ -312,9 +304,8 @@ pub(crate) fn run_rust_build(
                 .get_or_insert("build_artifact_metadata_failed".into());
             return (metadata, None);
         }
-        let selected = parsed_output(&metadata).and_then(|text| {
-            selected_packages(&project_root, Path::new(cwd), request, &build.process, text)
-        });
+        let selected = parsed_output(&metadata)
+            .and_then(|text| selected_packages(&project_root, Path::new(cwd), request, text));
         match selected {
             Ok(selected) => {
                 let identity =
@@ -392,11 +383,11 @@ pub(crate) fn run_rust_build(
                     &root, &path, deadline, stop,
                 )?,
             );
-            if !webcodex_core::project_build::validate_build_artifacts(&artifacts) {
+            if !webcodex_core::project_build::validate_cargo_build_artifacts(&artifacts) {
                 return Err(evidence_error("build_artifacts_limit_exceeded"));
             }
         }
-        if !webcodex_core::project_build::validate_build_artifacts(&artifacts) {
+        if !webcodex_core::project_build::validate_cargo_build_artifacts(&artifacts) {
             return Err(evidence_error("build_artifacts_limit_exceeded"));
         }
         check_read_owner()?;

@@ -145,6 +145,15 @@ impl ProjectBuildRequest {
                 ProjectOperationScopeError::InvalidPackage => {
                     "invalid project build package scope".to_string()
                 }
+                ProjectOperationScopeError::ExclusionRequiresAllPackages => {
+                    "exclude_packages requires all_packages=true".to_string()
+                }
+                ProjectOperationScopeError::ExclusionCount => {
+                    "exclude_packages must contain at most 8 items".to_string()
+                }
+                ProjectOperationScopeError::InvalidExclusion => {
+                    "invalid excluded package name".to_string()
+                }
             })?;
         }
         if self.dependency_resolution_policy.is_some()
@@ -276,6 +285,15 @@ pub fn canonical_project_build_process_with_manager(
         .scope
         .as_ref()
         .is_some_and(ProjectBuildScope::selects_all_packages);
+    let excluded_packages = request
+        .scope
+        .as_ref()
+        .map(ProjectBuildScope::normalized_exclude_packages)
+        .transpose()?
+        .unwrap_or_default();
+    if !excluded_packages.is_empty() && backend != "rust" {
+        return Err("workspace_exclusions_unsupported");
+    }
     match backend {
         "rust" => {
             let packages = normalize_cargo_packages(None, packages)?;
@@ -310,6 +328,10 @@ pub fn canonical_project_build_process_with_manager(
             }
             if all_packages {
                 args.push("--workspace".to_string());
+                for package in &excluded_packages {
+                    args.push("--exclude".to_string());
+                    args.push(package.clone());
+                }
             } else if let Some(packages) = packages {
                 for package in packages {
                     args.push("-p".to_string());
@@ -331,6 +353,9 @@ pub fn canonical_project_build_process_with_manager(
             })
         }
         "go" => {
+            if !excluded_packages.is_empty() {
+                return Err("workspace_exclusions_unsupported");
+            }
             let packages = normalize_go_packages(if all_packages { None } else { packages })?;
             let mut args = vec!["build".to_string()];
             if request
@@ -390,14 +415,29 @@ pub fn build_artifact_path_valid(path: &str) -> bool {
             .any(|component| component.eq_ignore_ascii_case("node_modules"))
 }
 
+/// Generic adapters retain the bulk-exclusion policy.
 pub fn validate_build_artifacts(artifacts: &[ProjectBuildArtifact]) -> bool {
+    validate_artifacts_with_path_policy(artifacts, |path| {
+        validate_relative(path).is_ok() && !crate::sensitive_paths::is_bulk_skipped_path(path)
+    })
+}
+
+/// Only exact Cargo output observations may include generated target/ paths.
+pub fn validate_cargo_build_artifacts(artifacts: &[ProjectBuildArtifact]) -> bool {
+    validate_artifacts_with_path_policy(artifacts, build_artifact_path_valid)
+}
+
+fn validate_artifacts_with_path_policy(
+    artifacts: &[ProjectBuildArtifact],
+    path_valid: impl Fn(&str) -> bool,
+) -> bool {
     artifacts.len() <= PROJECT_BUILD_ARTIFACTS_MAX
         && artifacts
             .iter()
             .try_fold(0u64, |sum, artifact| sum.checked_add(artifact.bytes))
             .is_some_and(|total| total <= 256 * 1024 * 1024)
         && artifacts.iter().enumerate().all(|(index, artifact)| {
-            build_artifact_path_valid(&artifact.path)
+            path_valid(&artifact.path)
                 && artifact.bytes <= 256 * 1024 * 1024
                 && artifact.sha256.len() == 64
                 && artifact
@@ -414,7 +454,9 @@ pub fn validate_build_artifacts(artifacts: &[ProjectBuildArtifact]) -> bool {
 }
 
 /// Artifact metadata is terminal historical observation, never active execution
-/// authority. Reject injected metadata on unrelated or incomplete Jobs.
+/// authority. Receipts retain no backend/request, so validate the union of
+/// supported observations here; readers enforce their adapter-specific policy.
+/// Reject injected metadata on unrelated or incomplete Jobs.
 pub fn validate_build_artifact_report(
     source: &str,
     status: &str,
@@ -427,7 +469,7 @@ pub fn validate_build_artifact_report(
             || status != "completed"
             || exit_code != Some(0)
             || state != Some(crate::runner_protocol::ShellCommandExecutionState::Completed)
-            || !validate_build_artifacts(artifacts)
+            || !validate_cargo_build_artifacts(artifacts)
         {
             return Err("build_artifacts_invalid");
         }

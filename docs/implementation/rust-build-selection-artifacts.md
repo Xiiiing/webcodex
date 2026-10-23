@@ -35,10 +35,11 @@ existing prepared environment and owned process-tree/pipe lifecycle. Metadata
 and build output obey existing stream byte limits; truncation cannot qualify.
 
 Metadata selects registered-Project packages, explicit package scope or Cargo
-default workspace members. Compiler output is accepted only for selected package
+default workspace members, applying admitted workspace exclusions even when an excluded
+member builds as a dependency. Compiler output is accepted only for selected package
 identities and library/binary targets, followed by a successful `build-finished`.
 The Runner rechecks Project ownership and directory identity and uses the existing
-artifact inspection primitives for Project-relative paths, byte counts, SHA-256 and MIME. A private exact Cargo-output reader accepts generated `target/` files; generic artifact tools retain their bulk-exclusion policy, and secrets remain forbidden. The
+artifact inspection primitives for Project-relative paths, byte counts, SHA-256 and MIME. A private exact Cargo-output reader accepts generated `target/` files; generic artifact tools and non-Cargo build readers retain their bulk-exclusion policy, and secrets remain forbidden. The
 existing 16-file/256-MiB aggregate contract remains authoritative, including any
 stricter reader bound. Nothing reads an output outside the registered Project;
 an external Cargo target directory cannot qualify for this observation policy.
@@ -63,6 +64,8 @@ completeness, Project ownership, sparse results and same-Job handoff. The explic
 `runner-real-process-tests` lane includes
 `runner_real_process_project_build_rust_options_observe_selected_cached_artifacts`:
 a library and chosen binary under `dogfood`, an intentionally broken unselected
-binary, independently verified bytes/digests, a cached rerun and missing-profile
-failure. Native platform/build results are recorded in the PR; this document is
+binary, independently verified bytes/digests, cached reruns, workspace exclusions
+and missing-profile failure. The same lane includes
+`runner_real_process_structured_process_preserves_fractional_shared_deadline`
+for subsecond process execution and cleanup without resetting the shared deadline. Native platform/build results are recorded in the PR; this document is
 the contract and does not itself claim live deployment or model acceptance.

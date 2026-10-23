@@ -32,10 +32,10 @@ Job，共享总超时和取消预算，复用准备环境、进程树所有权�
 元数据与构建输出遵守现有流字节上限；截断不能通过观察验收。
 
 元数据确定已注册 Project 中的 package、显式 package 选择或 Cargo 默认
-workspace 成员。只接收所选 package 身份与库/二进制目标的编译产物，并要求
+workspace 成员，并应用已准入的 workspace 排除；被排除成员作为依赖构建时也不会变成所选产物。只接收所选 package 身份与库/二进制目标的编译产物，并要求
 完整的成功 `build-finished`。读取前后重新核对 Project 所有权和目录身份，
 复用产物检查基础机制核验项目相对路径、字节数、SHA-256 和 MIME。
-内部精确 Cargo 输出读取器允许生成的 `target/` 文件；通用产物工具保留批量忽略规则，
+内部精确 Cargo 输出读取器允许生成的 `target/` 文件；通用产物工具及非 Cargo 构建读取器保留批量忽略规则，
 凭据路径仍被禁止。
 沿用最多 16 文件、总计 256 MiB 的契约及读取器的更严格限制；Project 外的
 Cargo target 目录不能通过观察验收。
@@ -55,5 +55,7 @@ Core、Tool Contracts、Runner、Registry、Server 聚焦测试覆盖默认省�
 稀疏结果和原 Job 接续。显式真实进程用例
 `runner_real_process_project_build_rust_options_observe_selected_cached_artifacts`
 覆盖 dogfood 下的库与指定二进制、故意损坏的未选二进制、独立内容与摘要核验、
-缓存重跑和缺失 profile 失败。实际平台、构建和部署结果记录在 PR，
+缓存重跑、workspace 排除和缺失 profile 失败。同一测试通道的
+`runner_real_process_structured_process_preserves_fractional_shared_deadline`
+验证不足一秒的进程预算与清理，且不重置共享截止时间。实际平台、构建和部署结果记录在 PR，
 本文描述契约，不代表已经完成部署或真实模型验收。
