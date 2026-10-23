@@ -547,7 +547,8 @@ The Direct reasons are:
   `consume_agent_wake`. Their descriptors must retain the complete canonical
   input schema, accurate effect annotations and applicable OAuth requirements;
   permission checks remain authoritative on the Server. This reason
-  always blocks `call_runtime_tool` fallback, including when the Host omits or
+  always blocks `call_runtime_tool` fallback and `_wc.control` forms of these
+  operations before any main or sidecar effect, including when the Host omits or
   rejects the dedicated descriptor. It grants no runtime authority and does
   not change the operation's ordinary authorization, ownership, lifecycle,
   replay-safety, or effect checks. Host exposure does not establish that a
