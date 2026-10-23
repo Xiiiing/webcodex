@@ -353,6 +353,8 @@ Rust `project_build` 可选 `dependency_resolution_policy: "offline"`，Runner �
 
 Adaptive Runtime 可以把常用工具直接暴露，把 long-tail 工具通过 `call_runtime_tool` 暴露。direct/gateway 只影响 model exposure，不改变 schema validation、OAuth scope、Project authority、permission policy、Runner capability、Session fence 或 tool effects。
 
+九个持久 Agent 和 Goal 操作遵循更严格的 Host 暴露契约：`create_agent_identity`、`rotate_agent_continuation_endpoint`、`list_agent_identities`、`prepare_goal_workflow`、`get_goal`、`checkpoint_goal`、`update_goal`、`bootstrap_agent_conversation` 和 `consume_agent_wake` 分别以独立 Host tool 暴露，并携带canonical 输入 schema、准确的 effect annotations 和适用的 OAuth 要求。开始新的试用前，Host 必须正常审核这些工具。如果 Host 未加载或拒绝某个专用 descriptor，WebCodex 不会改用 `call_runtime_tool`；该 generic route 不是这些操作的 fallback。这一有限阶段不声称其他 Plugin 操作也已满足独立审查要求。此暴露策略不授予 authority，也不保证 Host 接受调用，并且不改变各操作现有的 authentication、OAuth scopes、permissions、ownership、lifecycle、replay-safety 或 effect checks。此前 Host 拒绝的原因仍未知；本契约不声称已经解决该问题。其他普通 direct tools 保留现有 gateway fallback，hidden App methods 仍保持隐藏。
+
 已删除的 ProjectConnector capability 名称（`task_start`、`files_read`、`edits_apply`、`task_finish` 等）不会作为 runtime 工具的 compatibility alias 保留。请使用当前 `tools/list` / `read_tool_manifest` 返回的 ToolRuntime 名称。
 
 ### 长任务使用 Job lifecycle

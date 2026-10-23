@@ -232,6 +232,19 @@ impl ParsedCall {
                     params.name = target;
                     params.arguments = arguments;
                 }
+                crate::model_surface::AdaptiveRuntimeGatewayTargetRoute::DirectOnly => {
+                    if let Some(lc) = lifecycle.as_deref() {
+                        lc.dispatch_failed("direct_host_review_required");
+                        lc.dispatch_finished(false, Some(false), "direct_host_review_required");
+                    }
+                    return Err(McpOutcome::BadRequest(rpc_error(
+                        id,
+                        -32602,
+                        format!(
+                            "direct_host_review_required: '{target}' requires its own Host-reviewed callable descriptor; call_runtime_tool cannot invoke it. Refresh tools/list if the descriptor is unavailable. A Host refusal must not be retried through another route."
+                        ),
+                    )));
+                }
                 crate::model_surface::AdaptiveRuntimeGatewayTargetRoute::Unknown => {
                     if let Some(lc) = lifecycle.as_deref() {
                         lc.dispatch_failed("unknown_tool");

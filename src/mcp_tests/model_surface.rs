@@ -380,7 +380,6 @@ async fn specialist_tools_remain_discoverable_with_canonical_gateway_contracts()
         "go_test",
         "read_workspace_changes",
         "read_session_handoff",
-        "rotate_agent_continuation_endpoint",
         "run_skill_resource",
         "wait_for_agent_events",
         "wait_for_job_terminal",

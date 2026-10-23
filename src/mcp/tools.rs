@@ -115,7 +115,7 @@ fn stateless_advertised_operator_extension_descriptors_for_auth(
 fn adaptive_runtime_gateway_tool_json(compact: bool) -> Value {
     mcp_tool_parts_json(
         ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME.to_string(),
-        "Call one runtime tool admitted by Adaptive Runtime through the generic gateway. A tool with availability=direct should still be invoked through its direct callable when available; ordinary direct tools may fall back here when that callable is unavailable or not loaded. Explicit MCP App presentation tools are the exception: when MCP Apps are enabled they must use their direct callable because only that tool descriptor carries the Host App resource metadata. Directness otherwise changes preferred model exposure only: canonical runtime argument validation, OAuth scope, Project authority, permission gates, Runner capability, Session/context policy, host-file-import trust, protocol capability admission, and tool effects remain unchanged.".to_string(),
+        "Call one runtime tool admitted by Adaptive Runtime through the generic gateway. Follow the exact tool manifest's allowed route. Operations requiring individual Host review cannot use this gateway even when their callable is unloaded or the Host refuses it; refresh tools/list and retain normal Host review. Ordinary direct tools may fall back here only when their callable is unavailable. Explicit MCP App presentation tools must use their direct callable while Apps are enabled so the Host receives App metadata. Canonical argument validation, OAuth scope, Project authority, permission gates, Runner capability, Session/context policy, host-file-import trust, protocol capability admission, and effects remain enforced.".to_string(),
         json!({
             "type": "object",
             "properties": {
@@ -123,7 +123,7 @@ fn adaptive_runtime_gateway_tool_json(compact: bool) -> Value {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 128,
-                    "description": "Exact runtime tool name admitted by Adaptive Runtime. availability=direct is normally preferred with gateway fallback when unavailable; explicit MCP App presentation tools remain direct-only while MCP Apps are enabled."
+                    "description": "Exact admitted runtime tool whose manifest permits gateway execution. Tools requiring individual Host review never allow fallback; App presentation is direct-only while Apps are enabled."
                 },
                 "arguments": {
                     "type": "object",
