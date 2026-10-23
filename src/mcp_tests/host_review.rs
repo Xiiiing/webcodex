@@ -155,6 +155,17 @@ async fn host_review_public_descriptors_and_manifest_routes_are_exact() {
                         "{name} must be model-callable, not merely App-visible"
                     );
                     let canonical = specs.iter().find(|spec| spec.name == name).unwrap();
+                    if modern && !compact {
+                        let control = &descriptor["inputSchema"]["properties"]["_wc"]["properties"]
+                            ["control"]["properties"];
+                        let before = control["before"]["properties"].as_object().unwrap();
+                        let after = control["after_success"]["properties"].as_object().unwrap();
+                        assert!(!before.contains_key("goal_progress"), "{name}");
+                        assert!(!before.contains_key("wake_consume"), "{name}");
+                        assert!(!after.contains_key("goal_completion"), "{name}");
+                        assert!(before.contains_key("attempt_heartbeat"), "{name}");
+                        assert!(after.contains_key("todo_completion"), "{name}");
+                    }
                     assert!(!descriptor["description"].as_str().unwrap().is_empty());
                     assert_eq!(descriptor["annotations"], canonical.annotations, "{name}");
                     assert_eq!(
@@ -384,6 +395,159 @@ async fn host_review_rejected_gateway_does_not_apply_control_sidecars() {
     let goal = runtime.get_goal(Some(&auth), goal_id.to_string());
     assert!(goal.success);
     assert_eq!(goal.output["goal"]["summary"]["revision"], 1);
+}
+
+#[tokio::test]
+async fn host_review_sidecar_forms_are_rejected_on_direct_and_gateway_calls() {
+    let goal = "wc_goal_AAAAAAAAAAAAAAAA";
+    let cases = [
+        (
+            "checkpoint_goal",
+            json!({"before": {"goal_progress": {
+                "goal_id": goal, "expected_revision": 1, "summary": "reviewed progress",
+                "completed_step_ids": ["inspect"], "idempotency_key": "sidecar-progress"
+            }}}),
+        ),
+        (
+            "consume_agent_wake",
+            json!({"before": {"wake_consume": {
+                "agent_id": "wc_dagent_AAAAAAAAAAAAAAAA",
+                "endpoint_id": "wc_endpoint_AAAAAAAAAAAAAAAA",
+                "expected_controller_generation": 1,
+                "wake_id": "wc_wake_AAAAAAAAAAAAAAAA",
+                "consume_token": "wc_wake_consume_test_fixture_only"
+            }}}),
+        ),
+        (
+            "update_goal",
+            json!({"after_success": {"goal_completion": {
+                "goal_id": goal, "expected_revision": 1,
+                "idempotency_key": "sidecar-complete"
+            }}}),
+        ),
+    ];
+    for apps in [false, true] {
+        let (_temp, runtime) = review_runtime(true, apps);
+        let auth = review_auth("review-owner");
+        for (canonical, control) in &cases {
+            for gateway in [false, true] {
+                let mut params = if gateway {
+                    adaptive_runtime_gateway_params("list_projects", json!({}))
+                } else {
+                    json!({"name": "get_runtime_status", "arguments": {}})
+                };
+                params["arguments"]["_wc"] = json!({"control": control});
+                let outcome = handle_mcp_request(
+                    &runtime,
+                    rpc("tools/call", Some(json!(13)), mcp_2026_params(params)),
+                    Some(&auth),
+                )
+                .await;
+                let McpOutcome::BadRequest(body) = outcome else {
+                    panic!("{canonical} sidecar must reject before any dispatch: {outcome:?}");
+                };
+                assert_eq!(body["error"]["code"], -32602);
+                assert!(body["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with(&format!("direct_host_review_required: '{canonical}'")));
+                assert_eq!(agent_count(&runtime, Some(&auth)), 0);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn host_review_retained_session_message_sidecar_executes_and_replays_through_mcp() {
+    for apps in [false, true] {
+        for gateway in [false, true] {
+            let (_temp, runtime) = review_runtime(true, apps);
+            let auth = review_auth("review-owner");
+            let session = start_authorized_test_session(
+                &runtime,
+                &auth,
+                crate::tool_runtime::SessionMode::Normal,
+            );
+            let mut params = if gateway {
+                adaptive_runtime_gateway_params("get_runtime_status", json!({}))
+            } else {
+                json!({"name": "get_runtime_status", "arguments": {}})
+            };
+            params["arguments"]["_wc"] = json!({"control": {"communication": {
+                "before": [{"session_message": {
+                    "session_id": session.session_id,
+                    "kind": "progress",
+                    "message": "Retained communication passed through the MCP adapter",
+                    "delivery_key": "retained-mcp-communication"
+                }}]
+            }}});
+
+            // The same envelope is unavailable on legacy MCP, before any
+            // sidecar effect. Its successful route is the admitted 2026 adapter.
+            let legacy = handle_mcp_request(
+                &runtime,
+                rpc("tools/call", Some(json!(14)), params.clone()),
+                Some(&auth),
+            )
+            .await;
+            let McpOutcome::BadRequest(body) = legacy else {
+                panic!("legacy MCP must reject the invocation envelope: {legacy:?}");
+            };
+            assert_eq!(body["error"]["code"], -32602);
+            assert!(body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("'_wc' is unavailable on this MCP protocol surface"));
+            assert!(runtime
+                .sessions
+                .list_messages(&session.session_id, Default::default())
+                .unwrap()
+                .is_empty());
+
+            let mut message_id = None;
+            for replay in [false, true] {
+                let outcome = handle_mcp_request(
+                    &runtime,
+                    rpc(
+                        "tools/call",
+                        Some(json!(15)),
+                        mcp_2026_params(params.clone()),
+                    ),
+                    Some(&auth),
+                )
+                .await;
+                let McpOutcome::Ok(body) = outcome else {
+                    panic!("retained sidecar apps={apps} gateway={gateway}: {outcome:?}");
+                };
+                assert_eq!(body["result"]["isError"], false, "{body}");
+                let control = &body["result"]["structuredContent"]["output"]["control"];
+                assert_eq!(control["main"]["success"], true, "{body}");
+                let receipt = &control["communication"]["before"][0];
+                assert_eq!(receipt["kind"], "session_message", "{body}");
+                assert_eq!(receipt["success"], true, "{body}");
+                assert_eq!(receipt["replayed"], replay, "{body}");
+                assert_eq!(receipt["state_changed"], !replay, "{body}");
+                if let Some(expected) = &message_id {
+                    assert_eq!(&receipt["message_id"], expected, "{body}");
+                } else {
+                    assert!(receipt["message_id"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("wc_msg_"));
+                    message_id = Some(receipt["message_id"].clone());
+                }
+                assert_eq!(
+                    runtime
+                        .sessions
+                        .list_messages(&session.session_id, Default::default())
+                        .unwrap()
+                        .len(),
+                    1,
+                    "the replay must retain one actual Session message"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]

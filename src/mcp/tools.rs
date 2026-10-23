@@ -791,7 +791,7 @@ fn stateless_invocation_envelope_schema(tool_name: &str) -> Value {
     if allowed.contains(&"control") {
         properties.insert(
             "control".to_string(),
-            crate::tool_runtime::control_sidecar::input_schema(tool_name),
+            invocation::mcp_control_sidecar_input_schema(tool_name),
         );
     }
     json!({

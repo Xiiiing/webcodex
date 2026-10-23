@@ -4230,7 +4230,7 @@ async fn mcp_tools_call_unknown_tool_is_bad_request() {
 }
 
 #[tokio::test]
-async fn mcp_2026_control_sidecars_gateway_strip_and_closed_schema() {
+async fn mcp_2026_control_sidecars_require_reviewed_operations_and_keep_closed_schema() {
     let temp = tempfile::tempdir().unwrap();
     let db =
         std::sync::Arc::new(crate::db::Database::open(&temp.path().join("sidecars.db")).unwrap());
@@ -4270,19 +4270,19 @@ async fn mcp_2026_control_sidecars_gateway_strip_and_closed_schema() {
         None,
     )
     .await;
-    let McpOutcome::Ok(value) = outcome else {
-        panic!("expected structured success")
+    let McpOutcome::BadRequest(value) = outcome else {
+        panic!("review-required Goal mutation must use its own callable")
     };
-    let result = &value["result"]["structuredContent"];
-    assert_eq!(result["success"], true, "{value}");
+    assert!(value["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("direct_host_review_required: 'checkpoint_goal'"));
     assert_eq!(
         runtime
             .get_goal(None, goal_id.as_str().unwrap().to_string())
             .output["goal"]["summary"]["revision"],
-        2
+        1
     );
-    assert_eq!(result["output"]["control"]["before"]["replayed"], false);
-    assert_eq!(result["output"]["control"]["before"]["revision"], 2);
 
     arguments = json!({
         "tool": "list_projects",
