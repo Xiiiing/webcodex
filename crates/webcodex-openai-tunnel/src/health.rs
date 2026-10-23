@@ -16,6 +16,8 @@ pub(crate) struct State {
     pub first_poll_request_ms: AtomicU64,
     pub unsettled: AtomicUsize,
     pub rejected: AtomicUsize,
+    enqueue_timestamp_valid: AtomicU64,
+    enqueue_timestamp_unverifiable: AtomicU64,
 }
 /// A payload-free observation for embedding hosts and the standalone daemon.
 /// Counters are sampled independently; this is not an execution/replay ledger.
@@ -29,6 +31,28 @@ pub struct HealthSnapshot {
     pub rejected_commands: usize,
 }
 impl Health {
+    /// Payload-free preflight evidence; valid syntax alone does not establish
+    /// the control plane's truthfulness or the operator's clock attestation.
+    pub fn enqueue_timestamp_counts(&self) -> (u64, u64) {
+        (
+            self.0.enqueue_timestamp_valid.load(Ordering::Relaxed),
+            self.0
+                .enqueue_timestamp_unverifiable
+                .load(Ordering::Relaxed),
+        )
+    }
+
+    pub(crate) fn record_enqueue_timestamp(&self, valid: bool) {
+        let counter = if valid {
+            &self.0.enqueue_timestamp_valid
+        } else {
+            &self.0.enqueue_timestamp_unverifiable
+        };
+        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            Some(n.saturating_add(1))
+        });
+    }
+
     pub fn snapshot(&self) -> HealthSnapshot {
         HealthSnapshot {
             schema_version: 1,
