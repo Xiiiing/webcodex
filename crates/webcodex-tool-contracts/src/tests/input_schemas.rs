@@ -379,6 +379,24 @@ fn project_validate_package_scope_schema_is_closed_and_bounded() {
         &schema,
     )
     .is_ok());
+    let empty_exclusions = serde_json::json!({
+        "project": "demo",
+        "action": "check",
+        "scope": {"all_packages": true, "exclude_packages": []}
+    });
+    assert!(test_support::validate_schema_instance(&empty_exclusions, &schema).is_ok());
+    assert!(ToolCall::from_tool_name("project_validate", empty_exclusions).is_ok());
+    let empty_with_packages = serde_json::json!({"project":"demo","action":"check","scope":{"packages":["demo"],"exclude_packages":[]}});
+    assert!(test_support::validate_schema_instance(&empty_with_packages, &schema).is_ok());
+    assert!(ToolCall::from_tool_name("project_validate", empty_with_packages).is_ok());
+
+    assert!(test_support::validate_schema_instance(
+        &serde_json::json!({
+            "project":"demo", "action":"check",
+            "scope":{"all_packages":true,"exclude_packages":(0..9).map(|i| format!("p-{i}")).collect::<Vec<_>>()}
+        }),
+        &schema,
+    ).is_err());
 
     for invalid in [
         serde_json::json!({
@@ -1581,12 +1599,12 @@ fn rust_clippy_uses_project_validate_without_new_tool_or_argv() {
     for phrase in [
         "cargo clippy --all-targets -- -D clippy::correctness",
         "project_validation_rust_clippy_v1",
-        "Rust lint explicitly rejects offline",
+        "project_validation_rust_clippy_offline_v1",
     ] {
         assert!(spec.description.contains(phrase), "{phrase}");
     }
     for hint in ["rust", "auto"] {
-        let value = json!({"project":"demo", "action":"lint", "adapter":hint, "scope":{"packages":["demo"]}, "dependency_policy":{"mode":"locked"}});
+        let value = json!({"project":"demo", "action":"lint", "adapter":hint, "scope":{"packages":["demo"]}, "dependency_policy":{"mode":"locked"}, "dependency_resolution_policy":"offline"});
         test_support::validate_schema_instance(&value, &spec.input_schema).unwrap();
         assert!(ToolCall::from_tool_name("project_validate", value).is_ok());
     }

@@ -2,6 +2,32 @@
 
 This page tracks the implementation order for WebCodex Computer Use. It is a roadmap, not a duplicate semantic or authorization specification. Current authority, scope, retry, and privacy contracts remain defined by [Authentication](AUTH_MODEL.md#computer-observation-and-control-authorization), the model-facing tool definitions, and the Runner implementation.
 
+## Action followed by a bounded observation
+
+`control_computer(action=press|input_text)` optionally accepts
+`observe_after={"action":"accessibility_tree","max_depth":3,"max_nodes":32}`.
+This requests one action and then one fresh bounded tree of the exact same
+window. Both Computer control and read scopes, action capability and accessibility
+observation capability must be available before acting. Omit `observe_after` for
+the existing action-only behavior. No other control actions admit this field.
+
+The ordinary action result remains authoritative. After confirmed success,
+`output.post_observation` contains a separate `{success,output,error?}` read
+result. An observation failure or timeout does not undo the action or make it
+safe to retry. A rejected or uncertain action skips the read; uncertain effects
+must be reconciled with fresh observation before considering another action.
+If the complete response is lost, do not replay the combined call blindly.
+
+Both requests are pinned to the admitted Runner instance, with access and
+capability checks repeated at admission and dispatch. A replacement Runner or a
+closed window cannot redirect the observation to another target.
+If admission rejects the action before it is queued, the result retains
+`execution_state=not_started` and `state_changed=false`; no post-observation runs.
+A fresh tree replaces old element IDs and obeys the existing depth/node/content budgets.
+It may show intermediate application state; this is not an atomic UI transaction
+or an application-settled barrier. Each phase retains its existing bounded wait.
+The composition saves a Host round trip; it still uses two Runner requests.
+
 ## Current substrate
 
 Computer Use is semantic-first rather than coordinate-first. The model-facing surface is now deliberately small:
@@ -218,9 +244,11 @@ For a truncated search, acquire a fresh tree, choose a visible branch and pass i
 
 Windows uses `control_computer(action=activate_window)` while retaining the precise `computer_activate_window` Runner effect and independent `computer_window_activate` capability. The caller supplies only an exact previously observed `surface_id`; there is no app-name, PID, title, executable-path, command, or fallback target.
 
-Immediately before the effect the Runner revalidates the xcap surface identity, exact native HWND/PID, and UIA root. Non-Window UIA roots fail closed before any effect. An already-foreground non-minimized window is a no-op success. A minimized exact window is restored with `ShowWindowAsync(SW_RESTORE)` plus a bounded local-state wait so a stalled foreign UI thread cannot block the Runner; then the exact UIA Window root receives `IUIAutomationElement::SetFocus`. Success still requires `GetForegroundWindow()` to equal the exact HWND. Once either restore or UIA focus has been attempted, any native error, timeout, or mismatched foreground postcondition is `outcome_unknown` and requires fresh observation before any retry.
+Immediately before the effect the Runner revalidates the xcap surface identity, exact native HWND/PID, and UIA root. Non-Window UIA roots fail closed before any effect. An already-foreground non-minimized window is a no-op success. A minimized exact window is restored with `ShowWindowAsync(SW_RESTORE)` plus a bounded local-state wait so a stalled foreign UI thread cannot block the Runner; then the exact UIA Window root receives `IUIAutomationElement::SetFocus`. Success still requires `GetForegroundWindow()` to equal the exact HWND. Because a provider can return before the foreground transition becomes visible, the Runner polls that exact foreground predicate for at most one second, within the existing shared UIA deadline, without repeating focus or issuing another effect. Once either restore or UIA focus has been attempted, any native error, timeout, or unconfirmed foreground postcondition is `outcome_unknown` and requires fresh observation before any retry.
 
 A background Runner is normally denied by `SetForegroundWindow`, so W2 does not pretend that API provides parity and does not bypass the policy with `AttachThreadInput`, synthetic Alt/key input, app/PID selection, or generic automation fallback. Exact UIA focus is the native automation path. Shared post-dispatch delivery fencing remains authoritative when the Runner response itself is lost.
+
+The restore path still requires a valid retained surface identity. Window enumeration omits minimized windows; if minimizing changes the dimensions included in a previously issued surface snapshot, that snapshot is rejected as `stale_surface` before any restore attempt.
 
 ### Windows UIA parity W3 — semantic press and focus
 
