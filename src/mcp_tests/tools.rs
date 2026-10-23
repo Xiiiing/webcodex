@@ -2323,15 +2323,15 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
             vec![
                 "Build Rust/Go/Python/Node via Runner argv",
                 "no installs",
-                "Rust/Go: packages/all_packages, locked",
-                "Rust dependency_resolution_policy=offline adds Cargo --offline",
+                "profile/targets/artifact_policy=observe",
+                "not creation/correctness/freshness proof",
+                "dependency_resolution_policy=offline",
                 "not OS sandbox",
-                "others reject",
-                "Python: pyproject.toml, -m build --no-isolation; no scope",
-                "Node: declared script; no scope/policy; hooks may write/network",
-                "Artifacts don't prove correctness",
-                "same durable Job",
-                "observe_jobs, never retry/redispatch",
+                "Rust/Go packages/all_packages, locked",
+                "Python no scope",
+                "Node declared build, no scope/policy",
+                "Scripts may write/network",
+                "same Job; observe_jobs, never retry/redispatch",
             ],
         ),
         (
@@ -2410,7 +2410,7 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
         };
         let description = descriptor["description"].as_str().unwrap();
         if name == "project_build" {
-            assert_eq!(description, "Build Rust/Go/Python/Node via Runner argv; no installs. Rust/Go: packages/all_packages, locked. Rust dependency_resolution_policy=offline adds Cargo --offline (not OS sandbox); others reject. Python: pyproject.toml, -m build --no-isolation; no scope. Node: declared script; no scope/policy; hooks may write/network. Artifacts don't prove correctness. Pending: same durable Job; observe_jobs, never retry/redispatch.");
+            assert_eq!(description, "Build Rust/Go/Python/Node via Runner argv; no installs. Rust profile/targets/artifact_policy=observe: Project outputs, not creation/correctness/freshness proof. Rust dependency_resolution_policy=offline: Cargo fetching, not OS sandbox. Rust/Go packages/all_packages, locked; Python no scope; Node declared build, no scope/policy. Scripts may write/network. Pending: same Job; observe_jobs, never retry/redispatch.");
             assert!(!description.contains("artifact contract"));
         }
         for phrase in phrases {
