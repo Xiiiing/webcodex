@@ -46,7 +46,6 @@ pub struct ProjectOperationScope {
 enum ProjectOperationScopeSchema {
     Packages(ProjectOperationPackagesScopeSchema),
     AllPackages(ProjectOperationAllPackagesScopeSchema),
-    AllPackagesExcept(ProjectOperationAllPackagesExceptScopeSchema),
 }
 
 #[expect(dead_code, reason = "schema-only type; never instantiated at runtime")]
@@ -68,14 +67,9 @@ struct ProjectOperationPackagesScopeSchema {
 struct ProjectOperationAllPackagesScopeSchema {
     #[schemars(schema_with = "all_packages_true_schema")]
     all_packages: bool,
-}
-
-#[expect(dead_code, reason = "schema-only type; never instantiated at runtime")]
-#[derive(schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct ProjectOperationAllPackagesExceptScopeSchema {
-    #[schemars(schema_with = "all_packages_true_schema")]
-    all_packages: bool,
+    // Allow omission or a bounded exact list under the same all_packages=true
+    // schema, instead of duplicating the entire workspace union branch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(max = 8))]
     #[schemars(inner(length(min = 1, max = 256)))]
     exclude_packages: Vec<String>,
