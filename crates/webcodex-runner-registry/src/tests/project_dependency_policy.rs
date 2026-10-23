@@ -374,6 +374,20 @@ async fn project_validation_optional_capability_errors_identify_runner_without_d
                 scope: Some(ProjectValidationScope {
                     packages: Vec::new(),
                     all_packages: true,
+                    exclude_packages: Vec::new(),
+                }),
+                dependency_policy: None,
+                dependency_resolution_policy: None,
+                ..locked_validation_request()
+            },
+        ),
+        (
+            RunnerCapabilityId::ProjectWorkspaceExclusions,
+            ProjectValidationRequest {
+                scope: Some(ProjectValidationScope {
+                    packages: Vec::new(),
+                    all_packages: true,
+                    exclude_packages: vec!["crate".into()],
                 }),
                 dependency_policy: None,
                 dependency_resolution_policy: None,
@@ -408,6 +422,7 @@ async fn project_validation_optional_capability_errors_identify_runner_without_d
                 scope: Some(ProjectValidationScope {
                     packages: vec!["crate".into()],
                     all_packages: false,
+                    exclude_packages: Vec::new(),
                 }),
                 dependency_policy: None,
                 dependency_resolution_policy: None,
@@ -420,6 +435,9 @@ async fn project_validation_optional_capability_errors_identify_runner_without_d
         let registry = RunnerRegistry::default();
         let access = auth_context(None, true);
         let mut registration = registration(true);
+        if capability == RunnerCapabilityId::ProjectWorkspaceExclusions {
+            registration.capabilities.project_all_packages_v1 = true;
+        }
         registration.capabilities.set(capability, false);
         registry.register(registration).await.unwrap();
 
