@@ -522,6 +522,7 @@ fn tool_manifest_invocation_route(spec: &ToolDescriptor) -> Value {
 
     let fallback = if availability == crate::model_surface::TOOL_SURFACE_AVAILABILITY_DIRECT
         && target != crate::model_surface::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME
+        && !crate::model_surface::tool_requires_individual_host_review(target)
     {
         json!({
             "mode": "gateway",
@@ -748,7 +749,7 @@ impl ToolRuntime {
             "requested_limit": Value::Null,
             "categories": Value::Object(exact_categories),
             "tools": [compact_manifest_tool_entry(spec)],
-            "routing_note": "read_tool_manifest only describes an existing route; it never dynamically registers a new Host tool. Follow route.primary, or route.fallback when the direct callable is unavailable and the fallback is not blocked by MCP App presentation requirements.",
+            "routing_note": "read_tool_manifest describes an existing route; it never dynamically registers a Host tool. Follow route.primary. A null route.fallback forbids gateway fallback. Otherwise fallback applies only to an unavailable direct callable, subject to App presentation requirements. Host refusal never permits a different route.",
         });
         if let Some(execution) = runtime_tool_execution_contract(spec.name.as_str()) {
             output["contract"]["execution"] = manifest_execution_projection(execution);

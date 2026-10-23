@@ -312,6 +312,8 @@ mod execution_feedback;
 mod file_import;
 #[path = "mcp_tests/goal_plan_app.rs"]
 mod goal_plan_app;
+#[path = "mcp_tests/host_review.rs"]
+mod host_review;
 #[path = "mcp_tests/http_transport.rs"]
 mod http_transport;
 #[path = "mcp_tests/invocation_envelope.rs"]

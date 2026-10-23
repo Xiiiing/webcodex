@@ -739,15 +739,15 @@ async fn stateless_chatgpt_rotation_reserves_first_mount_window_without_binding(
             "tools/call",
             Some(json!(5310)),
             mcp_2026_window_params(
-                adaptive_runtime_gateway_params(
-                    "rotate_agent_continuation_endpoint",
-                    json!({
+                json!({
+                    "name": "rotate_agent_continuation_endpoint",
+                    "arguments": {
                         "agent_id": agent,
                         "host": "ChatGPT",
                         "client_attachment_id": "first-mount-route-view",
                         "idempotency_key": "first-mount-route-attach"
-                    }),
-                ),
+                    },
+                }),
                 original_session,
             ),
         ),
