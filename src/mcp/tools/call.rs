@@ -11,6 +11,7 @@ use surface::RuntimeSurface;
 struct CallContext<'a> {
     runtime: &'a ToolRuntime,
     surface: crate::mcp::request_policy::McpSurface,
+    exposure: crate::mcp::tool_exposure::ToolExposure,
     default_project: Option<&'a str>,
     id: Option<Value>,
     auth: Option<&'a AuthContext>,
@@ -89,6 +90,10 @@ pub(in crate::mcp) async fn handle_call(
     let context = CallContext {
         runtime,
         surface,
+        exposure: runtime
+            .runtime_info
+            .mcp_tool_exposure
+            .resolve(surface, auth),
         default_project,
         id,
         auth,
@@ -203,6 +208,22 @@ impl ParsedCall {
                 return Err(McpOutcome::BadRequest(rpc_error(id, -32602, message)));
             }
         };
+        if invocation
+            .metadata
+            .control
+            .as_ref()
+            .is_some_and(|sidecars| {
+                sidecars
+                    .canonical_tools()
+                    .any(|name| !context.exposure.allows(name))
+            })
+        {
+            return Err(McpOutcome::BadRequest(rpc_error(
+                id,
+                -32602,
+                "Control operation is unavailable on the configured MCP tool surface",
+            )));
+        }
         if via_adaptive_runtime_gateway {
             let (target, arguments) =
                 match unwrap_adaptive_runtime_gateway_arguments(params.arguments) {
@@ -211,6 +232,13 @@ impl ParsedCall {
                         return Err(McpOutcome::BadRequest(rpc_error(id, -32602, message)));
                     }
                 };
+            if !context.exposure.allows(&target) {
+                return Err(McpOutcome::BadRequest(rpc_error(
+                    id,
+                    -32602,
+                    "Tool is unavailable on the configured MCP tool surface; refresh tools/list",
+                )));
+            }
             match mcp_adaptive_runtime_gateway_target_route(&target, stateless_2026) {
                 crate::model_surface::AdaptiveRuntimeGatewayTargetRoute::Gateway
                 | crate::model_surface::AdaptiveRuntimeGatewayTargetRoute::Direct => {

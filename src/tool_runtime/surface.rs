@@ -508,39 +508,13 @@ fn tool_manifest_route(spec: &ToolDescriptor) -> (&'static str, Option<&'static 
 }
 
 fn tool_manifest_invocation_route(spec: &ToolDescriptor) -> Value {
-    let target = spec.name.as_str();
-    let (availability, gateway_tool) = tool_manifest_route(spec);
-    let primary = match (availability, gateway_tool) {
-        (crate::model_surface::TOOL_SURFACE_AVAILABILITY_DIRECT, None) => {
-            json!({"mode": "direct", "tool": target})
-        }
-        (crate::model_surface::TOOL_SURFACE_AVAILABILITY_GATEWAY, Some(gateway)) => {
-            json!({"mode": "gateway", "tool": gateway, "target": target})
-        }
-        _ => json!({"mode": "unavailable", "tool": Value::Null, "target": target}),
-    };
-
-    let fallback = if availability == crate::model_surface::TOOL_SURFACE_AVAILABILITY_DIRECT
-        && target != crate::model_surface::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME
-        && !crate::model_surface::tool_requires_individual_host_review(target)
-    {
-        json!({
-            "mode": "gateway",
-            "tool": crate::model_surface::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME,
-            "target": target,
-            "when": "direct_callable_unavailable",
-            "blocked_when_mcp_apps_enabled": crate::model_surface::tool_requires_direct_app_presentation(target),
-        })
-    } else {
-        Value::Null
-    };
-
-    json!({
-        "primary": primary,
-        "fallback": fallback,
-        "tool_manifest_registers_host_tool": false,
-        "discovery_effect": "none",
-    })
+    crate::model_surface::manifest_invocation_route(
+        &spec.name,
+        crate::model_surface::suggested_tool_call_route(
+            &spec.name,
+            !is_model_visible_tool_name(&spec.name),
+        ),
+    )
 }
 
 fn manifest_host_orchestration_projection(tool_name: &str) -> Option<Value> {

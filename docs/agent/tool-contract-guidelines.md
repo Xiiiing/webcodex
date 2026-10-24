@@ -566,8 +566,11 @@ CoreWorkflow tools should not be demoted merely to meet an arbitrary count
 target.
 
 HostReview is a static per-definition exposure reason, not a client profile or
-request-time override. Its no-fallback rule is specific to the nine tools listed
-above. It does not change ordinary Direct fallback behavior, generic gateway
+request-time override. MCP may omit the corresponding workflow group through
+[`WEBCODEX_MCP_TOOL_EXPOSURE`](../MCP.md#optional-workflow-tools-per-client);
+enabling it exposes the canonical dedicated tools, including on CLI. Disabling
+it must not translate HostReview into a gateway fallback. Its no-fallback rule is
+specific to the nine tools listed above. It does not change ordinary Direct fallback behavior, generic gateway
 annotations, or ModelHidden admission; hidden App methods remain hidden.
 
 Direct/Gateway decisions therefore belong to model-surface policy and measured

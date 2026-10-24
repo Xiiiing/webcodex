@@ -230,7 +230,64 @@ advanced identity flow.
 
 One canonical ToolRuntime serves both MCP projections. **Adaptive Runtime** remains the default, including ChatGPT: canonical `ToolDefinition` rank decides the direct tools; ordinary model-visible long-tail tools are invoked through `call_runtime_tool`; server-owned protocol capabilities and MCP App admission may add hidden extensions for the relevant protocol request. An explicit request-local CLI surface changes discovery and presentation only, as described below. `read_tool_manifest(tool_name=...)` is discovery only: it never dynamically registers a new Host tool. Its exact `route.primary` describes the preferred callable, and a normal direct tool also exposes `route.fallback` through `call_runtime_tool` for the case where that direct callable is not present; explicit MCP App presentation tools mark that fallback as blocked while Apps are enabled. Direct versus gateway routing changes presentation only and never bypasses the target tool's authentication, Project authority, permission, Runner capability, Session, or safety checks.
 
-Nine durable Agent and Goal operations have a stricter Host exposure contract: `create_agent_identity`, `rotate_agent_continuation_endpoint`, `list_agent_identities`, `prepare_goal_workflow`, `get_goal`, `checkpoint_goal`, `update_goal`, `bootstrap_agent_conversation`, and `consume_agent_wake` are independently exposed with their canonical input schemas, accurate effect annotations and applicable OAuth requirements. They require normal Host tool review before a new trial. If a Host does not load or rejects one of these dedicated descriptors, WebCodex does not substitute `call_runtime_tool`; that generic route is not a fallback for these operations. Their `_wc.control` forms for Goal checkpoints, Wake consumption and Goal completion are also rejected before any main or sidecar effect; use the standalone canonical tools. This bounded stage does not claim compliance for unrelated Plugin operations. This exposure policy does not grant authority or guarantee Host acceptance, and does not alter each operation's existing authentication, OAuth scopes, permissions, ownership, lifecycle, replay-safety, or effect checks. The cause of a prior Host refusal remains unknown; this contract does not claim to resolve it. Other ordinary direct tools retain their existing gateway fallback, and hidden App methods remain hidden.
+When their workflow group is enabled, nine durable Agent and Goal operations have a stricter Host exposure contract: `create_agent_identity`, `rotate_agent_continuation_endpoint`, `list_agent_identities`, `prepare_goal_workflow`, `get_goal`, `checkpoint_goal`, `update_goal`, `bootstrap_agent_conversation`, and `consume_agent_wake` are independently exposed with their canonical input schemas, accurate effect annotations and applicable OAuth requirements. They require normal Host tool review before a new trial. If a Host does not load or rejects one of these dedicated descriptors, WebCodex does not substitute `call_runtime_tool`; that generic route is not a fallback for these operations. Their `_wc.control` forms for Goal checkpoints, Wake consumption and Goal completion are also rejected before any main or sidecar effect; use the standalone canonical tools. This bounded stage does not claim compliance for unrelated Plugin operations. This exposure policy does not grant authority or guarantee Host acceptance, and does not alter each operation's existing authentication, OAuth scopes, permissions, ownership, lifecycle, replay-safety, or effect checks. The cause of a prior Host refusal remains unknown; this contract does not claim to resolve it. Other ordinary direct tools retain their existing gateway fallback, and hidden App methods remain hidden.
+
+### Optional workflow tools per client
+
+Both Adaptive Runtime (including ChatGPT) and CLI default to a small workflow
+surface: model-facing Goal, Agent continuation and Job continuation tools are
+opt-in. Configure the Server's `WEBCODEX_MCP_TOOL_EXPOSURE` as closed JSON:
+
+```json
+{
+  "adaptive": {"goals": false, "agent_continuation": false, "job_continuation": false},
+  "cli": {"goals": false, "agent_continuation": false, "job_continuation": false},
+  "oauth_clients": [
+    {
+      "client_id": "YOUR_REGISTERED_CHATGPT_OAUTH_CLIENT_ID",
+      "adaptive": {"goals": true, "agent_continuation": true, "job_continuation": true}
+    }
+  ]
+}
+```
+
+For example, place the compact JSON value in the existing Server environment
+configuration. The value is read and validated once before the Server starts;
+restart the Server and refresh/reconnect the Host's tool catalog after an operator
+changes it. This example enables the full workflow surface only for the exact
+authenticated OAuth client, so online ChatGPT needs no custom request headers.
+`X-WebCodex-MCP-Surface: cli` still selects the CLI surface on each request.
+An omitted client surface inherits its deployment surface; a supplied surface is
+a complete replacement, with omitted booleans defaulting to false. Client names,
+`clientInfo`, client windows, Sessions and previous requests never select an override.
+
+| Setting | Model tools controlled |
+|---|---|
+| `goals` | The canonical Goal category, including preparation, reads, checkpoints, updates and `present_goal_plan`. |
+| `agent_continuation` | Agent identity/setup, Endpoint rotation/detach, bootstrap/Wake consumption, `wait_for_agent_events`, Task Endpoint continuation and the Agent continuation card/bridge. |
+| `job_continuation` | `wait_for_job_terminal` and its Job continuation card/bridge. Ordinary same-Job readiness and observation remain available. |
+
+The switches are independent. Enable both `goals` and `agent_continuation` for
+Goal-driven automatic continuation. Enabled individually reviewed operations
+receive canonical standalone descriptors on both surfaces; CLI still has text
+results, no Apps and no `_wc`. Disabling a group removes its model descriptors
+and optional App resources/bridge helpers. Exact manifests report unavailable
+routes, generated follow-ups omit unavailable targets, and direct/gateway calls
+cannot enable the omitted group. The Workbench independently retains its existing
+App-only Goal read/create/update controls: those remain `ui.visibility=["app"]`,
+are not model routes and do not become gateway fallbacks. This MCP exposure policy
+is not a credential scope or a global feature-disable switch for Runtime API/UI.
+
+Configuration is limited to 16 KiB and 64 unique OAuth client entries; client ids
+are non-empty, at most 256 UTF-8 bytes, without whitespace/control characters.
+Unknown fields, duplicate clients, malformed JSON and wrong types fail startup;
+diagnostics omit input values and client ids. Operator status reports surface
+defaults and the override count. Scope filtering, canonical business schemas,
+ownership, generation/revision fences, effect checks and the independent Host
+review requirement still apply. `WEBCODEX_MCP_COMPACT_SCHEMAS` controls schema
+detail, and `WEBCODEX_MCP_APPS_ENABLED` separately controls App admission; neither
+implicitly enables workflow tools. Exposure is also separate from
+`WEBCODEX_GOAL_WORKFLOW` preference and `WEBCODEX_MCP_APP_RESUME_MODE` readiness policy.
 
 ### Request-local client policy
 

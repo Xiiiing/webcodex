@@ -107,7 +107,7 @@ fn continuation_runtime() -> (tempfile::TempDir, Arc<crate::db::Database>, ToolR
     let temp = tempfile::tempdir().unwrap();
     let db =
         Arc::new(crate::db::Database::open(&temp.path().join("agent-continuation.db")).unwrap());
-    let runtime = ToolRuntime::new_for_tests().with_communication_database(db.clone());
+    let runtime = workflow_runtime().with_communication_database(db.clone());
     (temp, db, runtime)
 }
 
@@ -1042,7 +1042,7 @@ fn restart_recovery_survives_published_projection_output_schema() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("agent-continuation-schema-restart.db");
     let db = Arc::new(crate::db::Database::open(&path).unwrap());
-    let runtime = ToolRuntime::new_for_tests().with_communication_database(db.clone());
+    let runtime = workflow_runtime().with_communication_database(db.clone());
     let owner = continuation_auth("continuation-schema-restart");
     let agent = create_agent(
         &runtime,
@@ -1086,7 +1086,7 @@ fn restart_recovery_survives_published_projection_output_schema() {
     reopened
         .recover_agent_wakes_for_server_takeover(&ownership, chrono::Utc::now().timestamp_millis())
         .unwrap();
-    let runtime = ToolRuntime::new_for_tests().with_communication_database(reopened);
+    let runtime = workflow_runtime().with_communication_database(reopened);
     let restart =
         runtime.agent_continuation_state(Some(&owner), agent, endpoint, generation, binding_id);
     assert!(restart.success, "{:?}", restart.output);
@@ -2073,7 +2073,7 @@ async fn agent_continuation_hidden_kernel_entry_is_fail_closed_without_protocol_
         ToolProtocolCapabilities, ToolTransport,
     };
 
-    let runtime = ToolRuntime::new_for_tests();
+    let runtime = workflow_runtime();
     let auth = continuation_auth("continuation-kernel-gate");
     for transport in [ToolTransport::Mcp, ToolTransport::Api] {
         for name in APP_TOOLS {

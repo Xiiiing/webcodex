@@ -73,7 +73,7 @@ fn review_runtime(compact: bool, apps: bool) -> (tempfile::TempDir, ToolRuntime)
     let temp = tempfile::tempdir().unwrap();
     let db =
         std::sync::Arc::new(crate::Database::open(&temp.path().join("host-review.db")).unwrap());
-    let runtime = test_runtime_with_mcp_settings(compact, apps)
+    let runtime = with_workflow_tools(test_runtime_with_mcp_settings(compact, apps))
         .with_communication_database(db)
         .with_permission_evaluator(crate::tool_runtime::PermissionEvaluator::with_mode(
             crate::tool_runtime::AuthorityMode::TrustedAgent,
@@ -122,7 +122,7 @@ async fn host_review_public_descriptors_and_manifest_routes_are_exact() {
     let auth = review_auth("review-owner");
     for compact in [false, true] {
         for apps in [false, true] {
-            let runtime = test_runtime_with_mcp_settings(compact, apps);
+            let runtime = with_workflow_tools(test_runtime_with_mcp_settings(compact, apps));
             for modern in [false, true] {
                 let McpOutcome::Ok(body) = handle_mcp_request(
                     &runtime,
@@ -247,7 +247,7 @@ async fn host_review_public_descriptors_and_manifest_routes_are_exact() {
 #[tokio::test]
 async fn host_review_oauth_missing_each_scope_hides_descriptor_and_challenges_direct_call() {
     for apps in [false, true] {
-        let runtime = test_runtime_with_mcp_settings(true, apps);
+        let runtime = with_workflow_tools(test_runtime_with_mcp_settings(true, apps));
         for modern in [false, true] {
             for &(name, scopes) in HOST_REVIEW_TOOLS {
                 for &missing in scopes {

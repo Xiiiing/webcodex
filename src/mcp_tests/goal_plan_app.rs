@@ -28,7 +28,7 @@ fn goal_auth(username: &str) -> crate::auth::AuthContext {
 fn goal_runtime() -> (tempfile::TempDir, Arc<crate::db::Database>, ToolRuntime) {
     let temp = tempfile::tempdir().unwrap();
     let db = Arc::new(crate::db::Database::open(&temp.path().join("goal-plan.db")).unwrap());
-    let runtime = ToolRuntime::new_for_tests().with_communication_database(db.clone());
+    let runtime = workflow_runtime().with_communication_database(db.clone());
     (temp, db, runtime)
 }
 

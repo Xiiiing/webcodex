@@ -198,7 +198,7 @@ async fn wait_for_mcp_agent_request(
 #[tokio::test]
 async fn mcp_tools_list_uses_adaptive_inventory_in_both_schema_modes() {
     for compact in [false, true] {
-        let runtime = test_runtime_with_mcp_settings(compact, true);
+        let runtime = with_workflow_tools(test_runtime_with_mcp_settings(compact, true));
         let outcome = handle_mcp_request(
             &runtime,
             rpc("tools/list", Some(Value::from(3)), json!({})),
@@ -2532,7 +2532,7 @@ fn discovery_is_app_only(tool: &Value) -> bool {
         .is_some_and(|visibility| visibility.iter().any(|value| value == "app"))
 }
 
-fn model_visible_discovery_projection(result: &Value) -> Value {
+pub(super) fn model_visible_discovery_projection(result: &Value) -> Value {
     let tools = result["tools"]
         .as_array()
         .unwrap()

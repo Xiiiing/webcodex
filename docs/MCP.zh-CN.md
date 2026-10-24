@@ -272,6 +272,56 @@ OAuth 仍是独立的高级身份路径。
 
 同一个 canonical ToolRuntime 服务两种 MCP 投影。**Adaptive Runtime** 仍是包括 ChatGPT 在内的默认路径：canonical `ToolDefinition` rank 决定 direct tools；普通 model-visible long-tail tools 通过 `call_runtime_tool` 调用；server-owned protocol capability 与 MCP App admission 可以为对应请求加入 hidden extension。显式的请求级 CLI surface 只改变 discovery 与 presentation，配置见下文。`read_tool_manifest(tool_name=...)` 只负责 discovery，不会动态向 Host 注册一个新 tool。exact manifest 的 `route.primary` 给出首选 callable；普通 direct tool 还会给出经 `call_runtime_tool` 的 `route.fallback`，用于 Host 当前没有该 direct callable 的情况；显式 MCP App presentation tool 会标明 Apps enabled 时该 fallback 被禁止。direct/gateway 只改变 presentation，不会绕过目标工具的 authentication、Project authority、permission、Runner capability、Session 或 safety checks。
 
+### 按客户端配置可选工作流工具
+
+Adaptive Runtime（包括 ChatGPT）和 CLI 默认都精简工作流工具：面向模型的 Goal、
+Agent 续跑和 Job 续跑入口需要显式启用。在 Server 的既有环境配置中设置
+`WEBCODEX_MCP_TOOL_EXPOSURE`，值为闭合 JSON：
+
+```json
+{
+  "adaptive": {"goals": false, "agent_continuation": false, "job_continuation": false},
+  "cli": {"goals": false, "agent_continuation": false, "job_continuation": false},
+  "oauth_clients": [
+    {
+      "client_id": "YOUR_REGISTERED_CHATGPT_OAUTH_CLIENT_ID",
+      "adaptive": {"goals": true, "agent_continuation": true, "job_continuation": true}
+    }
+  ]
+}
+```
+
+Server 在启动前一次性读取并验证配置。运维修改后需要重启 Server，并在 Host
+刷新工具目录或重新连接。示例只为精确匹配的已认证 OAuth 客户端启用完整工作流，
+所以线上 ChatGPT 无需自定义请求头。`X-WebCodex-MCP-Surface: cli` 仍按请求选择
+CLI surface。客户端未提供的 surface 继承部署默认；提供的 surface 完整替换默认，
+其中省略的布尔开关为 false。不会根据客户端名称、`clientInfo`、Window、Session
+或之前的请求推断覆盖配置。
+
+| 开关 | 控制的模型工具 |
+|---|---|
+| `goals` | canonical Goal 类别，包括准备、读取、checkpoint、更新及 `present_goal_plan`。 |
+| `agent_continuation` | Agent 身份/设置、Endpoint 轮换/分离、bootstrap/Wake 消费、`wait_for_agent_events`、Task Endpoint 续跑及 Agent 续跑卡片/bridge。 |
+| `job_continuation` | `wait_for_job_terminal` 及 Job 续跑卡片/bridge。同一 Job 的普通 readiness 和 observation 仍可用。 |
+
+三个开关独立。Goal 驱动的自动续跑需要同时启用 `goals` 和 `agent_continuation`。
+启用后，需要独立审核的操作在两种 surface 都得到 canonical standalone descriptor；
+CLI 仍使用文本结果，没有 Apps 或 `_wc`。关闭分组会移除模型 descriptor 及对应
+可选 App resource/bridge helper；exact manifest 报告 unavailable route，生成的
+follow-up 不再指向不可用目标，direct/gateway 调用也不能启用该分组。工作台独立
+保留既有 App-only Goal 读取/创建/更新控件：这些 descriptor 仍为
+`ui.visibility=["app"]`，不属于模型路由，也不提供 gateway fallback。
+这属于 MCP 暴露策略，不是凭据 scope，也不是 Runtime API/UI 的全局功能禁用开关。
+
+配置最多 16 KiB、64 个唯一 OAuth 客户端条目；client id 非空、最多 256 UTF-8
+字节，不含空白或控制字符。未知字段、重复客户端、JSON 格式或类型错误会拒绝启动；
+诊断不输出输入值或 client id。运维状态仅报告 surface 默认和覆盖条目数量。
+原有 scope 过滤、canonical business schema、所有权、generation/revision fence、
+effect 检查和独立 Host 审核要求继续适用。`WEBCODEX_MCP_COMPACT_SCHEMAS` 控制
+schema 详略，`WEBCODEX_MCP_APPS_ENABLED` 独立控制 App 准入，两者都不会隐式启用
+工作流工具。暴露配置也独立于 `WEBCODEX_GOAL_WORKFLOW` 偏好和
+`WEBCODEX_MCP_APP_RESUME_MODE` readiness 策略。
+
 ### Tool result framing
 
 默认 Adaptive surface 的 MCP tool machine-readable 结果位于 `structuredContent`；`content` 只保留简短的人类可读或 protocol-native fallback。需要结构化字段的 client 应读取 `structuredContent`，不要解析文本。
@@ -434,7 +484,7 @@ Rust `project_build` 可选 `dependency_resolution_policy: "offline"`，Runner �
 
 Adaptive Runtime 可以把常用工具直接暴露，把 long-tail 工具通过 `call_runtime_tool` 暴露。direct/gateway 只影响 model exposure，不改变 schema validation、OAuth scope、Project authority、permission policy、Runner capability、Session fence 或 tool effects。
 
-九个持久 Agent 和 Goal 操作遵循更严格的 Host 暴露契约：`create_agent_identity`、`rotate_agent_continuation_endpoint`、`list_agent_identities`、`prepare_goal_workflow`、`get_goal`、`checkpoint_goal`、`update_goal`、`bootstrap_agent_conversation` 和 `consume_agent_wake` 分别以独立 Host tool 暴露，并携带canonical 输入 schema、准确的 effect annotations 和适用的 OAuth 要求。开始新的试用前，Host 必须正常审核这些工具。如果 Host 未加载或拒绝某个专用 descriptor，WebCodex 不会改用 `call_runtime_tool`；该 generic route 不是这些操作的 fallback。`_wc.control` 中对应的 Goal checkpoint、Wake 消费和 Goal 完成表达也会在任何主调用或 sidecar 副作用发生前被拒绝，必须使用独立的 canonical 工具。这一有限阶段不声称其他 Plugin 操作也已满足独立审查要求。此暴露策略不授予 authority，也不保证 Host 接受调用，并且不改变各操作现有的 authentication、OAuth scopes、permissions、ownership、lifecycle、replay-safety 或 effect checks。此前 Host 拒绝的原因仍未知；本契约不声称已经解决该问题。其他普通 direct tools 保留现有 gateway fallback，hidden App methods 仍保持隐藏。
+在对应工作流分组启用后，九个持久 Agent 和 Goal 操作遵循更严格的 Host 暴露契约：`create_agent_identity`、`rotate_agent_continuation_endpoint`、`list_agent_identities`、`prepare_goal_workflow`、`get_goal`、`checkpoint_goal`、`update_goal`、`bootstrap_agent_conversation` 和 `consume_agent_wake` 分别以独立 Host tool 暴露，并携带canonical 输入 schema、准确的 effect annotations 和适用的 OAuth 要求。开始新的试用前，Host 必须正常审核这些工具。如果 Host 未加载或拒绝某个专用 descriptor，WebCodex 不会改用 `call_runtime_tool`；该 generic route 不是这些操作的 fallback。`_wc.control` 中对应的 Goal checkpoint、Wake 消费和 Goal 完成表达也会在任何主调用或 sidecar 副作用发生前被拒绝，必须使用独立的 canonical 工具。这一有限阶段不声称其他 Plugin 操作也已满足独立审查要求。此暴露策略不授予 authority，也不保证 Host 接受调用，并且不改变各操作现有的 authentication、OAuth scopes、permissions、ownership、lifecycle、replay-safety 或 effect checks。此前 Host 拒绝的原因仍未知；本契约不声称已经解决该问题。其他普通 direct tools 保留现有 gateway fallback，hidden App methods 仍保持隐藏。
 
 已删除的 ProjectConnector capability 名称（`task_start`、`files_read`、`edits_apply`、`task_finish` 等）不会作为 runtime 工具的 compatibility alias 保留。请使用当前 `tools/list` / `read_tool_manifest` 返回的 ToolRuntime 名称。
 

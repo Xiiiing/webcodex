@@ -217,13 +217,6 @@ pub(super) fn mcp_suggested_tool_call_route(
     crate::model_surface::suggested_tool_call_route(target, operator_extension_admitted)
 }
 
-fn project_mcp_tool_spec_output_schema(mut spec: ToolSpec, stateless_2026: bool) -> ToolSpec {
-    project_suggested_tool_call_schema(&mut spec.output_schema, &|target| {
-        mcp_suggested_tool_call_route(target, stateless_2026)
-    });
-    spec
-}
-
 fn unwrap_adaptive_runtime_gateway_arguments(arguments: Value) -> Result<(String, Value), String> {
     let mut outer = arguments
         .as_object()
@@ -316,11 +309,32 @@ fn mcp_tools_list_payload_with_features(compact: bool, app_enabled: bool) -> Val
     mcp_tools_list_payload_with_features_for_auth(compact, app_enabled, false, None)
 }
 
+#[cfg(test)]
 pub(super) fn mcp_tools_list_payload_with_features_for_auth(
     compact: bool,
     app_enabled: bool,
     stateless_2026: bool,
     auth: Option<&AuthContext>,
+) -> Value {
+    mcp_tools_list_payload_with_exposure(
+        compact,
+        app_enabled,
+        stateless_2026,
+        auth,
+        super::tool_exposure::ToolExposure {
+            goals: true,
+            agent_continuation: true,
+            job_continuation: true,
+        },
+    )
+}
+
+fn mcp_tools_list_payload_with_exposure(
+    compact: bool,
+    app_enabled: bool,
+    stateless_2026: bool,
+    auth: Option<&AuthContext>,
+    exposure: super::tool_exposure::ToolExposure,
 ) -> Value {
     let mut specs = filter_descriptors_for_oauth(
         crate::model_surface::adaptive_runtime_direct_tool_descriptors(),
@@ -328,10 +342,11 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
     );
     specs
         .extend(stateless_advertised_operator_extension_descriptors_for_auth(stateless_2026, auth));
+    specs.retain(|spec| exposure.allows(&spec.name));
 
     let mut tools = specs
         .into_iter()
-        .map(|spec| mcp_tool_descriptor_json(spec, compact, app_enabled, Some(stateless_2026)))
+        .map(|spec| mcp_tool_descriptor_json(spec, compact, app_enabled))
         .collect::<Vec<_>>();
     if app_enabled && stateless_2026 {
         for name in super::workbench::CANONICAL_TOOLS {
@@ -349,7 +364,7 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
                         description: model.description.into(),
                         discovery_keywords: model.discovery_keywords,
                     };
-                    let mut value = mcp_tool_descriptor_json(spec, compact, false, None);
+                    let mut value = mcp_tool_descriptor_json(spec, compact, false);
                     attach_app_visibility(&mut value);
                     tools.push(value);
                 }
@@ -388,7 +403,7 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
                     discovery_keywords: definition.model_spec.unwrap().discovery_keywords,
                 };
                 for spec in filter_descriptors_for_oauth(vec![spec], auth) {
-                    let mut value = mcp_tool_descriptor_json(spec, compact, false, None);
+                    let mut value = mcp_tool_descriptor_json(spec, compact, false);
                     attach_app_visibility(&mut value);
                     tools.push(value);
                 }
@@ -416,12 +431,13 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
             auth,
         )
         .into_iter()
+        .filter(|spec| exposure.allows(&spec.name))
         .map(|spec| {
             let agent_continuation_tool = is_agent_continuation_app_tool_name(&spec.name);
             let job_terminal_continuation_tool =
                 is_job_terminal_continuation_app_tool_name(&spec.name);
             let goal_sync_tool = spec.name == "sync_goal_plan";
-            let mut value = mcp_tool_descriptor_json(spec, compact, false, None);
+            let mut value = mcp_tool_descriptor_json(spec, compact, false);
             attach_app_visibility(&mut value);
             if agent_continuation_tool || job_terminal_continuation_tool || goal_sync_tool {
                 // Bridge helpers return data to an existing View; they never
@@ -462,6 +478,19 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
                     .map(|scopes| json!({ "type": "oauth2", "scopes": scopes }))
                     .collect::<Vec<_>>());
             }
+        }
+    }
+    // Project once from canonical schemas. Re-projecting an already wrapped
+    // gateway SuggestedToolCall can mistake the gateway itself for its target.
+    for tool in &mut tools {
+        if let Some(schema) = tool.get_mut("outputSchema") {
+            project_suggested_tool_call_schema(schema, &|name| {
+                exposure.route(
+                    super::request_policy::McpSurface::Adaptive,
+                    name,
+                    stateless_2026,
+                )
+            });
         }
     }
     json!({ "tools": tools })
@@ -986,7 +1015,7 @@ fn attach_app_visibility(value: &mut Value) {
     ui.insert("visibility".to_string(), json!(["app"]));
 }
 
-fn is_agent_continuation_app_tool_name(tool_name: &str) -> bool {
+pub(super) fn is_agent_continuation_app_tool_name(tool_name: &str) -> bool {
     matches!(
         tool_name,
         "bind_agent_continuation"
@@ -1000,7 +1029,7 @@ fn is_agent_continuation_app_tool_name(tool_name: &str) -> bool {
     )
 }
 
-fn is_job_terminal_continuation_app_tool_name(tool_name: &str) -> bool {
+pub(super) fn is_job_terminal_continuation_app_tool_name(tool_name: &str) -> bool {
     matches!(
         tool_name,
         "bind_job_terminal_continuation"
@@ -1418,13 +1447,9 @@ pub(super) fn mcp_tool_descriptor_json(
     descriptor: ToolDescriptor,
     compact: bool,
     app_enabled: bool,
-    stateless_output_projection: Option<bool>,
 ) -> Value {
     if !compact {
-        let mut spec = descriptor.into_spec();
-        if let Some(stateless) = stateless_output_projection {
-            spec = project_mcp_tool_spec_output_schema(spec, stateless);
-        }
+        let spec = descriptor.into_spec();
         return mcp_tool_spec_json(spec, false, app_enabled);
     }
     let input_schema = descriptor.input_schema();
@@ -1571,6 +1596,10 @@ pub(super) async fn handle_list_with_runtime(
         stateless_2026,
         compact_schemas,
         app_enabled,
+        runtime
+            .runtime_info
+            .mcp_tool_exposure
+            .resolve(super::request_policy::McpSurface::Adaptive, auth),
     )
     .await
 }
@@ -1583,7 +1612,17 @@ pub(super) async fn handle_list(
     compact_schemas: bool,
     app_enabled: bool,
 ) -> McpOutcome {
-    handle_list_inner(None, id, auth, stateless_2026, compact_schemas, app_enabled).await
+    // Canonical all-enabled inventory fixture; request-policy tests use a runtime snapshot.
+    handle_list_inner(
+        None,
+        id,
+        auth,
+        stateless_2026,
+        compact_schemas,
+        app_enabled,
+        super::tool_exposure::ToolExposure::ALL,
+    )
+    .await
 }
 
 async fn handle_list_inner(
@@ -1593,12 +1632,14 @@ async fn handle_list_inner(
     stateless_2026: bool,
     compact_schemas: bool,
     app_enabled: bool,
+    exposure: super::tool_exposure::ToolExposure,
 ) -> McpOutcome {
-    let mut result = mcp_tools_list_payload_with_features_for_auth(
+    let mut result = mcp_tools_list_payload_with_exposure(
         compact_schemas,
         app_enabled,
         stateless_2026,
         auth,
+        exposure,
     );
     if let Some(runtime) = runtime.filter(|_| app_enabled) {
         let settings = runtime.workbench_settings(auth);

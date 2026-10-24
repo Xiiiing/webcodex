@@ -129,6 +129,31 @@ pub(crate) fn suggested_tool_call_route(
     }
 }
 
+/// Exact manifest route for canonical or adapter-projected discovery. A Host
+/// review requirement is never converted into a generic fallback.
+pub(crate) fn manifest_invocation_route(target: &str, route: SuggestedToolCallRoute) -> Value {
+    let primary = match route {
+        SuggestedToolCallRoute::Direct => json!({"mode":"direct", "tool":target}),
+        SuggestedToolCallRoute::Gateway(via) => {
+            json!({"mode":"gateway", "tool":via, "target":target})
+        }
+        SuggestedToolCallRoute::Unavailable => {
+            json!({"mode":"unavailable", "tool":Value::Null, "target":target})
+        }
+    };
+    let fallback = if route == SuggestedToolCallRoute::Direct
+        && target != ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME
+        && !tool_requires_individual_host_review(target)
+    {
+        json!({"mode":"gateway", "tool":ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME, "target":target,
+            "when":"direct_callable_unavailable",
+            "blocked_when_mcp_apps_enabled":tool_requires_direct_app_presentation(target)})
+    } else {
+        Value::Null
+    };
+    json!({"primary":primary, "fallback":fallback, "tool_manifest_registers_host_tool":false, "discovery_effect":"none"})
+}
+
 /// Project formally declared SuggestedToolCall schemas to the callable shape of
 /// one model surface. Domain ToolSpecs remain canonical; adapters apply this to
 /// response-schema copies only.
