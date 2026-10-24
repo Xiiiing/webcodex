@@ -33,7 +33,7 @@ class CaptureTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()  # Canonicalize OS temp aliases; keep production symlink rejection.
         self.output = self.root / "output"
         self.output.mkdir(mode=0o700)
         self.source = self.root / "source.json"

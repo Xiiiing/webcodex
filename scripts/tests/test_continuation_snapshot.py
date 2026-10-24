@@ -27,7 +27,7 @@ class SnapshotTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / 'runtime.sqlite'
+        self.path = Path(self.directory.name).resolve() / 'runtime.sqlite'
         self.db = sqlite3.connect(self.path)
         self.addCleanup(self.db.close)
         # Use the owning Store's real CREATE TABLE declarations, including CHECK
@@ -321,8 +321,8 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT revision FROM wc_goals').fetchone()[0], 3)
 
     def test_symlinked_database_parent_is_rejected(self):
-        link = Path(self.directory.name).with_name(Path(self.directory.name).name + '-link')
-        link.symlink_to(Path(self.directory.name), target_is_directory=True)
+        link = self.path.parent.with_name(self.path.parent.name + '-link')
+        link.symlink_to(self.path.parent, target_is_directory=True)
         self.addCleanup(link.unlink)
         self.path = link / self.path.name
         self.assert_closed('unsafe_database_file')
