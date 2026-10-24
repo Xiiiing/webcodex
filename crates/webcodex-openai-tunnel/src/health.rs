@@ -48,9 +48,18 @@ impl Health {
         } else {
             &self.0.enqueue_timestamp_unverifiable
         };
-        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-            Some(n.saturating_add(1))
-        });
+        let mut current = counter.load(Ordering::Relaxed);
+        while current != u64::MAX {
+            match counter.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     pub fn snapshot(&self) -> HealthSnapshot {
@@ -106,5 +115,29 @@ impl Health {
     }
     pub(crate) fn ready(&self, ready: bool) {
         self.0.ready.store(ready, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enqueue_counters_saturate_independently() {
+        let health = Health::default();
+        health
+            .0
+            .enqueue_timestamp_valid
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        health.record_enqueue_timestamp(true);
+        health.record_enqueue_timestamp(true);
+        health.record_enqueue_timestamp(false);
+        assert_eq!(health.enqueue_timestamp_counts(), (u64::MAX, 1));
+        health
+            .0
+            .enqueue_timestamp_unverifiable
+            .store(u64::MAX, Ordering::Relaxed);
+        health.record_enqueue_timestamp(false);
+        assert_eq!(health.enqueue_timestamp_counts(), (u64::MAX, u64::MAX));
     }
 }
